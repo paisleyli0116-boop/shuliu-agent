@@ -41,6 +41,88 @@ schema_migrations = Table(
     Column("applied_at", DateTime(timezone=True), nullable=False),
 )
 
+users = Table(
+    "users",
+    metadata,
+    Column("user_id", String(128), primary_key=True),
+    Column("status", String(32), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+organization_memberships = Table(
+    "organization_memberships",
+    metadata,
+    Column("membership_id", String(128), primary_key=True),
+    Column("organization_id", String(128), nullable=False),
+    Column("user_id", String(128), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(["user_id"], ["users.user_id"], name="fk_memberships_user"),
+    UniqueConstraint(
+        "organization_id", "membership_id", name="uq_memberships_org_membership"
+    ),
+    UniqueConstraint("organization_id", "user_id", name="uq_memberships_org_user"),
+)
+
+roles = Table(
+    "roles",
+    metadata,
+    Column("role_id", String(128), primary_key=True),
+    Column("organization_id", String(128), nullable=False),
+    Column("name", String(128), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("organization_id", "role_id", name="uq_roles_org_role"),
+    UniqueConstraint("organization_id", "name", name="uq_roles_org_name"),
+)
+
+permissions = Table(
+    "permissions",
+    metadata,
+    Column("permission_id", String(128), primary_key=True),
+    Column("permission_code", String(160), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("permission_code", name="uq_permissions_code"),
+)
+
+membership_roles = Table(
+    "membership_roles",
+    metadata,
+    Column("organization_id", String(128), primary_key=True),
+    Column("membership_id", String(128), primary_key=True),
+    Column("role_id", String(128), primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ["organization_id", "membership_id"],
+        ["organization_memberships.organization_id", "organization_memberships.membership_id"],
+        name="fk_membership_roles_org_membership",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "role_id"],
+        ["roles.organization_id", "roles.role_id"],
+        name="fk_membership_roles_org_role",
+    ),
+)
+
+role_permissions = Table(
+    "role_permissions",
+    metadata,
+    Column("organization_id", String(128), primary_key=True),
+    Column("role_id", String(128), primary_key=True),
+    Column("permission_id", String(128), primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ["organization_id", "role_id"],
+        ["roles.organization_id", "roles.role_id"],
+        name="fk_role_permissions_org_role",
+    ),
+    ForeignKeyConstraint(
+        ["permission_id"],
+        ["permissions.permission_id"],
+        name="fk_role_permissions_permission",
+    ),
+)
+
 tasks = Table(
     "tasks",
     metadata,
@@ -154,6 +236,22 @@ Index(
     knowledge_documents.c.organization_id,
     knowledge_documents.c.scope,
     knowledge_documents.c.classification,
+)
+Index(
+    "ix_memberships_org_user_status",
+    organization_memberships.c.organization_id,
+    organization_memberships.c.user_id,
+    organization_memberships.c.status,
+)
+Index(
+    "ix_membership_roles_org_role",
+    membership_roles.c.organization_id,
+    membership_roles.c.role_id,
+)
+Index(
+    "ix_role_permissions_org_permission",
+    role_permissions.c.organization_id,
+    role_permissions.c.permission_id,
 )
 
 

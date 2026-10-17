@@ -44,6 +44,12 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "worker_leases",
                 "knowledge_documents",
                 "schema_migrations",
+                "users",
+                "organization_memberships",
+                "roles",
+                "permissions",
+                "membership_roles",
+                "role_permissions",
             } <= tables
 
             for table in {
@@ -54,6 +60,10 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "workers",
                 "worker_leases",
                 "knowledge_documents",
+                "organization_memberships",
+                "roles",
+                "membership_roles",
+                "role_permissions",
             }:
                 organization_id = next(
                     column
