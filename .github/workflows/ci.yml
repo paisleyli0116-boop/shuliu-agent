@@ -32,4 +32,49 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: uv sync --locked --all-packages
       - run: pnpm test:contract
+      - run: pnpm test:migration
+      - run: pnpm test:integration
       - run: pnpm typecheck
+
+  postgres-migration:
+    name: PostgreSQL migration (PG ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [17, 18]
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg${{ matrix.postgres }}-bookworm
+        env:
+          POSTGRES_DB: shuliu_test
+          POSTGRES_USER: shuliu
+          POSTGRES_PASSWORD: shuliu
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shuliu -d shuliu_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SHULIU_DATABASE_URL: postgresql+psycopg://shuliu:shuliu@localhost:5432/shuliu_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version-file: pyproject.toml
+          enable-cache: true
+      - run: pnpm install --frozen-lockfile
+      - run: uv sync --locked --all-packages
+      - run: pnpm test:migration

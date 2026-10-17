@@ -7,12 +7,12 @@
     "node": ">=22.12.0 <23"
   },
   "scripts": {
-    "test": "pnpm run test:unit && pnpm run test:contract",
+    "test": "vitest run packages && vitest run tests/contract",
     "typecheck": "tsc --project tsconfig.base.json",
     "test:unit": "vitest run packages",
     "test:contract": "vitest run tests/contract",
-    "test:integration": "vitest run tests/integration",
-    "test:migration": "uv run --locked --all-packages pytest -m migration",
+    "test:integration": "pnpm exec vitest run tests/integration --passWithNoTests && uvx --from uv==0.12.20 uv run --locked --all-packages pytest -m integration",
+    "test:migration": "uvx --from uv==0.12.20 uv run --locked --all-packages pytest -m migration",
     "test:security": "vitest run tests/security",
     "test:ipc": "vitest run tests/contract --testNamePattern IPC",
     "test:e2e": "vitest run tests/e2e",
