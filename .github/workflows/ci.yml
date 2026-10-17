@@ -41,6 +41,8 @@ jobs:
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/tools -q
       - name: Run Python Agent Core unit tests
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/agent -q
+      - name: Run Python Workflow unit tests
+        run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/workflow -q
       - name: Run Cloud API Approval route tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/approval -q
       - run: pnpm test:contract
