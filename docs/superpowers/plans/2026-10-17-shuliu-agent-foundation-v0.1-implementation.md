@@ -33,7 +33,7 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 这些是 Implementation Plan 的具体工程建议，不新增架构边界；未批准之前不得视作已授权实现选择：
 
-- pnpm 精确版本建议 `11.28.6`，与 Node 22 最低版本兼容；在根 `package.json` 的 `packageManager` 字段固定。参考 [pnpm 官方安装与 Node 兼容表](https://pnpm.io/installation) 和 [pnpm 11.28.6 发布记录](https://pnpm.io/blog/releases/11.28.6)。
+- pnpm 精确版本固定为 `11.28.6`，该版本要求 Node >=22.13.0；根 `.node-version` 固定为 Node 22.23.3，根 `package.json` 的 `engines.node` 下限为 `>=22.13.0`。这满足 Architecture Spec 的 Node 22 LTS >=22.12 基线。参考 [pnpm 官方安装与 Node 兼容表](https://pnpm.io/installation) 和 [pnpm 11.28.6 发布记录](https://pnpm.io/blog/releases/11.28.6)。
 - Python packaging / lock 建议使用 uv `0.12.20`、`pyproject.toml` 和提交的 `uv.lock`；CI 使用 `uv run --locked`。参考 [uv 官方项目与锁文件文档](https://docs.astral.sh/uv/guides/projects/) 和 [uv 官方 Releases](https://github.com/astral-sh/uv/releases)。
 - Cloud API 建议使用 FastAPI，数据库访问建议 SQLAlchemy + Alembic；身份 Provider 仍是抽象接口。FastAPI 的 pytest `TestClient` 用于隔离 HTTP contract tests。[FastAPI Testing](https://fastapi.tiangolo.com/tutorial/testing/)
 - 跨语言消息 Schema 建议使用 JSON Schema Draft 2020-12，TypeScript 使用 Ajv、Python 使用 `jsonschema` 做同一 fixture 集的正反例验证。
@@ -91,8 +91,8 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 - **目标：** 建立可复现的跨语言工作区、基础包、GitHub Actions 通用 / Windows CI 框架和代码任务入口；不实现产品功能。
 - **前置依赖：** 无；实现前必须由用户批准本 Plan，并按 ADR-017 创建 `feat/foundation-v0.1` 独立 worktree。
 - **具体文件路径：** `pnpm-workspace.yaml`、`package.json`、`pnpm-lock.yaml`、`tsconfig.base.json`、`.node-version`、`pyproject.toml`、`uv.lock`、`.python-version`、`.gitignore`、`.github/workflows/ci.yml`、`.github/workflows/windows-validation.yml`、`apps/desktop/package.json`、`services/cloud-api/pyproject.toml`、`runtimes/python-worker/pyproject.toml`、`packages/protocols/package.json`、`packages/shared-types/package.json`、`packages/event-model/package.json`、`packages/testing/package.json`、`skills/examples/README.md`、`tests/contract/repository-layout.test.ts`。
-- **创建 / 修改：** 创建 ADR-017 指定的全部初始目录和最小 workspace manifests；添加包名 `@shuliu/desktop`、`@shuliu/protocols`、`@shuliu/shared-types`、`@shuliu/event-model`、`@shuliu/testing` 及 Python distribution `shuliu-cloud-api`、`shuliu-python-runtime`；CI matrix 包括 Linux / macOS 通用 job 和 Windows 专属 job；在 CI 固定 pnpm / uv、Node 22.12+、Python 3.11。
-- **接口 / Schema：** Workspace 包名、Node `engines.node >=22.12`、Python `requires-python >=3.11,<3.12`、包脚本 `test` / `typecheck` / `test:unit` / `test:contract` / `test:integration` / `test:migration` / `test:security` / `test:ipc` / `test:e2e` / `test:windows`；Python 测试由 `uv run --locked` 调用。
+- **创建 / 修改：** 创建 ADR-017 指定的全部初始目录和最小 workspace manifests；添加包名 `@shuliu/desktop`、`@shuliu/protocols`、`@shuliu/shared-types`、`@shuliu/event-model`、`@shuliu/testing` 及 Python distribution `shuliu-cloud-api`、`shuliu-python-runtime`；CI matrix 包括 Linux / macOS 通用 job 和 Windows 专属 job；在 CI 固定 pnpm / uv、Node 22.23.3（满足 >=22.13.0）、Python 3.11。
+- **接口 / Schema：** Workspace 包名、Node `engines.node >=22.13.0 <23`、Python `requires-python >=3.11,<3.12`、包脚本 `test` / `typecheck` / `test:unit` / `test:contract` / `test:integration` / `test:migration` / `test:security` / `test:ipc` / `test:e2e` / `test:windows`；Python 测试由 `uv run --locked` 调用。
 - **测试文件：** `tests/contract/repository-layout.test.ts`。
 - **RED：** 先建立 Vitest harness，再断言指定目录、包 manifests、版本下限、lockfile 与 CI job 存在；执行 `pnpm exec vitest run tests/contract/repository-layout.test.ts`，预期因必需文件 / 目录 / workflow 缺失而失败。
 - **最小实现：** 创建 ADR-017 目录与 manifests；只加运行检查需要的 workspace 脚本、lockfile 和 CI 配置，不创建业务模块。

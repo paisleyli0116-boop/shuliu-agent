@@ -50,7 +50,7 @@ describe("Foundation repository layout", () => {
   it("pins supported runtimes and exposes the planned task scripts", () => {
     const manifest = JSON.parse(read("package.json"));
     expect(manifest.packageManager).toBe("pnpm@11.28.6");
-    expect(manifest.engines.node).toContain(">=22.12");
+    expect(manifest.engines.node).toContain(">=22.13.0");
     for (const script of [
       "test",
       "typecheck",
@@ -65,7 +65,7 @@ describe("Foundation repository layout", () => {
     ]) {
       expect(manifest.scripts).toHaveProperty(script);
     }
-    expect(read(".node-version").trim()).toMatch(/^22\./);
+    expect(read(".node-version").trim()).toBe("22.23.3");
     expect(read(".python-version").trim()).toBe("3.11");
     expect(read("pyproject.toml")).toContain('requires-python = ">=3.11,<3.12"');
     expect(read("services/cloud-api/pyproject.toml")).toContain('name = "shuliu-cloud-api"');

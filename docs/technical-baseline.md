@@ -11,7 +11,7 @@ Architecture Spec 是架构事实源。本表中的“已确认”指架构决�
 | 产品范围 | ShuLiu Foundation V0.1；只做第一层通用底座，不实现岗位机器人业务逻辑。 | Spec §§2–3 |
 | Repository | pnpm workspaces Monorepo；初始目录包括 `apps/desktop`、`services/cloud-api`、`runtimes/python-worker`、`packages/protocols`、`packages/shared-types`、`packages/event-model`、`packages/testing`、`skills/examples`、`tests/contract`、`tests/integration`、`tests/e2e`、`docs`。 | ADR-017 |
 | 分支与工作区 | 产品实现不得直接在 `main`；实现使用 `feat/foundation-v0.1` + 独立 worktree，采用 TDD。 | ADR-017、AGENTS.md |
-| Node / Desktop | Node.js 22 LTS >=22.12；Electron + React + TypeScript；Electron Main 管理 Python Sidecar，Renderer 通过窄 IPC。 | ADR-017、Spec §§6、17.6 |
+| Node / Desktop | Architecture baseline 为 Node.js 22 LTS >=22.12；仓库固定 Node 22.23.3。pnpm 11.28.6 的实际最低要求为 Node >=22.13.0；Electron + React + TypeScript；Electron Main 管理 Python Sidecar，Renderer 通过窄 IPC。 | ADR-017、Spec §§6、17.6；CI 验证 |
 | Python | Python 3.11；Python Runtime / Worker 由 Python 进程承载。 | ADR-017、Spec §§6、17.6 |
 | Python packaging | `pyproject.toml` + committed `uv.lock`；CI 使用 locked dependency resolution。 | ADR-017 |
 | 测试工具 | TypeScript 使用 Vitest；Python 使用 pytest。 | ADR-017 |
@@ -41,7 +41,7 @@ Architecture Spec 是架构事实源。本表中的“已确认”指架构决�
 
 下列项目用于把逐文件任务和命令写到可执行程度；它们是 Implementation Plan 的具体工具选择，不改变 Architecture Spec 的模块边界。用户审批 Implementation Plan 时也一并审阅这些选择：
 
-- TypeScript workspace pin：建议使用与 Node 22.12 最低版本兼容的 pnpm `11.28.6`，并在 `package.json` 精确固定版本。
+- TypeScript workspace pin：固定 pnpm `11.28.6`；该版本要求 Node >=22.13.0，因此仓库固定 `.node-version` 为 Node 22.23.3，并将 package engine floor 设为 `>=22.13.0`。这满足 Architecture Spec 的 Node 22 LTS >=22.12 基线。
 - Python dependency lock：建议使用 uv `0.12.20`；`pyproject.toml` 与 `uv.lock` 已由 ADR-017 固定。
 - Cloud API：建议使用 FastAPI；数据库迁移建议 SQLAlchemy + Alembic。Provider / Identity Provider 仍通过接口替换，不在 Skill 中写入。
 - 跨语言契约：建议采用 JSON Schema Draft 2020-12，TypeScript 与 Python 各自使用 validator 做契约测试。
