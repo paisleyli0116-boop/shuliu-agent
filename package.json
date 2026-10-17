@@ -1,0 +1,26 @@
+{
+  "name": "@shuliu/foundation",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.28.6",
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
+  "scripts": {
+    "test": "pnpm run test:unit && pnpm run test:contract",
+    "typecheck": "tsc --project tsconfig.base.json",
+    "test:unit": "vitest run packages",
+    "test:contract": "vitest run tests/contract",
+    "test:integration": "vitest run tests/integration",
+    "test:migration": "uv run --locked --all-packages pytest -m migration",
+    "test:security": "vitest run tests/security",
+    "test:ipc": "vitest run tests/contract --testNamePattern IPC",
+    "test:e2e": "vitest run tests/e2e",
+    "test:windows": "vitest run tests/windows"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
