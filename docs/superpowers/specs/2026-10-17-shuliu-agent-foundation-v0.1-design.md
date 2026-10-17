@@ -213,10 +213,11 @@ Foundation Version 与协议版本独立演进。协议版本不得简单绑定�
 ### 8.1 存储基线
 
 - Desktop 本地运行使用 SQLite。
-- Cloud 共享数据使用 PostgreSQL。
-- pgvector 是讨论中出现的候选依赖；是否作为 V0.1 的正式向量存储需要 ADR 确认。
+- Cloud PostgreSQL 是业务 Source of Truth；本地 SQLite 仅用于 cache、outbox、inbox、checkpoint 和 local task state。
+- 本地事件通过 outbox 上传；服务端以 `event_id` 和 `idempotency_key` 去重，事务提交后返回 server ACK；客户端收到 ACK 后才将 outbox 记录标记为已同步。离线时保留未 ACK 事件并在重连后续传。
+- V0.1 不做通用 SQLite ↔ PostgreSQL 双向数据库同步。SQLite 中的缓存可从 Cloud 重建；本地待发送事件按 outbox 协议定向上传。
+- Knowledge 向量检索固定使用 Cloud PostgreSQL + pgvector，不引入第二套独立向量数据库；这是 Foundation 服务端知识基础设施。
 - 数据库 Schema 有独立版本、Migration ID、应用时间和 checksum；不能只依赖 App Version 推断数据库状态。
-- 本地与云端的权威数据边界、同步队列、冲突解决和离线写入策略仍是待决项。
 - Skill 代码包与业务数据分离。卸载 Skill 不级联删除该 Skill 生成的业务数据；数据删除是独立的高风险管理操作。
 
 ### 8.2 运行快照
@@ -280,7 +281,15 @@ Event、Trace、Log、Metric、Evidence 和 Audit 是不同类型的记录：
 
 ### 11.1 Scheduler
 
-Scheduler 持久化计划定义和下次触发状态；触发时创建 Task / WorkflowRun 并使用稳定的 idempotency_key，避免重启或重复触发造成重复任务。调度引擎、时区、错过触发后的补偿规则和分布式调度一致性待 ADR 确定。
+V0.1 使用 APScheduler 3.11.3 与 PostgreSQL-backed persistent datastore。Schedule 使用稳定、唯一的 `schedule_id`；启动时若同 ID 已存在，默认采用 replace。Cloud V0.1 仅运行一个活动 Scheduler 实例连接该 persistent datastore。
+
+APScheduler 只负责计算 Trigger 和产生 Schedule occurrence；它不承载岗位业务逻辑，也不执行 Workflow。触发后写入带稳定 occurrence ID / `idempotency_key` 的 Schedule event，由 Workflow Engine 创建并执行 WorkflowRun。
+
+- 周期任务错过多次触发时默认 coalesce 为 `latest`；只有 Schedule 显式设置 `coalesce: all` 时才保留每次错过的触发。
+- 同一 Schedule 默认不允许并发 WorkflowRun。运行期间的新 occurrence 按该 Schedule 的 coalesce 策略持久化排队；前一个 Run 结束后再串行启动。
+- `misfire_grace_time` 可按 Schedule 配置；超过 grace time 的 occurrence 标记为 MISSED，不启动 Workflow。
+- Schedule timezone 与 DST 处理需显式记录；默认时区及 DST 边界处理仍是部署配置项。
+- 所有可能产生副作用的 Workflow 必须以稳定 occurrence ID / `idempotency_key` 保证重试幂等。
 
 ### 11.2 Workflow
 
@@ -312,15 +321,18 @@ Checkpoint 至少记录 run_id、sequence、可序列化状态、last_completed_
 - Cloud 对失联 Worker 设置 grace period；恢复后先校验 Lease，再决定继续；过期后才考虑重新派发。
 - 任务派发按至少一次交付语义设计；防重复依赖 idempotency_key、Lease 和结果对账。对外部副作用无法证明恰好一次时，必须通过核验或人工确认处理。
 - 多次重试仍失败的任务可进入 DEAD_LETTER，等待人工查看、修复、重新执行或标记忽略。
-- Worker 的认证方式、传输协议、任务队列、Lease 时长、心跳间隔和 grace period 是待决配置。
+- Worker 通过 WSS 连接 Cloud。首次注册使用一次性 Registration Token；Worker 本地生成设备密钥并提交公钥，服务端绑定设备身份并分配 `worker_id`。运行时采用短期会话凭据；长期 Secret 不得以明文存入配置文件。V0.1 不强制 mTLS，协议保留未来升级到 mTLS 的空间。
+- Lease 时长、heartbeat 间隔、grace period、短期凭据的 TTL 与轮换策略仍是待决配置。
 
 ## 13. Knowledge
 
 - Knowledge Service 管理知识来源、Document、Chunk、索引、Embedding 引用和 ACL。
+- 向量存储固定为 Cloud PostgreSQL + pgvector，不引入独立向量数据库；其属于 Foundation server-side knowledge infrastructure。
+- 必须先按可信的 tenant / organization、scope、classification 与 Permission 上下文构造授权候选集，再在该候选集内执行 pgvector 搜索与排序。禁止先对全库做向量 Top-K 检索再在应用层过滤权限。
 - ACL 检查必须在检索结果返回给 Agent 之前完成；不能依靠模型提示词来实现访问控制。
 - 知识访问和来源引用进入 Trace / Audit，便于解释回答使用了哪些资料。
 - Embedding 请求走 Model Gateway，并遵守数据敏感度和 LOCAL_ONLY 限制。
-- V0.1 是否使用 PostgreSQL / pgvector、如何做本地知识索引、文件解析器与同步策略仍待 ADR 确定。
+- V0.1 不建立第二套本地向量索引；文档解析器、Embedding Provider / profile、索引版本迁移及 ACL / 删除后的缓存失效细节仍待后续决策。
 - 删除或权限变更必须能使索引和缓存中的旧内容失效。
 
 ## 14. Model Gateway
@@ -383,16 +395,18 @@ Manifest 声明 Skill 自身 SemVer、所需 Foundation 范围、Skill Protocol 
 ### 16.1 Electron ↔ Python IPC
 
 - IPC 有独立 Runtime Protocol 版本和可校验消息 Schema。
+- Electron Main 通过 stdio 启动 Python Sidecar，并以 NDJSON 通信：stdout 仅作为协议通道，每行一条 UTF-8 JSON 消息；协议外日志只写 stderr。
 - Renderer 只访问 Electron Main 暴露的最小 allowlist API；不得提供任意命令执行或任意文件路径访问接口。
 - 每个请求有 request_id、trace_id、超时和结构化错误响应；调用方可识别超时、进程退出和协议不匹配。
 - Main 在 Python Runtime 启动后执行版本握手和 Health Check；版本或数据库不兼容时进入 Safe Mode。
-- 本机 IPC 的具体传输方式、身份校验和权限隔离配置待决。
+- stdio 管道的本地进程边界与窄 API 是 V0.1 IPC 信任边界；Sidecar 启动参数不得携带长期 Secret 明文。
 
 ### 16.2 Cloud ↔ Worker
 
 - Cloud 与 Worker 通过 Worker Protocol 发送注册、能力、任务租约、心跳、取消、进度和结果。
 - 消息有协议版本、消息 ID、Trace ID、lease_id 和幂等标识。
-- 传输必须加密并认证；凭据生命周期、证书或 Token 机制待 ADR 确定。
+- 传输使用 WSS 并认证。首次绑定使用一次性 Registration Token；Worker 生成设备密钥，Cloud 注册设备公钥并分配 `worker_id`；后续运行使用短期会话凭据。
+- 长期 Secret 不得明文保存在 Worker 配置中。V0.1 不强制 mTLS，但认证协议需为未来增加 mTLS 保留兼容空间。
 - Cloud 根据 Lease 和 fencing token 接受或拒绝 Worker 的结果。
 
 ## 17. 版本、发布、更新与回滚
@@ -496,7 +510,7 @@ Safe Mode 下允许用户查看 Chat、日志和设置并使用修复工具；�
 8. **日志与 Evidence**：默认脱敏，按风险控制采集、访问和保留。
 9. **依赖安全**：依赖版本固定、License 可追踪，升级经验证后进入 Release。
 
-本节不替代具体威胁建模。身份模型、租户隔离、密钥管理实现、Skill 沙箱、签名根密钥轮换、数据静态加密和外部渗透测试范围均是待决安全项。
+本节不替代具体威胁建模。Cloud 用户身份与角色授权来源、完整租户模型、设备密钥的具体安全存储与轮换周期、短期会话凭据 TTL、Skill 沙箱、签名根密钥轮换、数据静态加密和外部渗透测试范围均是待决安全项。Worker 首次注册与运行时认证的架构流程已由 ADR-014 决定；V0.1 不强制 mTLS。
 
 ## 20. 测试与 V0.1 验收
 
@@ -546,13 +560,13 @@ V0.1 需要证明：
 
 ## 21. ADR 目录
 
-以下记录把本规格中的主要架构决策归档。具体 ADR 文件应在仓库连接后建立；这份工作区文档本身不代表 ADR 已独立评审。
+以下记录把本规格中的主要架构决策归档。ADR-013 至 ADR-016 的独立记录位于 `docs/adr/`，其 Accepted 决策已同步到本规格、Implementation Plan 和项目台账。
 
 | ADR | 决策主题 | 本规格记录的结果 | 状态 |
 |---|---|---|---|
 | ADR-001 | Foundation 产品边界 | 通用执行底座与业务 Agent / Skill 分离 | 讨论已确认 |
 | ADR-002 | Desktop Runtime | Electron Desktop 监督 Python Runtime | 讨论已确认；实现细节待决 |
-| ADR-003 | 本地与共享存储 | 本地 SQLite、Cloud PostgreSQL | 逻辑基线已确认；同步权威边界待决 |
+| ADR-003 | 本地与共享存储 | Cloud PostgreSQL 为业务 Source of Truth；SQLite 限于本地 cache / outbox / inbox / checkpoint / task state | 已确认；无通用双向同步 |
 | ADR-004 | 七大协议 | Agent、Skill、Tool、Workflow、Event、Worker、Model 独立定义 | 讨论已确认 |
 | ADR-005 | Policy / Approval | 副作用前策略判定，必要时人工审批 | 讨论已确认；风险矩阵待补 |
 | ADR-006 | 运行版本快照 | AgentRun 固定 Skill 与 Workflow 版本 | 讨论已确认 |
@@ -562,17 +576,17 @@ V0.1 需要证明：
 | ADR-010 | 版本和发布 | SemVer、协议独立版本、分阶段发布与健康门 | 讨论已确认 |
 | ADR-011 | 数据库升级 | Schema 独立版本化，使用 Expand → Migrate → Contract | 讨论已确认 |
 | ADR-012 | 故障恢复 | 错误分类、幂等重试、Checkpoint、Safe Mode 与 Dead Letter | 讨论已确认 |
-| ADR-013 | Knowledge 向量存储 | pgvector 或其他实现 | 待决 |
-| ADR-014 | IPC / Worker 身份认证 | 传输、身份、密钥和轮换机制 | 待决 |
-| ADR-015 | 本地 / 云端数据同步 | 权威数据、离线写入、冲突解决 | 待决 |
-| ADR-016 | 调度语义 | 引擎、时区、错过触发、分布式去重 | 待决 |
+| ADR-013 | Knowledge 向量存储 | Cloud PostgreSQL + pgvector；tenant / scope / classification ACL 预过滤后执行向量检索 | Accepted；解析器与 Embedding profile 仍待定 |
+| ADR-014 | IPC / Worker 身份认证 | Electron↔Python stdio + NDJSON；Cloud↔Worker WSS；一次性注册 Token、设备密钥、worker_id、短期会话凭据；V0.1 不强制 mTLS | Accepted；密钥保护细节与凭据 TTL / 轮换待定 |
+| ADR-015 | 本地 / 云端数据同步 | Cloud PostgreSQL 为业务 Source of Truth；SQLite outbox/inbox 等本地状态；server ACK + event_id / idempotency 去重；不做通用双向同步 | Accepted |
+| ADR-016 | 调度语义 | APScheduler 3.11.3 持久化 Trigger；Workflow Engine 独立执行；稳定 schedule_id、replace、latest 默认、all 显式、同 Schedule 不并发、misfire_grace_time 可配 | Accepted；timezone / DST 与部署级参数待定 |
 
 ## 22. 风险
 
 | 风险 | 影响 | 控制方向 |
 |---|---|---|
 | 任务恢复误判外部副作用 | 重复发消息、重复提交或重复发布 | 幂等键、执行前后核验、人工处理不确定结果 |
-| 本地与 Cloud 状态不一致 | 丢任务、覆盖数据或错误展示 | 先明确权威边界、同步队列与冲突策略 |
+| 本地与 Cloud 状态不一致 | 丢任务、覆盖数据或错误展示 | Cloud PostgreSQL 为业务 Source of Truth；本地 outbox 通过 ACK、event_id / idempotency 去重和离线续传；不做通用双向同步 |
 | 恶意或被篡改的 Skill | 数据泄露、越权操作、Runtime 受损 | Publisher 信任、签名、Checksum、扫描、权限确认与沙箱决策 |
 | Worker 失联但仍在执行 | 重复派发或旧结果覆盖新结果 | Lease、fencing token、grace period、提交校验 |
 | 数据库迁移与 App 回滚不兼容 | 旧版本无法启动或数据损坏 | Expand / Migrate / Contract、Migration 校验、回滚兼容检查 |
@@ -584,18 +598,17 @@ V0.1 需要证明：
 
 以下项目不会由本规格臆测，应在 Implementation Plan 或对应 ADR 中确定：
 
-1. ShuLiu Foundation 的目标代码仓库、所有者、分支策略与 CI 环境。
-2. Cloud 部署形态、身份和租户模型、管理员 / 用户角色以及授权来源。
-3. SQLite 与 PostgreSQL 的数据所有权、离线队列、同步协议和冲突解决。
-4. PostgreSQL / pgvector 的最终选择、Knowledge 本地索引和 Embedding Provider。
-5. IPC 与 Worker 传输协议、身份认证、密钥 / 证书存储和轮换周期。
-6. Scheduler 实现、时区、错过触发补偿、租约时间、心跳周期和 grace period。
-7. Tool 风险分级、Approval 矩阵、权限粒度、默认超时和重试上限。
-8. Skill 沙箱强度、扫描工具、签名根信任、Publisher 发布流程和废弃窗口。
-9. Model Provider 清单、能力映射、预算限额、LOCAL_ONLY 的可用模型。
-10. Event / Audit / Evidence 保留时间、容量、导出和删除规则。
-11. Compatibility Window 的具体版本跨度、Release 分批比例和观察窗口。
-12. 性能目标的真实测量环境与发布门槛。
+1. ShuLiu Foundation 的目标代码结构、工具链、分支策略与 CI 环境。
+2. Cloud 部署形态、用户身份与角色授权来源，以及完整租户模型。
+3. Knowledge 文档解析器、Embedding Provider / profile、索引迁移与 ACL / 删除后的缓存失效细节；V0.1 不建立第二套本地向量索引。
+4. Worker 设备私钥存储、会话凭据 TTL / 轮换；V0.1 不强制 mTLS。
+5. Scheduler 的 timezone / DST 边界、部署级 `misfire_grace_time` 默认值及未来多实例高可用方案。
+6. Tool 风险分级、Approval 矩阵、权限粒度、默认超时和重试上限。
+7. Skill 沙箱强度、扫描工具、签名根信任、Publisher 发布流程和废弃窗口。
+8. Model Provider 清单、能力映射、预算限额、LOCAL_ONLY 的可用模型。
+9. Event / Audit / Evidence 保留时间、容量、导出和删除规则。
+10. Compatibility Window 的具体版本跨度、Release 分批比例和观察窗口。
+11. 性能目标的真实测量环境与发布门槛。
 
 ## 24. 架构验收边界
 

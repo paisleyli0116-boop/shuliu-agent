@@ -6,7 +6,7 @@
 
 **Architecture:** Define protocol and repository decisions first, then build a local execution slice around the Python Runtime and SQLite. Add Desktop IPC, Skill lifecycle, Knowledge and Model Gateway, and Cloud/Worker in separately reviewable plans. Use fake providers and tools for deterministic core tests; gate all external side effects through Policy and result verification.
 
-**Tech Stack:** Confirmed baseline: Electron Desktop, Python Runtime, local SQLite, Cloud PostgreSQL. Confirmed transports: stdio + NDJSON for Electron↔Python; WSS for Cloud↔Worker. Exact language and runtime versions, frameworks, packaging, and provider choices remain subject to the ADR gate below.
+**Tech Stack:** Confirmed baseline: Electron Desktop, Python Runtime, local SQLite, Cloud PostgreSQL, and APScheduler 3.11.3 for Trigger scheduling. Confirmed transports: stdio + NDJSON for Electron↔Python; WSS for Cloud↔Worker. Node/Python version floors, frameworks, packaging, and provider choices remain subject to the ADR gate below.
 
 **Spec:** `docs/superpowers/specs/2026-10-17-shuliu-agent-foundation-v0.1-design.md`
 
@@ -14,7 +14,7 @@
 
 ## Confirmed Design Decisions
 
-These decisions are confirmed for the V0.1 Implementation Plan as of 2026-10-17. They supersede the matching pending labels in the Architecture Spec for this plan and must be reconciled into the corresponding ADR records before implementation.
+These decisions are recorded for the V0.1 Implementation Plan as of 2026-10-17. ADR-013–016 have since been reconciled into the Architecture Spec and their accepted ADR records. Other plan-level decisions must not be treated as architecture facts until they are reconciled into the Architecture Spec; the Spec remains the architecture authority.
 
 | Area | Confirmed decision |
 |---|---|
@@ -22,14 +22,20 @@ These decisions are confirmed for the V0.1 Implementation Plan as of 2026-10-17.
 | Data authority | Cloud PostgreSQL is the business Source of Truth. SQLite stores only cache, outbox, inbox, checkpoint, and local task state. Do not implement full bidirectional synchronization. |
 | Communication | Electron↔Python uses stdio + NDJSON. Cloud↔Worker uses WSS with heartbeat, lease, ACK, and idempotency. |
 | Security | Store local Secrets in OS secure storage and Cloud Secrets in a cloud secret manager. Policy defaults to Fail Closed. High-risk operations require Approval. Skills and Updates must pass signature and version-compatibility checks. |
+| Knowledge | Cloud PostgreSQL + pgvector; tenant / scope / classification ACL filters run before vector search; no second vector database. |
+| Scheduler | APScheduler 3.11.3 persists triggers; Workflow Engine owns execution. Stable Schedule IDs, replace on startup, `latest` coalescing by default, explicit `all`, no same-Schedule overlap, configurable `misfire_grace_time`, and idempotent side effects. |
 
-The existing Architecture Spec labels on identity, data synchronization, and communication are historical pending markers. The ADR update in Task 0 reconciles those sections; do not reopen the four confirmed decisions during plan decomposition.
+ADR-013–016 now close the Architecture Spec's former Pending items for vector storage, IPC / Worker identity, data synchronization, and scheduling. Cloud user identity / tenant authorization remains a separate open decision; Worker enrollment identity is covered by ADR-014. Do not reopen ADR-013–016 during plan decomposition.
 
 ## Global Constraints
 
 - Foundation provides shared runtime capabilities; role-specific business agents, business rules, and business data models are out of scope.
 - Initial protocol compatibility baseline is `protocol_version: 1`; Foundation, Runtime, Worker, Skill, Event, and database Schema versions remain independent.
 - Cloud PostgreSQL is the business Source of Truth. SQLite is limited to cache, outbox, inbox, checkpoint, and local task state; no full bidirectional sync.
+- Local outbox events upload with stable `event_id` and `idempotency_key`; the server ACK follows durable acceptance and duplicate IDs are not applied twice. Unacknowledged events remain queued and resume after reconnect.
+- Knowledge uses PostgreSQL + pgvector. Authorization context filters tenant / organization, scope, classification, and permission before vector search; post-search ACL filtering is prohibited.
+- APScheduler 3.11.3 only emits persisted schedule occurrences. Workflow Engine executes them. Same-Schedule WorkflowRuns do not overlap; `latest` is the default misfire coalescing policy, `all` requires explicit Schedule configuration.
+- Worker enrollment uses a one-time Registration Token and device-generated key; runtime authentication uses short-lived session credentials. V0.1 does not require mTLS.
 - An AgentRun pins the Agent, Skill, and Workflow versions it starts with; updates affect new runs.
 - Policy defaults to Fail Closed. Every external side effect passes Policy, and every high-risk operation requires Approval before execution.
 - Browser and Computer actions follow `OBSERVE → ACT → VERIFY`; an unverified result cannot silently advance a high-risk Workflow.
@@ -52,11 +58,12 @@ The existing Architecture Spec labels on identity, data synchronization, and com
 
 ## Repository and File Structure
 
-The repository currently contains `README.md` and the Architecture Spec; it has no application code or repository-specific `AGENTS.md`.
+The repository contains `README.md`, `AGENTS.md`, the Architecture Spec, the project-memory documents, the architecture decision register, the technical baseline, and the risk register. It has no application code yet.
 
 Planning documents created by this plan:
 
 - `docs/superpowers/plans/2026-10-17-shuliu-agent-foundation-v0.1-implementation.md` — this umbrella plan.
+- `docs/adr/ADR-013-knowledge-vector-storage.md` through `docs/adr/ADR-016-scheduler-semantics.md` — accepted architecture decisions.
 - `docs/adr/ADR-017-repository-and-toolchain.md` through `docs/adr/ADR-027-release-and-acceptance-gates.md` — decision records to draft and review before code.
 - `docs/superpowers/plans/2026-10-17-shuliu-agent-foundation-v0.1-01-contracts-runtime.md`
 - `docs/superpowers/plans/2026-10-17-shuliu-agent-foundation-v0.1-02-agent-policy-tools.md`
@@ -88,13 +95,17 @@ Create each ADR as a short record containing Context, Options, Decision, Consequ
 
 | ADR | Status | Decision to record or close |
 |---|---|---|
+| ADR-013 | Accepted | Cloud PostgreSQL + pgvector; apply tenant / scope / classification ACL filters before vector search; no second vector database |
+| ADR-014 | Accepted | stdio + NDJSON with stdout protocol / stderr logs; WSS Worker enrollment with one-time token, device key, `worker_id`, short-lived session credentials; no mandatory mTLS in V0.1 |
+| ADR-015 | Accepted | Cloud PostgreSQL Source of Truth; SQLite cache/outbox/inbox/checkpoint/local task state; outbox + server ACK + event/idempotency de-duplication; no general bidirectional sync |
+| ADR-016 | Accepted | APScheduler 3.11.3 persistent Trigger; Workflow Engine Execution; stable ID + replace; latest by default, all explicit; no same-Schedule overlap; configurable misfire grace; idempotent side effects |
 | ADR-017 | Open | Repository layout, language/runtime version floors, package managers, test tooling, CI, and branch/release conventions |
-| ADR-018 | Confirmed | Single-company V0.1 identity model, reserved `organization_id`, `User + Role + Permission`, and Worker one-time registration Token plus device identity |
-| ADR-019 | Confirmed | Cloud PostgreSQL Source of Truth; SQLite cache/outbox/inbox/checkpoint/local task state; no full bidirectional sync |
-| ADR-020 | Confirmed | stdio + NDJSON for Electron↔Python; WSS + heartbeat + lease + ACK + idempotency for Cloud↔Worker |
-| ADR-021 | Partially confirmed | Communication uses heartbeat and lease; scheduler semantics, timezone, missed triggers, deduplication, Lease duration, heartbeat interval, and grace period remain open |
+| ADR-018 | Confirmed in Plan; Spec reconciliation pending | Single-company V0.1 identity model, reserved `organization_id`, and `User + Role + Permission`; Architecture Spec §23 still lists identity / tenant model as pending |
+| ADR-019 | Superseded | Data authority and sync are governed by ADR-015; no duplicate decision record |
+| ADR-020 | Superseded | IPC and Worker identity are governed by ADR-014; no duplicate decision record |
+| ADR-021 | Superseded | Scheduler semantics are governed by ADR-016; no duplicate decision record |
 | ADR-022 | Partially confirmed | Policy defaults to Fail Closed and high-risk operations require Approval; exact risk mapping, permission granularity, timeouts, retry limits, and uncertain side-effect handling remain open |
-| ADR-023 | Open | Knowledge local index, Cloud vector storage, parsers, embedding route, ACL invalidation, and source sync |
+| ADR-023 | Partially closed by ADR-013 | Vector store and ACL-before-search are fixed; parsers, embedding route/profile, index migration and ACL cache invalidation remain open |
 | ADR-024 | Open | Model Provider set, capability mapping, budgets, local-model scope, and `LOCAL_ONLY` enforcement |
 | ADR-025 | Partially confirmed | Skill and Update signature and version-compatibility checks are mandatory; sandbox, scanning, signature trust roots, publisher workflow, and deprecation window remain open |
 | ADR-026 | Open | Event, Audit, and Evidence access, encryption, retention, capacity, export, and deletion |
@@ -107,22 +118,23 @@ The original Architecture Spec already records ADR-001 through ADR-016. If a dec
 | Order | Subsystem plan | Prerequisites | V0.1 outcome |
 |---:|---|---|---|
 | 0 | ADR decision set and repository layout | User review of this plan | Implementation-critical choices have an owner and accepted or deferred status |
-| 1 | Contracts and Runtime bootstrap | ADR-017, ADR-020 | Versioned schemas, error envelope, migration baseline, and a healthy Python Runtime bootstrap |
+| 1 | Contracts and Runtime bootstrap | ADR-014, ADR-017 | Versioned schemas, error envelope, migration baseline, and a healthy Python Runtime bootstrap |
 | 2 | Agent, Policy, Approval, and Tool execution | 1, ADR-018, ADR-022, ADR-024 | Deterministic local Task → AgentRun → Policy → Approval → Tool → verified result path |
-| 3 | Workflow, Scheduler, Checkpoint, and recovery | 1–2, ADR-019, ADR-021, ADR-022 | Durable waiting, retry, restart recovery, and idempotency behavior |
-| 4 | Desktop IPC | 1–3, ADR-017, ADR-020 | Renderer can create and observe a task through the allowlisted Main↔Python interface |
+| 3 | Workflow, Scheduler, Checkpoint, and recovery | 1–2, ADR-015, ADR-016, ADR-022 | Durable waiting, latest/all scheduling semantics, no overlapping Schedule runs, restart recovery, and idempotency behavior |
+| 4 | Desktop IPC | 1–3, ADR-014, ADR-017 | Renderer can create and observe a task through the allowlisted Main↔Python interface |
 | 5 | Skill lifecycle and package security | 1–3, ADR-025 | Verified staging, contract tests, activation, permission-change Approval, rollback, and removal guards |
-| 6 | Model Gateway and Knowledge | 1–3, ADR-023, ADR-024, ADR-026 | Policy-aware model routing and ACL-filtered knowledge retrieval with traceable sources |
-| 7 | Cloud Control Plane and Worker | 1–3, ADR-018–021, ADR-026 | Authenticated task dispatch, one-time Worker registration, Lease renewal, heartbeat, ACK, fencing, result reconciliation, and dead-letter handling |
+| 6 | Model Gateway and Knowledge | 1–3, ADR-013, ADR-023–024, ADR-026 | Policy-aware model routing and ACL-prefiltered pgvector retrieval with traceable sources |
+| 7 | Cloud Control Plane and Worker | 1–3, ADR-014–015, ADR-018, ADR-026 | Authenticated task dispatch, one-time Worker registration, short-lived sessions, Lease renewal, heartbeat, ACK, fencing, result reconciliation, and dead-letter handling |
 | 8 | Release, migration, and acceptance | 1–7, ADR-026–027 | Signed Desktop/Runtime release, health gate, compatible rollback, Windows install/upgrade acceptance |
 
-The first useful running slice is local and deterministic. Cloud/Worker work starts only after identity, data ownership, transport, and lease semantics are accepted. Skill and Knowledge work can proceed independently after the contracts and their security/privacy ADRs are accepted.
+The first useful running slice is local and deterministic. Cloud/Worker work starts after ADR-014 / ADR-015 and the remaining Cloud user-identity / tenant-authorization details in ADR-018 are addressed. Skill and Knowledge work can proceed independently after the contracts and their security/privacy ADRs are accepted.
 
 ## Tasks
 
 ### Task 0: Review and close architecture decisions
 
 **Files:**
+- Read: `docs/adr/ADR-013-knowledge-vector-storage.md` through `docs/adr/ADR-016-scheduler-semantics.md`
 - Create: `docs/adr/ADR-017-repository-and-toolchain.md` through `docs/adr/ADR-027-release-and-acceptance-gates.md`
 - Modify only when decisions change: the matching ADR or section in `docs/superpowers/specs/2026-10-17-shuliu-agent-foundation-v0.1-design.md`
 
@@ -143,7 +155,7 @@ The first useful running slice is local and deterministic. Cloud/Worker work sta
 - Modify: this umbrella plan only if subsystem order or dependencies change.
 
 **Interfaces:**
-- Consumes: accepted ADRs 017–027 and the Architecture Spec.
+- Consumes: accepted ADRs 013–016, accepted or explicitly deferred ADRs 017–027, and the Architecture Spec.
 - Produces: independently executable plans with exact paths, contracts, test cases, expected outputs, and commit boundaries.
 
 - [ ] **Step 1: Write the contracts and Runtime bootstrap plan**
@@ -163,7 +175,7 @@ The first useful running slice is local and deterministic. Cloud/Worker work sta
 - Modify: plans only to resolve review findings.
 
 **Interfaces:**
-- Consumes: Task 0 accepted ADRs and Task 1 subsystem plans.
+- Consumes: Task 0 accepted ADRs 013–016, resolved Task 0 decision gates, and Task 1 subsystem plans.
 - Produces: an approved plan set and a selected execution method.
 
 - [ ] **Step 1: Check plan coverage against Architecture Spec sections 2–20 and acceptance criteria 20.2**
