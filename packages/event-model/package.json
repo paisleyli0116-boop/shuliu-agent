@@ -2,5 +2,12 @@
   "name": "@shuliu/event-model",
   "private": true,
   "version": "0.1.0",
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "test": "vitest run tests",
+    "typecheck": "tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --strict --skipLibCheck src/index.ts"
+  },
+  "dependencies": {
+    "@shuliu/shared-types": "workspace:*"
+  }
 }

@@ -20,7 +20,11 @@ importers:
 
   apps/desktop: {}
 
-  packages/event-model: {}
+  packages/event-model:
+    dependencies:
+      '@shuliu/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
 
   packages/protocols:
     dependencies:
