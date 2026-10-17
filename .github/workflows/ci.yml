@@ -35,6 +35,10 @@ jobs:
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/identity -q
       - name: Run Python Policy unit tests
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/policy -q
+      - name: Run Python Approval unit tests
+        run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/approval -q
+      - name: Run Cloud API Approval route tests
+        run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/approval -q
       - run: pnpm test:contract
       - run: pnpm test:migration
       - run: pnpm test:integration
