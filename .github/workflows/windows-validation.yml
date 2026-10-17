@@ -34,7 +34,7 @@ jobs:
           python -m pip install pyinstaller
           choco install nsis --yes --no-progress
           pyinstaller --version
-          makensis /VERSION
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
       - name: Confirm Windows runner
         shell: pwsh
         run: |
