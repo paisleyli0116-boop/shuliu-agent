@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档状态 | 架构评审稿 |
+| 文档状态 | Foundation V0.1 架构基线；Architecture Critical TBD 已收口 |
 | 规格版本 | 0.1 |
 | 日期 | 2026-10-17 |
 | 产品 | ShuLiu Agent Foundation |
@@ -18,6 +18,7 @@
 - **已确认**：在架构讨论中明确形成的方向或约束。
 - **基线**：为让架构可执行而整理出的最低要求；若改变，应通过 ADR 记录。
 - **待决**：现有讨论没有足够信息确定，进入实现计划前需要决策。
+- **实现配置**：不改变模块边界或安全不变量的环境参数，可在对应部署 / 发布配置中确定；必须有负责人、验证条件和生效门槛。
 - 示例中的版本号、阈值和比例仅作说明，除非另有标记，不是最终生产配置。
 
 ## 2. 目标与范围
@@ -47,6 +48,8 @@ V0.1 的目标是建立可验证的执行闭环：
 - Event、Trace、结构化 Log、Metric、Evidence、审计和错误模型。
 - Skill 安装、验证、启用、升级、降级、停用和卸载规则。
 - 版本、发布、数据库迁移、更新健康检查与回滚约束。
+- Monorepo、工具链、通用 CI 与 Windows 专属验证边界，按 ADR-017 执行。
+- 单公司身份模型与可替换的身份 Provider 抽象，按 ADR-018 执行。
 - V0.1 测试矩阵与验收标准。
 
 ### 2.3 非目标
@@ -139,6 +142,8 @@ flowchart LR
 - 有副作用的 Tool 必须由受控执行层执行，并返回执行状态和验证状态。
 - 模块之间通过契约和事件传递结果；禁止形成循环依赖。
 - Cloud 与 Worker 只通过 Worker Protocol 通信；不得依赖远程桌面式的隐式共享进程状态。
+- Tool 适配优先级为 API → Native API / COM → Browser DOM → UIA → Vision GUI → raw coordinates；每次动作仍须 OBSERVE → ACT → VERIFY。
+- MCP 是外部 Tool / Connector 接入协议，不替代 Foundation 的七大领域协议，也不扩大 Skill 的进程权限。
 
 ## 6. 进程架构
 
@@ -147,8 +152,9 @@ flowchart LR
 - **Electron Renderer**：呈现用户界面；不持有模型密钥，不直接访问本机任意文件或外部网络。
 - **Electron Main**：拥有应用级系统权限，负责创建受限 IPC、启动 Python Runtime、检测其退出和执行健康检查。
 - **Python Runtime**：承载 Foundation 的主要编排、协议适配、Policy、Skill、Workflow、Knowledge、Model Gateway 和本地持久化逻辑。
-- **SQLite**：保存本机运行所需的本地数据、状态和缓存。哪些数据属于本地唯一数据、哪些需要同步尚待确定。
+- **SQLite**：仅保存 cache、outbox、inbox、checkpoint 和 local task state；不承担通用 SQLite ↔ PostgreSQL 双向同步。
 - **Browser / Computer Runtime**：作为受控 Tool Adapter 运行，可位于 Desktop 或 Worker 环境；每次动作都要支持观察与结果验证。
+- Browser adapter 基线为 `browser-use`；Windows Computer adapter 通过 UFO² / UIA / Win32 适配器接入；GUI Agent operator 基线为 UI-TARS Operator。具体 OS 行为与许可在对应平台 runner / 实机验证。
 
 Electron 与 Python Runtime 在发布时视为一个 Release Unit。Python 子进程崩溃时，Electron Main 应标记 Runtime 不健康、暂停新任务、写入 Crash Event、尝试有限恢复并执行 Health Check；连续恢复失败时进入 Safe Mode，不能无限重启。
 
@@ -187,12 +193,18 @@ Foundation Version 与协议版本独立演进。协议版本不得简单绑定�
 - 消费方拒绝无法安全解释的主版本，并写入可读的兼容错误。
 - Foundation Release 生成 Compatibility Manifest，声明支持的 Runtime、Worker、Skill、Event、协议和数据库 Schema 版本。
 
+### 7.2 外部 Connector 协议
+
+MCP 用于接入外部 Tool / Connector。Foundation 仍以 Tool Protocol 作为内部调用契约；MCP 适配器须把外部 Server 暴露的能力映射到经过权限声明、Policy 判定、Approval 和审计的 Tool，不得把 MCP Server 视为可信代码或绕开 Tool Broker。
+
 ## 8. 数据模型与持久化
 
 本节描述逻辑实体，不预先规定全部物理表名、索引和分片方式。
 
 | 逻辑实体 | 用途与关系 |
 |---|---|
+| User / OrganizationMembership | 用户身份与其在 V0.1 单一公司组织中的成员关系；保留 `organization_id`，不实现完整多租户 SaaS。 |
+| Role / Permission | Membership 通过 Role 获得 Permission；授权判定仍由 Policy 执行。 |
 | AgentDefinition / AgentVersion | Agent 的不可变版本定义 |
 | Task | 用户或 Scheduler 发起的工作请求 |
 | AgentRun | 一次 Agent 执行；关联固定的 Agent、Skill、Workflow 版本和 Trace |
@@ -233,7 +245,7 @@ Policy 在 Tool 执行前评估主体、请求动作、资源、权限、风险�
 - 参数不合法、明确拒绝和权限不足不能靠重试绕过。
 - Model fallback 也必须经过 Policy；LOCAL_ONLY 数据不能在本地模型失败后自动发往远端。
 - Browser / Computer 的动作执行后必须验证实际页面或桌面状态；点击成功不等于业务动作成功。
-- Tool 风险分级和具体动作映射需要维护可审计的策略表。讨论中使用 LOW、HIGH、CRITICAL 示例；V0.1 完整分级表仍待确认。
+- V0.1 风险分级按 ADR-022 固定为 LOW、MEDIUM、HIGH、CRITICAL。DENY 优先级最高；未命中明确策略时 Fail Closed 并拒绝。LOW / MEDIUM 的 ALLOW 必须由明确策略规则给出，不隐式自动放行。
 
 ### 9.2 Approval
 
@@ -243,10 +255,11 @@ Policy 在 Tool 执行前评估主体、请求动作、资源、权限、风险�
 - 用户拒绝审批时不重试原动作；Workflow 可以选择定义好的替代分支。
 - Approval 过期作为明确的 APPROVAL_EXPIRED 错误处理。
 - Skill 新版本新增权限必须重新授权；权限减少可以自动沿用升级流程。
+- HIGH 默认要求 Approval；CRITICAL 强制要求 Approval，不能由 Agent 或普通运行时策略降级绕过。
 
 ### 9.3 高风险动作
 
-是否要求人工批准由 Policy 决定。需要 Approval 的动作必须在获批后执行，并保留执行前后 Evidence 和最终验证结果。未经验证的副作用不得让 Workflow 静默继续。
+LOW：读取、搜索、分析；MEDIUM：非破坏性写入和普通表单；HIGH：对外发送、发布、正式记录创建；CRITICAL：付款、批量删除、权限或安全配置。HIGH 默认要求 Approval，CRITICAL 强制要求 Approval。需要 Approval 的动作必须在获批后执行，并保留执行前后 Evidence 和最终验证结果。未经验证的副作用不得让 Workflow 静默继续。
 
 ## 10. Event、Observability 与 Audit
 
@@ -267,7 +280,7 @@ Event、Trace、Log、Metric、Evidence 和 Audit 是不同类型的记录：
 - Span 使用 span_id 和 parent_span_id 表示调用关系，结构兼容 OpenTelemetry 思路；V0.1 不要求上线完整遥测平台。
 - 核心 Log 使用结构化字段，至少包括时间、级别、组件、Trace ID、关联运行 ID、Error Code 和 retryable 状态。
 - Event 带 Schema 版本；Audit 不得被普通业务清理任务静默删除。
-- Evidence 按风险保留：低风险少量采集，高风险保留关键证据，关键动作保留完整证据链。具体保存周期和容量上限待决。
+- Evidence 按风险保留：低风险少量采集，高风险保留关键证据，关键动作保留完整证据链。Evidence retention 是可配置策略；保存周期、容量和清理规则不得写成协议常量，并须在部署 / 发布前配置并审查。
 
 ### 10.2 Metrics
 
@@ -288,7 +301,7 @@ APScheduler 只负责计算 Trigger 和产生 Schedule occurrence；它不承载
 - 周期任务错过多次触发时默认 coalesce 为 `latest`；只有 Schedule 显式设置 `coalesce: all` 时才保留每次错过的触发。
 - 同一 Schedule 默认不允许并发 WorkflowRun。运行期间的新 occurrence 按该 Schedule 的 coalesce 策略持久化排队；前一个 Run 结束后再串行启动。
 - `misfire_grace_time` 可按 Schedule 配置；超过 grace time 的 occurrence 标记为 MISSED，不启动 Workflow。
-- Schedule timezone 与 DST 处理需显式记录；默认时区及 DST 边界处理仍是部署配置项。
+- Schedule timezone 与 DST 处理需显式记录；默认时区及 DST 边界处理是 Schedule / 部署配置项，不得依赖运行主机的隐式本地时区。
 - 所有可能产生副作用的 Workflow 必须以稳定 occurrence ID / `idempotency_key` 保证重试幂等。
 
 ### 11.2 Workflow
@@ -321,7 +334,7 @@ Checkpoint 至少记录 run_id、sequence、可序列化状态、last_completed_
 - Cloud 对失联 Worker 设置 grace period；恢复后先校验 Lease，再决定继续；过期后才考虑重新派发。
 - 任务派发按至少一次交付语义设计；防重复依赖 idempotency_key、Lease 和结果对账。对外部副作用无法证明恰好一次时，必须通过核验或人工确认处理。
 - 多次重试仍失败的任务可进入 DEAD_LETTER，等待人工查看、修复、重新执行或标记忽略。
-- Worker 通过 WSS 连接 Cloud。首次注册使用一次性 Registration Token；Worker 本地生成设备密钥并提交公钥，服务端绑定设备身份并分配 `worker_id`。运行时采用短期会话凭据；长期 Secret 不得以明文存入配置文件。V0.1 不强制 mTLS，协议保留未来升级到 mTLS 的空间。
+- Worker 通过 WSS 连接 Cloud。首次注册使用一次性 Registration Token；Worker 本地生成设备密钥并提交公钥，服务端绑定设备身份并分配 `worker_id`。运行时采用短期会话凭据；长期 Refresh / Device Secret 必须安全存储，不得以明文写入普通配置文件。V0.1 不强制 mTLS，协议保留未来升级到 mTLS 的空间。
 - Lease 时长、heartbeat 间隔、grace period、短期凭据的 TTL 与轮换策略仍是待决配置。
 
 ## 13. Knowledge
@@ -332,16 +345,17 @@ Checkpoint 至少记录 run_id、sequence、可序列化状态、last_completed_
 - ACL 检查必须在检索结果返回给 Agent 之前完成；不能依靠模型提示词来实现访问控制。
 - 知识访问和来源引用进入 Trace / Audit，便于解释回答使用了哪些资料。
 - Embedding 请求走 Model Gateway，并遵守数据敏感度和 LOCAL_ONLY 限制。
-- V0.1 不建立第二套本地向量索引；文档解析器、Embedding Provider / profile、索引版本迁移及 ACL / 删除后的缓存失效细节仍待后续决策。
+- V0.1 不建立第二套本地向量索引；文档解析器、Embedding Provider / profile、索引版本迁移及 ACL / 删除后的缓存失效实现作为 Knowledge 发布前的实现配置和验收项。
 - 删除或权限变更必须能使索引和缓存中的旧内容失效。
 
 ## 14. Model Gateway
 
-- Skill 和 Agent 请求能力，例如 fast_chat、reasoning_high、vision、embedding；不把 GPT、Claude、Qwen 等供应商名称作为 Skill 契约。
-- Gateway 根据能力、Policy、隐私级别、可用性、成本和组织配置解析 Provider / Model。
+- Skill 只能声明能力，例如 `fast_chat`、`reasoning_high`、`vision`、`embedding`，不得声明具体 Provider 或 Model。
+- Gateway 根据 capability、privacy、budget、provider health 和 fallback policy 选择 Provider / Model；Provider 优先顺序属于环境 / 组织配置，不写死在 Skill。
 - 每次调用记录 requested_capability、resolved_provider、resolved_model、model_version、延迟、Token、成本和错误码。
 - Provider fallback 受 Policy 约束；对 LOCAL_ONLY 数据禁止自动切换到远端 Provider。
-- 需要支持统一超时、限流错误处理、退避策略和 Provider 隔离；具体候选 Provider、密钥存储、预算限制和本地模型范围待决。
+- Model Gateway 由 ShuLiu 自有 Policy / capability 路由层包住 LiteLLM Provider 集成；LiteLLM 不能绕过隐私、预算、健康或 fallback Policy。
+- 需要支持统一超时、限流错误处理、退避策略和 Provider 隔离。具体候选 Provider、能力映射、预算值和本地模型清单属于模型部署配置；每次 fallback 都重新经过 Policy，`LOCAL_ONLY` 请求不得路由到远端 Provider。
 
 ## 15. Skill 生命周期与包管理
 
@@ -380,6 +394,8 @@ ENABLED / DISABLED 是可切换状态；其他状态表示发现、校验、安�
 ~~~
 
 - V0.1 仅信任 ShuLiu 官方和企业内部 Publisher；第三方包默认 BLOCKED。
+- V0.1 仅允许 ShuLiu Official 与 Company Internal Skill；第三方 Skill Store 不属于 V0.1。可执行 Skill 必须通过独立进程隔离运行；若当前 OS / Worker 无法提供满足隔离不变量的运行环境，则拒绝激活该 Skill。
+- Skill 进程不得直接获取 Secret、直接操作 OS、任意访问网络或直写 Foundation 数据库。所有副作用必须经过 `Tool Broker → Policy → Approval → Executor`。
 - 升级先保留旧版本，把新版本放入 Staging，验证通过后切换 Active Version；任何失败不得破坏旧版本。
 - 权限增加产生 PERMISSION_CHANGE_DETECTED 并要求管理员重新确认；权限减少不增加授权。
 - 正在运行的 AgentRun 继续使用启动时锁定的 Skill 版本。
@@ -432,12 +448,13 @@ Foundation 与 Skill 使用 MAJOR.MINOR.PATCH：
 - MINOR：向后兼容的新能力。
 - MAJOR：存在破坏性变更。
 
-协议升级保留 Adapter 和明确的 Compatibility Window。Release 附 Compatibility Manifest，列出 Foundation、Runtime、Worker、Skill Protocol、Event Schema、数据库 Schema 和 Python Runtime 的兼容范围。具体支持窗口由版本策略 ADR 定义。
+协议升级保留 Adapter 和明确的 Compatibility Window。Release 附 Compatibility Manifest，列出 Foundation、Runtime、Worker、Skill Protocol、Event Schema、数据库 Schema 和 Python Runtime 的兼容范围。具体支持窗口由版本策略配置定义，并在发布前审查。
 
 ### 17.3 发布和依赖
 
 - Release Channel 支持 dev、alpha、beta、stable；员工正式设备默认 stable，测试设备可使用 beta。
 - Electron Desktop 与 Python Runtime、Tool Runtime、Adapters、Migration 和内置 Skills 作为一个 Release Unit。
+- Windows Runtime 使用 PyInstaller 构建 Python Runtime，并使用 NSIS 生成 Windows 安装包；构建、安装、升级和回滚只在 Windows runner / 实机验收。
 - 第三方生产依赖使用精确版本并提交 Lockfile；依赖升级单独审查、测试和兼容验证。
 - 记录第三方依赖的名称、版本、License、来源、修改状态和分发要求。
 - 更新包需验证数字签名和 Checksum；安装或迁移失败不得继续启用 Agent。
@@ -457,6 +474,8 @@ Foundation 与 Skill 使用 MAJOR.MINOR.PATCH：
 
 失败时进入 Safe Mode 或执行兼容性检查后的回滚。
 
+V0.1 Release Gate 至少要求以下门禁全部通过：unit、contract、integration、migration、security、IPC handshake、Windows build、installer smoke 和 runtime health。Windows Computer Use、PyInstaller、NSIS、Windows 安装 / 升级 / 回滚必须在 Windows runner 或 Windows 实机完成；涉及 GUI 的 Computer Use 还必须运行于 Interactive User Session。任一必需门禁缺少通过证据即阻止发布。
+
 ### 17.5 数据库迁移与回滚
 
 - Migration 有唯一 ID、时间和 checksum。
@@ -464,6 +483,14 @@ Foundation 与 Skill 使用 MAJOR.MINOR.PATCH：
 - Migration 失败进入 Safe Mode；不得在未知 Schema 状态继续执行任务。
 - App Rollback、Skill Rollback、Workflow Rollback 分别处理。
 - 回滚前检查数据库和协议兼容性；不支持回滚时明确阻止，不能假定旧程序能读取已变更数据。
+
+### 17.6 Repository、Toolchain 与 CI
+
+- Repository 使用 pnpm workspaces Monorepo；Node.js 使用 22 LTS，最低 22.12；Python 使用 3.11。
+- TypeScript 单元 / 契约测试使用 Vitest；Python 单元 / 集成测试使用 pytest；CI 使用 GitHub Actions。
+- 通用测试可在 Linux / macOS runner 执行。Windows Computer Use、PyInstaller、NSIS、Windows 安装、升级与回滚必须在 Windows runner 或 Windows 实机验证；GUI 自动化必须使用 Interactive User Session。
+- 初始目录至少包括：`apps/desktop`、`services/cloud-api`、`runtimes/python-worker`、`packages/protocols`、`packages/shared-types`、`packages/event-model`、`packages/testing`、`skills/examples`、`tests/contract`、`tests/integration`、`tests/e2e`、`docs`。
+- 产品实现不得直接在 `main` 开发；实现阶段使用 `feat/foundation-v0.1` 分支和独立 worktree，并按 TDD 执行。
 
 ## 18. 错误模型与恢复
 
@@ -502,7 +529,7 @@ Safe Mode 下允许用户查看 Chat、日志和设置并使用修复工具；�
 
 1. **最小权限**：Skill 声明权限，管理员授予权限；每次运行只获得完成该次任务所需能力。
 2. **Skill 供应链**：校验 Manifest、Publisher、签名、Checksum、兼容范围、依赖和安全扫描结果；未知 Publisher 默认拒绝。
-3. **Secret 管理**：Secret 保存在专用安全存储；运行日志仅引用 secret_ref，不记录明文。
+3. **Secret 管理**：本地 Secret 使用 OS secure storage；Cloud Secret 使用 cloud secret manager；运行日志仅引用 secret_ref，不记录明文。
 4. **Tool 执行边界**：任意副作用经过 Policy；高风险动作有审批、幂等键、执行后验证和审计。
 5. **IPC 边界**：Renderer 不持有系统级权限；Main 只开放窄接口，不接受任意代码执行请求。
 6. **Worker 边界**：Cloud 与 Worker 相互认证、加密传输；任务和结果均校验身份、协议版本和 Lease。
@@ -510,7 +537,7 @@ Safe Mode 下允许用户查看 Chat、日志和设置并使用修复工具；�
 8. **日志与 Evidence**：默认脱敏，按风险控制采集、访问和保留。
 9. **依赖安全**：依赖版本固定、License 可追踪，升级经验证后进入 Release。
 
-本节不替代具体威胁建模。Cloud 用户身份与角色授权来源、完整租户模型、设备密钥的具体安全存储与轮换周期、短期会话凭据 TTL、Skill 沙箱、签名根密钥轮换、数据静态加密和外部渗透测试范围均是待决安全项。Worker 首次注册与运行时认证的架构流程已由 ADR-014 决定；V0.1 不强制 mTLS。
+本节不替代具体威胁建模。V0.1 身份模型为单公司内部版，保留 `organization_id`，不实现完整多租户 SaaS；身份由 `User + Organization Membership + Role + Permission` 表达。身份 Provider 必须通过抽象接口接入，未来可替换。Session / Access 凭据短期有效；Refresh / Device Secret 长期凭据必须安全存储。Worker 首次注册与运行时认证流程由 ADR-014 决定；V0.1 不强制 mTLS。具体身份 Provider、凭据 TTL / 轮换参数、设备密钥后端、签名信任根、静态加密策略和外部渗透测试范围是实施或发布配置项；它们不得削弱本节已锁定的安全不变量。
 
 ## 20. 测试与 V0.1 验收
 
@@ -560,7 +587,7 @@ V0.1 需要证明：
 
 ## 21. ADR 目录
 
-以下记录把本规格中的主要架构决策归档。ADR-013 至 ADR-016 的独立记录位于 `docs/adr/`，其 Accepted 决策已同步到本规格、Implementation Plan 和项目台账。
+以下记录把本规格中的主要架构决策归档。ADR-013 至 ADR-018、ADR-022、ADR-024 至 ADR-027 的独立记录位于 `docs/adr/`；ADR-019 至 ADR-021 已由 ADR-014 至 ADR-016 覆盖，不重复维护。
 
 | ADR | 决策主题 | 本规格记录的结果 | 状态 |
 |---|---|---|---|
@@ -568,7 +595,7 @@ V0.1 需要证明：
 | ADR-002 | Desktop Runtime | Electron Desktop 监督 Python Runtime | 讨论已确认；实现细节待决 |
 | ADR-003 | 本地与共享存储 | Cloud PostgreSQL 为业务 Source of Truth；SQLite 限于本地 cache / outbox / inbox / checkpoint / task state | 已确认；无通用双向同步 |
 | ADR-004 | 七大协议 | Agent、Skill、Tool、Workflow、Event、Worker、Model 独立定义 | 讨论已确认 |
-| ADR-005 | Policy / Approval | 副作用前策略判定，必要时人工审批 | 讨论已确认；风险矩阵待补 |
+| ADR-005 | Policy / Approval | 副作用前策略判定，DENY 优先并 Fail Closed；风险矩阵见 ADR-022 | 已确认 |
 | ADR-006 | 运行版本快照 | AgentRun 固定 Skill 与 Workflow 版本 | 讨论已确认 |
 | ADR-007 | Worker 任务租约 | Lease、heartbeat、fencing token 防止 Zombie Task | 讨论已确认 |
 | ADR-008 | 可观测性 | Trace 贯穿执行链，结构化 Log、Event、Metric、Evidence、Audit 分离 | 讨论已确认 |
@@ -576,10 +603,18 @@ V0.1 需要证明：
 | ADR-010 | 版本和发布 | SemVer、协议独立版本、分阶段发布与健康门 | 讨论已确认 |
 | ADR-011 | 数据库升级 | Schema 独立版本化，使用 Expand → Migrate → Contract | 讨论已确认 |
 | ADR-012 | 故障恢复 | 错误分类、幂等重试、Checkpoint、Safe Mode 与 Dead Letter | 讨论已确认 |
-| ADR-013 | Knowledge 向量存储 | Cloud PostgreSQL + pgvector；tenant / scope / classification ACL 预过滤后执行向量检索 | Accepted；解析器与 Embedding profile 仍待定 |
-| ADR-014 | IPC / Worker 身份认证 | Electron↔Python stdio + NDJSON；Cloud↔Worker WSS；一次性注册 Token、设备密钥、worker_id、短期会话凭据；V0.1 不强制 mTLS | Accepted；密钥保护细节与凭据 TTL / 轮换待定 |
+| ADR-013 | Knowledge 向量存储 | Cloud PostgreSQL + pgvector；tenant / scope / classification ACL 预过滤后执行向量检索 | Accepted；解析器与 Embedding profile 是实现配置 |
+| ADR-014 | IPC / Worker 身份认证 | Electron↔Python stdio + NDJSON；Cloud↔Worker WSS；一次性注册 Token、设备密钥、worker_id、短期会话凭据；V0.1 不强制 mTLS | Accepted；密钥保护与 TTL 为发布配置 |
 | ADR-015 | 本地 / 云端数据同步 | Cloud PostgreSQL 为业务 Source of Truth；SQLite outbox/inbox 等本地状态；server ACK + event_id / idempotency 去重；不做通用双向同步 | Accepted |
-| ADR-016 | 调度语义 | APScheduler 3.11.3 持久化 Trigger；Workflow Engine 独立执行；稳定 schedule_id、replace、latest 默认、all 显式、同 Schedule 不并发、misfire_grace_time 可配 | Accepted；timezone / DST 与部署级参数待定 |
+| ADR-016 | 调度语义 | APScheduler 3.11.3 持久化 Trigger；Workflow Engine 独立执行；稳定 schedule_id、replace、latest 默认、all 显式、同 Schedule 不并发、misfire_grace_time 可配 | Accepted；timezone / DST 与部署级参数通过显式配置和测试约束 |
+| ADR-017 | Repository / Toolchain / CI | pnpm workspaces；Node 22 LTS >=22.12；Python 3.11；Vitest / pytest；GitHub Actions；通用 Linux / macOS 测试与 Windows 专属门禁分开；指定初始 Monorepo 目录；实现使用 `feat/foundation-v0.1` 独立 worktree；Python packaging 使用 uv lock | Accepted，2026-10-17 |
+| ADR-018 | Identity | 单公司内部 V0.1，保留 `organization_id`，不实现完整多租户 SaaS；`User + Organization Membership + Role + Permission`；短期 Session / Access，长期 Refresh / Device Secret 安全存储；身份 Provider 经抽象接口接入 | Accepted，2026-10-17；具体 Provider 是上线前配置 |
+| ADR-022 | Policy 风险矩阵 | LOW 读 / 搜索 / 分析；MEDIUM 非破坏性写入 / 普通表单；HIGH 对外发送 / 发布 / 正式记录创建；CRITICAL 付款 / 批量删除 / 权限或安全配置；HIGH 默认 Approval，CRITICAL 强制 Approval，DENY 优先且默认 Fail Closed | Accepted，2026-10-17 |
+| ADR-023 | Knowledge 实施边界 | 存储与 ACL 由 ADR-013 固定；解析器、Embedding profile、索引迁移和缓存失效由实现配置与验收任务负责 | Architecture boundary accepted；Provider / parser 选择为发布前配置 |
+| ADR-024 | Model Gateway Policy | ShuLiu 自有 Policy / capability 层通过 LiteLLM 接入模型；Skill 只声明 capability；Gateway 按 capability、privacy、budget、provider health、fallback policy 路由；Provider 优先顺序配置化，不写入 Skill | Accepted，2026-10-17；具体 Provider / Model 是环境配置 |
+| ADR-025 | Skill Sandbox | V0.1 仅 ShuLiu Official / Company Internal Skill；可执行 Skill 独立进程隔离；不得直接拿 Secret、操作 OS、任意访问网络或直写 Foundation DB；副作用只经 Tool Broker → Policy → Approval → Executor；无第三方 Skill Store | Accepted，2026-10-17；OS 隔离机制须逐平台验证，不满足则拒绝执行 |
+| ADR-026 | Evidence Retention | Evidence 保留期与容量是可配置策略，不是协议常量；按风险采集、访问受控且脱敏 | Accepted，2026-10-17；部署值在发布前配置 |
+| ADR-027 | Release Gate | unit、contract、integration、migration、security、IPC handshake、Windows build、installer smoke、runtime health 全通过才可发布；Windows 专属构建 / 安装升级回滚在 Windows runner / 实机验证 | Accepted，2026-10-17；分批比例、观察窗口和数值阈值是发布配置 |
 
 ## 22. 风险
 
@@ -594,28 +629,33 @@ V0.1 需要证明：
 | Event / Evidence 携带敏感数据 | 隐私泄露和存储风险 | 脱敏、ACL、按风险采集与保留 |
 | 未明确的身份与租户模型 | 权限边界无法验收 | 在接入真实 Cloud / 多用户前完成身份、租户和审计决策 |
 
-## 23. 未决项与下一阶段输入
+## 23. 非阻塞实施参数与发布前输入
 
-以下项目不会由本规格臆测，应在 Implementation Plan 或对应 ADR 中确定：
+截至本版，Architecture Critical TBD：**无**。以下项目不改变已确认的模块边界或安全不变量，是实现配置或上线前条件；任何实现不得绕过其右栏验收要求：
 
-1. ShuLiu Foundation 的目标代码结构、工具链、分支策略与 CI 环境。
-2. Cloud 部署形态、用户身份与角色授权来源，以及完整租户模型。
-3. Knowledge 文档解析器、Embedding Provider / profile、索引迁移与 ACL / 删除后的缓存失效细节；V0.1 不建立第二套本地向量索引。
-4. Worker 设备私钥存储、会话凭据 TTL / 轮换；V0.1 不强制 mTLS。
-5. Scheduler 的 timezone / DST 边界、部署级 `misfire_grace_time` 默认值及未来多实例高可用方案。
-6. Tool 风险分级、Approval 矩阵、权限粒度、默认超时和重试上限。
-7. Skill 沙箱强度、扫描工具、签名根信任、Publisher 发布流程和废弃窗口。
-8. Model Provider 清单、能力映射、预算限额、LOCAL_ONLY 的可用模型。
-9. Event / Audit / Evidence 保留时间、容量、导出和删除规则。
-10. Compatibility Window 的具体版本跨度、Release 分批比例和观察窗口。
-11. 性能目标的真实测量环境与发布门槛。
+| 项目 | 责任方 | 完成门槛 |
+|---|---|---|
+| Desktop Runtime restart / backoff 参数与 Safe Mode 恢复流程细节 | Desktop / Runtime Owner | Crash-recovery 集成验收前；进程连续崩溃、数据库迁移失败和 Runtime 健康恢复测试通过 |
+| Cloud 部署目标与生产身份 Provider | Cloud / Security Owner | 真实多用户或生产 Cloud 接入前；Provider contract tests 证明抽象可替换 |
+| Worker 设备密钥后端、会话 TTL / 轮换、Lease / heartbeat / grace 数值 | Worker / Security Owner | Windows 设备试点前；安全存储、过期、轮换、断线与 fencing 故障注入通过 |
+| Schedule IANA timezone、DST 策略与 grace 配置 | Scheduler Owner | Scheduler 集成验收前；覆盖 DST 跳时 / 重复时刻和显式 timezone |
+| Knowledge parser、Embedding capability profile、索引迁移 / 缓存失效实现 | Knowledge Owner | 真实知识源接入前；ACL 先过滤与撤权 / 删除失效测试通过 |
+| Model Provider / Model 清单、能力映射与预算值 | Model Gateway Owner | 连接真实 Provider 前；Fake Provider 路由、预算、健康和 fallback policy 测试通过 |
+| Permission 粒度、Tool timeout 与有界重试配置 | Tool / Policy Owner | Tool / Workflow 集成验收前；每个 side effect 都有风险、超时、重试上限和 idempotency 测试通过 |
+| 各 OS Skill 进程隔离后端与签名信任根 | Skill Security Owner | 对应 OS 激活可执行 Skill 前；越权访问测试全部通过，否则该平台拒绝激活 |
+| 数据静态加密策略与外部渗透测试范围 | Security Owner | 生产数据写入前；威胁模型审查并完成约定安全测试 |
+| Evidence 保留周期、容量、导出和删除配置 | Security / Operations Owner | Release 前；配置审查、访问控制和保留 / 清理测试通过 |
+| Compatibility Window、灰度比例、健康观察阈值和性能目标 | Release Owner | Stable Release 前；发布配置经评审且 ADR-027 全门禁有通过证据 |
+| 第三方库精确版本与许可证清单 | Repository Owner | 每次 Release 前；Lockfile 与许可证扫描无未批准项 |
 
 ## 24. 架构验收边界
 
-本 Architecture Spec 完成后，架构阶段的交付物是：
+本 Architecture Spec 定义 V0.1 架构基线；Architecture Critical TBD 已收口。Implementation Plan 已拆为 27 项逐文件 TDD 任务，当前等待用户审批。审批前不开始产品实现；审批后按 ADR-017 在 `feat/foundation-v0.1` 独立 worktree 中执行。
+
+架构阶段的交付物是：
 
 - 可供评审的 V0.1 架构基线。
 - 已确认决策与待决项的区分。
-- ADR 目录和后续实施规划的输入。
+- ADR 台账及 27 项待审批逐文件 TDD Implementation Plan。
 
-这不等于 Foundation 已实现。进入工程阶段前，应先连接目标 ShuLiu 仓库，评审并确认本文，再形成 Implementation Plan；随后按计划实现并通过本规格定义的测试与验收。本文不包含业务代码。
+这不等于 Foundation 已实现。架构 Spec 与 Implementation Plan 的审批、工程实现和测试验收是独立阶段。本文不包含业务代码。

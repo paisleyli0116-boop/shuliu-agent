@@ -2,42 +2,64 @@
 
 ## 阅读说明
 
-Architecture Spec 是架构事实源。下表区分 **Spec 已记录**、**部分记录**、**Spec 待决** 和 **仅在当前项目输入中提出**。后两类不能在实施时被当作 Spec 已批准的事实；若要固化，先更新 Architecture Spec 或对应 ADR。与 Spec 不一致时，以 Spec 为准。
+Architecture Spec 是架构事实源。本表中的“已确认”指架构决策已写入 Spec / ADR，不表示功能已实现或验证通过。具体 Provider、部署值和 OS 隔离后端等仍按文末非阻塞参数管理。
 
-## 基线与状态
+## 已确认技术基线
 
-| 技术 / 约束 | 当前基线 | Spec 状态 |
+| 领域 | 基线 | 依据 |
 |---|---|---|
-| Desktop | Electron Desktop；Electron Main 监督 Python Runtime，Renderer 通过窄 IPC 工作。 | 已记录；React 与 TypeScript 未在 Spec 中明确。 |
-| Node | Node 22 LTS，最低 22.12。 | 仅在当前项目输入中提出；Spec 未规定版本。 |
-| Python | Python 3.11。 | Spec 确认 Python Runtime，但未规定版本。 |
-| Desktop UI | React + TypeScript。 | 仅在当前项目输入中提出；Spec 未明确前端框架和语言。 |
-| Cloud 数据库 | PostgreSQL 是业务 Source of Truth；数据库 Schema 独立版本化。 | ADR-015 已确认。 |
-| 向量检索 | Cloud PostgreSQL + pgvector；不引入第二套独立向量数据库。 | ADR-013 已确认；parser、embedding profile、索引迁移仍待定。 |
-| Knowledge ACL | 先按 tenant / organization、scope、classification、Permission 构造授权候选集，再执行向量搜索。 | ADR-013 已确认；实现和并发权限撤销测试待完成。 |
-| 本地数据库 | Local SQLite。 | 已确认；具体表结构与迁移归入实现计划。 |
-| SQLite 数据范围 | cache / outbox / inbox / checkpoint / local task state；不做通用双向同步。 | ADR-015 已确认。 |
-| Electron ↔ Python | Electron Main 通过 stdio + NDJSON 启动 Python Sidecar；stdout 仅协议通道，每行一条 UTF-8 JSON，stderr 写日志。 | ADR-014 已确认；请求 Schema 与进程安全配置进入实现计划。 |
-| Cloud ↔ Worker | WSS；一次性 Registration Token + Worker 本地设备密钥注册，Cloud 分配 `worker_id`；运行时短期会话凭据；不强制 mTLS。 | ADR-014 已确认；凭据 TTL、密钥存储与轮换仍待定。 |
-| Browser Runtime | browser-use adapter。 | 仅在当前项目输入中提出；Spec 只规定受控 Browser Tool 与 OBSERVE → ACT → VERIFY。 |
-| Windows Runtime | UFO² / UIA / Win32 adapter。GUI 自动化在 Interactive User Session 执行，不作为普通 Windows Service 执行。 | 仅在当前项目输入中明确具体 Adapter 与会话约束；Spec 要求 Windows 实机测试，但未选定这些实现。 |
-| GUI Agent | UI-TARS Operator。 | 仅在当前项目输入中提出；Spec 未记录此具体组件。 |
-| Model Gateway | ShuLiu Policy Layer + LiteLLM；Skill 请求能力，不绑定供应商；路由需服从 Policy 和数据敏感级别。 | Gateway 与能力抽象已记录；LiteLLM、Provider 清单、模型映射、预算和本地模型范围待决。 |
-| Scheduler | APScheduler 3.11.3 + PostgreSQL persistent datastore，只负责 Trigger；Workflow Engine 负责 Execution。稳定 Schedule ID、replace、默认 `latest`、显式 `all`、同 Schedule 不并发、可配置 `misfire_grace_time`。 | ADR-016 已确认；timezone / DST、部署级 grace 默认值和多实例 HA 仍待定。 |
-| MCP | MCP 作为外部 Tool / Connector 协议。 | 当前项目输入中提出；Architecture Spec 七类协议与模块边界未明确记录 MCP。 |
-| Secrets | 本地使用 OS secure storage；Cloud 使用 cloud secret manager；日志只记录 secret_ref，不记录明文。 | Spec 确认专用安全存储与日志脱敏原则；OS/cloud 的具体机制在 Spec 未定。 |
-| Windows 构建与验收 | Windows 专属打包、安装、升级、回滚在 Windows runner 或 Windows 实机验证；GUI 行为还需 Interactive User Session 实机验收。 | Spec §20.1 明确 Windows 实机测试；具体 runner 标签和构建工具未定。 |
+| 产品范围 | ShuLiu Foundation V0.1；只做第一层通用底座，不实现岗位机器人业务逻辑。 | Spec §§2–3 |
+| Repository | pnpm workspaces Monorepo；初始目录包括 `apps/desktop`、`services/cloud-api`、`runtimes/python-worker`、`packages/protocols`、`packages/shared-types`、`packages/event-model`、`packages/testing`、`skills/examples`、`tests/contract`、`tests/integration`、`tests/e2e`、`docs`。 | ADR-017 |
+| 分支与工作区 | 产品实现不得直接在 `main`；实现使用 `feat/foundation-v0.1` + 独立 worktree，采用 TDD。 | ADR-017、AGENTS.md |
+| Node / Desktop | Node.js 22 LTS >=22.12；Electron + React + TypeScript；Electron Main 管理 Python Sidecar，Renderer 通过窄 IPC。 | ADR-017、Spec §§6、17.6 |
+| Python | Python 3.11；Python Runtime / Worker 由 Python 进程承载。 | ADR-017、Spec §§6、17.6 |
+| Python packaging | `pyproject.toml` + committed `uv.lock`；CI 使用 locked dependency resolution。 | ADR-017 |
+| 测试工具 | TypeScript 使用 Vitest；Python 使用 pytest。 | ADR-017 |
+| CI | GitHub Actions。通用测试可在 Linux / macOS runners 执行；Windows 专属工作单独验收。 | ADR-017 |
+| Cloud 数据库 | PostgreSQL 是业务 Source of Truth。 | ADR-015 |
+| Knowledge 向量库 | Cloud PostgreSQL + pgvector；V0.1 不引入独立向量数据库或第二套本地向量索引。 | ADR-013 |
+| Knowledge ACL | 先按 organization / scope / classification / Permission 构造授权候选集，再执行向量检索；禁止全库 Top-K 后应用层过滤。 | ADR-013 / 023 |
+| Local SQLite | 只承担 cache、outbox、inbox、checkpoint、local task state；不做通用 SQLite ↔ PostgreSQL 双向同步。 | ADR-015 |
+| Electron ↔ Python | stdio + NDJSON；stdout 仅协议通道，stderr 写日志；Main 提供 allowlist IPC、启动握手和健康检查。 | ADR-014 |
+| Cloud ↔ Worker | WSS + heartbeat + Lease + ACK + idempotency；一次性 Registration Token 建立设备身份，Worker 生成设备密钥，服务端分配 `worker_id`，运行时使用短期会话凭据。 | ADR-014 / 015 |
+| Worker GUI | GUI 自动化运行在 Interactive User Session，不作为普通 Windows Service 执行。 | Spec §§6、17.6 |
+| Tool Adapter 顺序 | API → Native API / COM → Browser DOM → UIA → Vision GUI → raw coordinates。每次动作 OBSERVE → ACT → VERIFY。 | Spec §5.1 / 18.4 |
+| Browser Runtime | `browser-use` adapter。 | Spec §6.1 |
+| Windows Computer Runtime | UFO² / UIA / Win32 adapter；Windows Computer Use 只在 Windows runner / 实机验证。 | Spec §§6.1、17.6 |
+| GUI Agent Operator | UI-TARS Operator。 | Spec §6.1 |
+| Model Gateway | ShuLiu Policy / capability layer + LiteLLM Provider integration。Skill 声明 `fast_chat`、`reasoning_high`、`vision`、`embedding` 等能力，不绑定 Provider。 | ADR-024、Spec §14 |
+| Model routing | 按 capability、privacy、budget、provider health、fallback policy 选择；Provider 优先级配置化；`LOCAL_ONLY` 不得 fallback 到远端。 | ADR-024 |
+| Scheduler | APScheduler 3.11.3 persistent datastore 负责 Trigger；Workflow Engine 负责 Execution；stable schedule_id、启动 replace、默认 latest、显式 all、同 Schedule 不并发、可配置 `misfire_grace_time`、副作用幂等。 | ADR-016 |
+| Identity | 单公司内部 V0.1；保留 `organization_id`，不实现完整多租户 SaaS；`User + Organization Membership + Role + Permission`；Provider 经可替换抽象接口接入。 | ADR-018 |
+| MCP | 外部 Tool / Connector 接入协议，不替代七大内部领域协议，不绕过 Tool Broker / Policy / Approval。 | Spec §7.2 |
+| Secrets | Local 使用 OS secure storage；Cloud 使用 cloud secret manager；长期 Refresh / Device Secret 不得明文存储；日志只记录 `secret_ref`。 | ADR-014 / 018、Spec §19 |
+| Skill | V0.1 仅 ShuLiu Official / Company Internal；独立进程隔离；不得直接访问 Secret、OS、任意网络或 Foundation DB；副作用经 Tool Broker → Policy → Approval → Executor；无第三方 Skill Store。 | ADR-025 |
+| Windows packaging | PyInstaller + NSIS；Windows build、installer smoke、安装 / 升级 / 回滚只能由 Windows runner / 实机证明。 | ADR-017 / 027 |
+| Release gate | unit、contract、integration、migration、security、IPC handshake、Windows build、installer smoke、runtime health 全部通过。 | ADR-027 |
 
-## 已记录的跨模块约束
+## Implementation Plan 中供审批的工程工具选择
 
-- 七类领域协议分别版本化；Runtime IPC 另有独立协议版本。
-- 初始领域协议兼容性基线为 `protocol_version: 1`。
-- Model fallback 受 Policy 约束；`LOCAL_ONLY` 数据不得因本地模型失败自动转发到远端 Provider。
-- Policy 决策为 `ALLOW`、`DENY`、`REQUIRE_APPROVAL`；完整风险矩阵仍待正式 Spec / ADR 确认。当前 Implementation Plan 记录 Fail Closed，Architecture Spec 尚未以相同明确措辞闭合。
-- 高风险动作需按 Policy 进入 Approval，并保留执行前后 Evidence 与结果验证。
-- Skill / Update 包需校验签名、Checksum、兼容性；具体工具、信任根、沙箱和更新渠道仍待正式 ADR。
-- Windows-only 验收不可由 Mac 测试替代。
+下列项目用于把逐文件任务和命令写到可执行程度；它们是 Implementation Plan 的具体工具选择，不改变 Architecture Spec 的模块边界。用户审批 Implementation Plan 时也一并审阅这些选择：
 
-## 后续固化规则
+- TypeScript workspace pin：建议使用与 Node 22.12 最低版本兼容的 pnpm `11.28.6`，并在 `package.json` 精确固定版本。
+- Python dependency lock：建议使用 uv `0.12.20`；`pyproject.toml` 与 `uv.lock` 已由 ADR-017 固定。
+- Cloud API：建议使用 FastAPI；数据库迁移建议 SQLAlchemy + Alembic。Provider / Identity Provider 仍通过接口替换，不在 Skill 中写入。
+- 跨语言契约：建议采用 JSON Schema Draft 2020-12，TypeScript 与 Python 各自使用 validator 做契约测试。
+- Integration test PostgreSQL：建议使用带 pgvector 的隔离 CI 服务容器；具体 PostgreSQL 主版本在第一项数据库任务实施前锁定并通过迁移测试。
 
-这份清单是技术基线索引，不替代 ADR。凡“仅在当前项目输入中提出”或与 Spec 冲突的条目，在作为实现约束前都应由 Architecture Spec 或正式 ADR 记录并解决状态冲突。
+## 非阻塞配置与验证项
+
+| 项目 | 约束 | 负责人 / 门槛 |
+|---|---|---|
+| 生产 Identity Provider 与 Cloud 部署目标 | 必须经可替换 Provider 接口；不改变 V0.1 单公司边界。 | Cloud / Security Owner；生产部署前 |
+| Worker 凭据 TTL、轮换、设备密钥后端和 Lease 数值 | Session 短期；长期 Secret 安全存储；失效 token 拒绝提交。 | Worker / Security Owner；Windows 试点前 |
+| Scheduler timezone / DST | Schedule 显式配置 IANA timezone，不依赖机器默认时区。 | Scheduler Owner；集成验收前 |
+| Knowledge parser / Embedding profile / cache invalidation | 遵守 ACL-before-search、撤权和删除失效。 | Knowledge Owner；真实知识源接入前 |
+| Model Provider、能力映射和预算值 | 只能配置在 Gateway / Organization policy，fallback 重新检查 Policy。 | Model Gateway Owner；连接真实 Provider 前 |
+| OS Skill sandbox backend / signature trust root | 无法满足隔离不变量时，对应 OS 禁止激活 Skill。 | Skill Security Owner；逐 OS 激活前 |
+| Evidence retention / export / deletion | 由策略配置，不作为协议固定值；Audit 清理必须可审计。 | Security / Operations Owner；Release 前 |
+| Compatibility Window / rollout / health thresholds | 作为发布配置，所有 ADR-027 Gate 通过后才可发布。 | Release Owner；Stable Release 前 |
+
+## 权威约束
+
+若本文件与 Architecture Spec 有冲突，以 Architecture Spec 为准；若某工具选择仍未获 Plan Approval，不得在产品实现中悄悄当成已批准事实。

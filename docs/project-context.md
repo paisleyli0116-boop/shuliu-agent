@@ -35,7 +35,7 @@ Agent Core 只负责通用任务状态、运行编排和受控决策，不知道
 
 - `AGENTS.md`：每次新会话或开始工作时的项目入口与协作约束。
 - `docs/superpowers/specs/2026-10-17-shuliu-agent-foundation-v0.1-design.md`：架构事实源，明确范围、边界、协议和待决项。
-- `docs/superpowers/plans/2026-10-17-shuliu-agent-foundation-v0.1-implementation.md`：施工事实源。当前版本仍是总路线图，不能单独作为代码实现任务清单。
+- `docs/superpowers/plans/2026-10-17-shuliu-agent-foundation-v0.1-implementation.md`：施工事实源。已拆为 27 项逐文件 TDD 工程任务，状态为待用户审批；审批前不得开始产品代码实现。
 - `docs/architecture-decisions.md`：按 Architecture Spec 汇总已确认与 Pending 的架构决策。
 - `docs/technical-baseline.md`：列出 Spec 已记录的技术基线及尚未归档到 Spec 的实现选型输入。
 - `docs/risk-register.md`：记录已知风险与需要验证的控制项；状态不表示功能已实现。
