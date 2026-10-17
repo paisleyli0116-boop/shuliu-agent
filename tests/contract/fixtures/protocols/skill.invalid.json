@@ -1,0 +1,8 @@
+{
+  "protocol_name": "skill",
+  "protocol_version": 1,
+  "message_id": "msg-skill-001",
+  "request_id": "req-skill-001",
+  "trace_id": "trace-skill-001",
+  "payload": "must-be-an-object"
+}

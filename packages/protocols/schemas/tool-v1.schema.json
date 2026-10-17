@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:shuliu:protocol:tool:v1",
+  "title": "ShuLiu tool protocol v1",
+  "allOf": [
+    {
+      "$ref": "urn:shuliu:protocol:common:v1#/$defs/envelope"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_name": {
+          "const": "tool"
+        },
+        "protocol_version": {
+          "const": 1
+        },
+        "payload": {
+          "$ref": "urn:shuliu:protocol:common:v1#/$defs/payload"
+        }
+      },
+      "required": [
+        "protocol_name",
+        "protocol_version",
+        "payload"
+      ]
+    }
+  ]
+}

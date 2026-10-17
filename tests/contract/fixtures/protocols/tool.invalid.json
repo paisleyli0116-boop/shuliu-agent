@@ -1,0 +1,8 @@
+{
+  "protocol_name": "tool",
+  "protocol_version": 1,
+  "message_id": "msg-tool-001",
+  "request_id": "req-tool-001",
+  "trace_id": "trace-tool-001",
+  "payload": "must-be-an-object"
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:shuliu:protocol:common:v1",
+  "title": "ShuLiu protocol common definitions v1",
+  "$defs": {
+    "envelope": {
+      "type": "object",
+      "properties": {
+        "protocol_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "message_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol_name",
+        "protocol_version",
+        "message_id",
+        "request_id",
+        "trace_id"
+      ],
+      "additionalProperties": true
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}

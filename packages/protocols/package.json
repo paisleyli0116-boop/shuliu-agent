@@ -2,5 +2,11 @@
   "name": "@shuliu/protocols",
   "private": true,
   "version": "0.1.0",
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "test": "vitest run tests"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0"
+  }
 }

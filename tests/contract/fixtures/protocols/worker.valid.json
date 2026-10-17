@@ -1,0 +1,8 @@
+{
+  "protocol_name": "worker",
+  "protocol_version": 1,
+  "message_id": "msg-worker-001",
+  "request_id": "req-worker-001",
+  "trace_id": "trace-worker-001",
+  "payload": {}
+}
