@@ -1,6 +1,6 @@
 # ShuLiu Agent Foundation V0.1 Implementation Plan
 
-> **状态：Implementation Plan 已获批准；Task 21 实现及本地验证已完成，等待本轮远端 CI；CI 全绿后才进入 Task 22。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
+> **状态：Implementation Plan 已获批准；Task 21 实现、本地验证及 GitHub CI 均通过；下一任务为 Task 22（本轮未开始）。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
 
 ## 目标与边界
 
@@ -739,8 +739,8 @@ Task 23 的 UI 可先用 Fake IPC 完成可交互验收；Task 28 才把相同 t
 - **任务总数：36（原 27 项 + 补充 Task 28–36）。**
 - **直接可执行任务：36 项均有精确路径、依赖、接口 / Schema、测试、RED、最小实现、GREEN、Refactor、验收、完成标准、Release Gate 和 commit message；Task 25、Task 26、Task 34、Task 36 的 Windows 专属部分必须在 Windows runner / 实机验证。**
 - **Critical Architecture TBD：无。** 原计划审计出的 7 项能力缺口与 Skill 安全扫描均有独立实施任务和 Release Gate；实施配置 / Provider credentials 缺少时对应 Gate 保持 BLOCKED，不以 Fake 或最终验收代替实现。
-- **Implementation Plan 审批状态：已由用户批准；Task 21 Cloud API 本地验证完成，正在等待本轮远端 CI；只有全绿后才允许进入 Task 22。** Task 28–36 与 Task 27 是后续施工和发布门槛；Task 35 补入独立安全扫描能力，Task 36 补入平台 sandbox provider 与攻击验证，不改变已 Accepted ADR。
+- **Implementation Plan 审批状态：已由用户批准；Task 21 Cloud API 的本地验证和 GitHub CI（Generic Linux / macOS、PostgreSQL 17 / 18、Windows Validation）均通过；下一项为 Task 22，本轮未开始。** Task 28–36 与 Task 27 是后续施工和发布门槛；Task 35 补入独立安全扫描能力，Task 36 补入平台 sandbox provider 与攻击验证，不改变已 Accepted ADR。
 
 ## 实施入口门禁
 
-Task 21 的代码与文档提交并推送后，须验证 Generic CI、PG17 / PG18、Windows Validation 全绿，才可视为正式完成；本轮工作不得自动进入 Task 22。后续按依赖拓扑完成 Task 22–26、Task 28–36，最后执行 Task 27 Release Gate；Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。
+Task 21 已提交并推送，Generic CI、PG17 / PG18、Windows Validation 全绿；下一项按已批准顺序为 Task 22，但本轮验收结束后暂停。后续按依赖拓扑完成 Task 22–26、Task 28–36，最后执行 Task 27 Release Gate；Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。
