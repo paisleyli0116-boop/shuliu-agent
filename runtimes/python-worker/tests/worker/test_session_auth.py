@@ -60,7 +60,9 @@ def test_authenticate_rejects_a_tampered_session_signature() -> None:
     now = datetime(2026, 10, 18, tzinfo=timezone.utc)
     cloud, credential = _enrolled_cloud(now)
     token_parts = credential.split(".")
-    token_parts[-1] = ("A" if token_parts[-1][-1] != "A" else "B") + token_parts[-1][1:]
+    signature = bytearray(base64.urlsafe_b64decode(token_parts[-1] + "="))
+    signature[0] ^= 1
+    token_parts[-1] = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
 
     with pytest.raises(WorkerAuthenticationError) as error:
         cloud.authenticate(".".join(token_parts))
