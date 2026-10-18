@@ -1,6 +1,6 @@
 # ShuLiu Agent Foundation V0.1 Implementation Plan
 
-> **状态：Implementation Plan ready for approval；审批前不得开始实现。** Architecture Spec 是架构事实源，本文件是施工事实源。本文已完成 Critical TBD 收口和逐文件 TDD 拆解，但未代表代码已实现、测试已通过或 Release 已批准。
+> **状态：Implementation Plan 已获批准；当前执行至 Task 17。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
 
 ## 目标与边界
 
@@ -41,7 +41,7 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 ## 任务执行规约
 
-1. 所有任务按编号顺序执行；只允许在依赖已完成后开始。任务依赖图必须保持有向无环。
+1. 所有任务按下方“任务顺序总览”的拓扑顺序执行；只允许在依赖已完成后开始。新增 Task 28–34 是原任务缺失能力的补充施工项，必须在 Task 27 Release Gate Closure 前完成。任务依赖图必须保持有向无环。
 2. 一个任务对应一个可审查 commit；先添加本任务失败测试并确认 RED，再做最小实现得到 GREEN，再 Refactor 并重跑验收。
 3. 写任务测试时依赖 FakeModel / FakeTool / FakeBrowser / FakeComputer / FakeWorker / FakeApproval；不调用真实模型、真实企业账号或不稳定第三方站点。
 4. 一项需要 Windows runner / 实机的任务，如果当前没有可用 Windows 环境，只能标记未完成，不能用 Mac 结果替代。
@@ -80,9 +80,30 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 | 24 | Browser Runtime | 10、18 |
 | 25 | Computer Runtime — Windows only | 10、18、24 |
 | 26 | Installer / Update / Recovery | 01、05–06、17–18、20、22–25 |
-| 27 | End-to-End / Release Gates | 01–26 |
+| 28 | Real Model Provider Configuration / Connection Test | 06、15 |
+| 29 | Persistent ModelCall / Cost / Budget | 05、15 |
+| 30 | Real Embedding / Knowledge Retrieval Closure | 16、28–29 |
+| 31 | PDF / Word / Excel Knowledge Ingestion | 16、30 |
+| 32 | Trusted Knowledge RBAC / Trace / Audit | 04、07、16、21 |
+| 33 | Durable Tool Idempotency | 05、10、13、30（仅 migration 顺序） |
+| 34 | Full Process Crash Recovery | 13、22、26、33 |
+| 27 | End-to-End / Release Gates | 01–26、28–34 |
 
-以上依赖只从低编号指向高编号，不存在循环依赖。Foundation 与岗位机器人分离：`skills/examples` 只放无业务语义的协议演示 Skill。
+以上是执行拓扑顺序；Task 27 是最终 Release Gate，Task 28–34 虽保留新编号以避免重编号已执行任务，仍必须先于 Task 27 完成。依赖边无环。Foundation 与岗位机器人分离：`skills/examples` 只放无业务语义的协议演示 Skill。
+
+### 原计划能力缺口映射
+
+| 尚未完成能力 | 原计划覆盖边界 | 明确实施任务 | Release Gate |
+|---|---|---|---|
+| 真实 Model Provider 配置、Secret/API Key 接入、连接测试 | Task 15 只有 Provider port / Fake 和 LiteLLM Adapter | Task 28 | `real_model_provider_connection`、`model_provider_license_security` |
+| 真实 Embedding 调用与 Knowledge 检索闭环 | Task 16 使用 FakeEmbedding 验证 ACL-first query | Task 30 | `real_embedding_knowledge_retrieval` |
+| PDF / Word / Excel 文档解析与入库 | Task 16 只有 parser 注入点 | Task 31（PDF / DOCX / XLSX） | `knowledge_document_ingestion_pdf_docx_xlsx` |
+| ModelCall、成本和预算持久化 | Task 15 有内存 / telemetry ports，没有 durable ledger | Task 29 | `model_usage_budget_persistence` |
+| 服务端可信 Knowledge RBAC 上下文与 Trace / Audit | Task 16 有 authorization context 类型与 ACL query，但尚无可信 HTTP 入口构造和 Audit 集成 | Task 32 | `knowledge_server_rbac_trace_audit` |
+| 真实副作用 Tool 的持久化幂等 | Task 27 曾只有门禁，没有实现工程项 | Task 33 | `durable_idempotency` |
+| 完整进程崩溃恢复 | Task 13 有 checkpoint / reconcile 组件测试，没有 Sidecar 进程重启端到端验收 | Task 34 | `process_crash_recovery` |
+
+以上 7 项均为未完成实现，不因映射到任务而自动视为完成；对应任务和 Release Gate 未通过前禁止宣称生产能力已就绪。
 
 ## 逐文件 TDD 工程任务
 
@@ -346,15 +367,15 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 - **目标：** 实现 Manifest 验证、签名 / Publisher / checksum / compatibility / dependencies / permissions 校验、staging、版本切换和回滚。
 - **前置依赖：** Tasks 02–03、06、08、10。
-- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/skills/manifest.py`、`runtimes/python-worker/shuliu_runtime/skills/registry.py`、`runtimes/python-worker/shuliu_runtime/skills/lifecycle.py`、`runtimes/python-worker/shuliu_runtime/skills/signature.py`、`runtimes/python-worker/tests/skills/test_lifecycle.py`、`runtimes/python-worker/tests/skills/test_package_verification.py`、`runtimes/python-worker/tests/skills/test_permission_change.py`、`skills/examples/echo/manifest.yaml`、`skills/examples/echo/README.md`。
-- **创建 / 修改：** V0.1 trusted publisher allowlist interface；状态机 DISCOVERED → DOWNLOADED → VERIFIED → STAGED → INSTALLED → ENABLED / DISABLED → DEPRECATED → REMOVED；staging 和 active version 分离。
+- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/skills/manifest.py`、`runtimes/python-worker/shuliu_runtime/skills/registry.py`、`runtimes/python-worker/shuliu_runtime/skills/lifecycle.py`、`runtimes/python-worker/shuliu_runtime/skills/signature.py`、`runtimes/python-worker/tests/skills/test_lifecycle.py`、`runtimes/python-worker/tests/skills/test_package_verification.py`、`runtimes/python-worker/tests/skills/test_permission_change.py`、`skills/examples/echo/manifest.yaml`、`skills/examples/echo/README.md`、`.github/workflows/ci.yml`。
+- **创建 / 修改：** V0.1 trusted publisher allowlist interface；状态机 DISCOVERED → DOWNLOADED → VERIFIED → STAGED → INSTALLED → ENABLED / DISABLED → DEPRECATED → REMOVED；staging 和 active version 分离；Generic CI 显式运行此目录的 Skill tests。
 - **接口 / Schema：** Manifest 含 id / version / publisher / signature / checksum / foundation range / skill protocol / capabilities / permissions / dependencies；`install(package) -> SkillInstallResult`。
 - **测试文件：** 所列 Skill tests。
 - **RED：** 测试未知 Publisher、篡改签名、checksum 错、协议不兼容、依赖缺失、权限增加未审批、升级失败后旧版本仍 enabled、活跃 Run 阻止卸载。
 - **最小实现：** 校验完整后写 Staging，Contract Test 通过才切换 active pointer；示例 Skill 只做 echo，不包含岗位业务。
 - **GREEN 命令：** `uv run --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q`。
 - **Refactor：** 生命周期转移表纯函数化；signature provider 可替换；安装失败不污染旧版本和业务数据。
-- **验收命令：** `pnpm test:contract`；`pnpm test:security`；`pnpm test:integration`。
+- **验收命令：** `uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q`；`pnpm test:contract`；`pnpm test:security`；`pnpm test:integration`；GitHub Generic CI 实际执行 Skill test step。
 - **完成标准：** 只有可信、签名有效、兼容且权限已批准的 Skill 可启用；更新失败旧版仍可用；无第三方 Store。
 - **Commit：** `feat: add verified skill lifecycle runtime`
 
@@ -502,21 +523,140 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 - **完成标准：** 所有坏包 / 坏迁移 / 健康失败都阻止启用；rollback 前做协议 / DB 检查；Windows smoke 证据已留档。
 - **Commit：** `feat: add signed update and Windows installer gates`
 
+### Task 28 — Real Model Provider Configuration / Connection Test
+
+- **目标：** 将配置化 Provider Profile、SecretRef/API Key 解析和受策略约束的真实连接测试接入现有 Model Gateway；Fake Provider 仍用于常规 CI。
+- **前置依赖：** Tasks 06、15。具体 Provider / Model 与测试凭据是运行环境输入，不是 Skill 字段或新 ADR；没有用户配置的 Secret 时，真实连接 Gate 为 BLOCKED，不得以 Fake 结果代替。
+- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/models/config.py`、`runtimes/python-worker/shuliu_runtime/models/connection.py`、`runtimes/python-worker/shuliu_runtime/models/gateway.py`、`runtimes/python-worker/tests/models/test_provider_configuration.py`、`runtimes/python-worker/tests/models/test_provider_secret_resolution.py`、`runtimes/python-worker/tests/models/test_provider_connection.py`、`tests/release/model-provider-evidence.schema.json`、`runtimes/python-worker/pyproject.toml`、`uv.lock`。
+- **创建 / 修改：** 提供经过校验的环境 / 组织级 Provider Profile 加载器、`secret_ref` 与 SecretResolver 集成、显式手动触发的连接测试入口及脱敏 evidence。只允许由 Gateway 经 Policy、预算、health 和 LiteLLM adapter 发出低敏 canary 请求；不得把 API Key 写入 manifest、普通配置、日志、异常、Evidence 或测试快照。为真实 Provider / Model 记录 license、数据处理与安全审查结果。
+- **接口 / Schema：** `ProviderProfile {provider_id, model, capabilities, priority, is_local, secret_ref, enabled}`；`test_provider_connection(provider_id, capability) -> ProviderConnectionResult {status, provider_id, model, capability, latency_ms, trace_id, safe_error_code}`。明文 credential 只允许在 adapter 调用期间存在内存中。
+- **测试文件：** 上述三个 `tests/models/test_provider_*.py` 与 release evidence schema test。
+- **RED：** 测试无效 / 重复 Provider、未知 capability、缺失 SecretRef、SecretResolver 不可用、明文 API Key 被序列化、连接错误泄露 credential、测试入口绕开 Policy / 预算、LOCAL_ONLY 错误路由；先运行 Model tests，预期新入口或约束缺失而失败。Fake-only evidence 必须被判定为没有真实连接证据。
+- **最小实现：** 配置解析只生成现有 `ModelProviderConfig`；连接测试复用已配置 Gateway 与 SecretResolver，返回不含输入 / Key 的结果；真实连接使用明确开启的 `SHULIU_MODEL_CONNECTION_TEST=1` 与外部注入 Secret，普通 CI 不读取真实凭据。
+- **GREEN 命令：** `uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/models -q`；持有获批 Provider 配置与 Secret 的环境执行 `SHULIU_MODEL_CONNECTION_TEST=1 uv run --locked --package shuliu-python-runtime python -m shuliu_runtime.models.connection --provider <configured-id> --capability <configured-capability>`。
+- **Refactor：** 配置加载、Secret 解析、Gateway 路由和 probe 输出分离；Provider 次序仍来自配置；日志 / Trace 只记录 `secret_ref` 与安全错误码。
+- **验收命令：** `pnpm test:unit`；`pnpm test:security`；真实连接命令及 `tests/release/model-provider-evidence.schema.json` 校验；license / 数据处理 / 安全审查记录入 Release Evidence。
+- **完成标准：** 缺 Secret 或配置时安全失败；真实请求必须通过 Gateway、Policy、预算、SecretResolver；外部返回可以证明真实配置 Provider 成功完成 canary；CI Fake 测试与真实连接证据分开。无真实 Provider 配置或 Secret 时本任务保持未完成。
+- **Release Gate：** `real_model_provider_connection` 与 `model_provider_license_security`；任一缺失 / not-run 均 BLOCKED。
+- **Commit：** `feat: configure secure model providers and connection checks`
+
+### Task 29 — Persistent ModelCall / Cost / Budget
+
+- **目标：** 将 Model Gateway 的调用记录、实际成本和预算预留 / 结算落到 Cloud PostgreSQL，进程重启后仍可查询且并发预留不会超支。
+- **前置依赖：** Tasks 05、15；migration 使用当前 `0004_knowledge_pgvector.py` 之后的版本号。
+- **具体文件路径：** `services/cloud-api/app/persistence/postgres.py`、`services/cloud-api/migrations/versions/0005_model_usage_budget.py`、`runtimes/python-worker/shuliu_runtime/models/postgres_usage.py`、`runtimes/python-worker/shuliu_runtime/models/gateway.py`、`runtimes/python-worker/tests/models/test_persistent_model_calls.py`、`runtimes/python-worker/tests/models/test_persistent_budget.py`、`services/cloud-api/tests/persistence/test_postgres_migrations.py`、`tests/integration/test_model_usage_persistence.py`。
+- **创建 / 修改：** 建立按 organization 隔离的 `model_calls`、`model_budget_accounts` 与 `model_budget_reservations`；保存 requested / resolved route、model version、usage、latency、cost、error code、trace 和状态，不保存 prompt、completion 或 Secret。预算预留在调用前原子执行，成功按实际 usage 结算，确定未发送时释放；结果未知时保留 reservation 并进入对账，不能静默返还预算或重复扣款。
+- **接口 / Schema：** `PersistentModelCall {call_id, organization_id, trace_id, requested_capability, provider_id, model, model_version, usage, cost, status, created_at}`；为 Gateway call 与现有 `ModelCallSink.record()`、`ModelBudget.reserve()/settle()/release()` 补充稳定 `call_id`；durable adapters 以 organization + call / reservation identity 幂等写入。
+- **测试文件：** 上述 persistence / budget / migration / integration tests。
+- **RED：** 先增加数据库重开后读取、重复 settle 不重复扣费、并发预算 reservation 不超限、失败 / 未发送释放、未知 outcome 不释放、成本精度和组织隔离断言；使用真实 PG migration test，预期表 / adapter 缺失而失败。
+- **最小实现：** 新增扩展式 migration 与事务化 repository；Gateway 仍只依赖原有 ports；以 `call_id` / reservation ID 幂等写入。
+- **GREEN 命令：** `uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/models -q`；`uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/persistence/test_postgres_migrations.py -q`；`uv run --locked --package shuliu-cloud-api pytest tests/integration/test_model_usage_persistence.py -q`。
+- **Refactor：** 统一 Cloud PostgreSQL transaction boundary；金额用 Decimal / 明确货币精度；持久化失败时 Gateway Fail Closed，不以内存预算降级。
+- **验收命令：** `pnpm test:migration`；`pnpm test:integration`；`pnpm test:security`；PG17 / PG18 migration matrix。
+- **完成标准：** ModelCall、实际用量、成本和预算 reservation 可跨进程恢复；并发、重试、失败路径按测试所示保持一致；无明文 Secret / 模型输入输出落库。
+- **Release Gate：** `model_usage_budget_persistence`；migration、restart、duplicate settlement 任一证据缺失均 BLOCKED。
+- **Commit：** `feat: persist model usage and budget accounting`
+
+### Task 30 — Real Embedding / Knowledge Retrieval Closure
+
+- **目标：** 用真实配置的 Embedding Provider 完成 Model Gateway → Embedding → pgvector ingest / query → ACL-first retrieval 的端到端闭环。
+- **前置依赖：** Tasks 16、28、29。Embedding profile、维度和真实 Provider Secret 必须显式配置；维度与现有 pgvector schema 不兼容时先做向前兼容 migration，不得截断或静默重建向量。
+- **具体文件路径：** `services/cloud-api/app/knowledge/embedding.py`、`services/cloud-api/app/knowledge/ingest.py`、`services/cloud-api/app/knowledge/retrieval.py`、`services/cloud-api/app/persistence/postgres.py`、`services/cloud-api/migrations/versions/0006_knowledge_embedding_profile.py`、`services/cloud-api/tests/knowledge/test_embedding_gateway_integration.py`、`services/cloud-api/tests/knowledge/test_real_embedding_retrieval.py`、`tests/integration/test_real_knowledge_retrieval.py`。
+- **创建 / 修改：** 将现有 Gateway embedding capability 与 ingest / retrieve port 接实；索引记录 embedding profile、维度和索引版本；同一 profile 才可比较向量。查询和入库均记录 ModelCall / budget；ACL 候选集仍必须先于 pgvector 排序。保留 FakeEmbedding 做确定性单测，另设明确的凭据门控真实测试。
+- **接口 / Schema：** `EmbeddingProfile {profile_id, provider_id, model, dimensions, capability="embedding", privacy_levels, index_version}`；`embed(texts, profile) -> vectors`；`KnowledgeRetriever.retrieve(query, trusted_context, top_k)` 返回引用及命中，不返回未授权 Chunk。
+- **测试文件：** 上述 Knowledge tests 与现有 `test_acl_before_vector_search.py`、`test_revocation_invalidation.py`。
+- **RED：** 测试 Gateway 实际返回向量并被 ingest 持久化、query 经过同一 profile 并命中预期文档、维度 / profile 不匹配拒绝、LOCAL_ONLY 不出网、撤权后无命中、真实连接门控未配置时 evidence 为 BLOCKED；PG integration 应在现有 fake-only 边界失败。
+- **最小实现：** 仅添加 profile 校验与 Model Gateway adapter；复用已存在的 ACL-first 查询，禁止新增本地向量库或绕过 ModelCall / budget。
+- **GREEN 命令：** `uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q`；`pnpm test:migration`；`uv run --locked --package shuliu-cloud-api pytest tests/integration/test_real_knowledge_retrieval.py -q`；设置显式 Provider Secret 后运行真实 embedding integration marker。
+- **Refactor：** Provider 适配与 Knowledge 索引 schema 解耦；维度/profile 变更走显式迁移与重嵌入状态，禁止部分更新冒充完整索引。
+- **验收命令：** `pnpm test:migration`；`pnpm test:integration`；`pnpm test:security`；配置 Provider 下真实 Embedding 调用、pgvector 检索及 ModelCall / budget evidence。
+- **完成标准：** 真实 embedding 被成功调用并产生持久化向量；Knowledge 真实查询完成 ACL-first 命中闭环；真实配置缺失、provider 错误、维度错配或预算拒绝均 Fail Closed。
+- **Release Gate：** `real_embedding_knowledge_retrieval`；FakeEmbedding-only、未运行真实 provider 或无数据库证据均 BLOCKED。
+- **Commit：** `feat: complete real embedding knowledge retrieval`
+
+### Task 31 — PDF / Word / Excel Knowledge Ingestion
+
+- **目标：** 将 PDF、Word（DOCX）与 Excel（XLSX）安全解析成通用 Document / Chunk，再调用 Knowledge ingest 与真实 Embedding 流程；不添加岗位业务字段。
+- **前置依赖：** Tasks 16、30。Parser 依赖必须在加入 lockfile 前完成许可证、维护状态、安全公告和文件处理限制审查；未批准时停止该任务，不把解析推迟给 Release Gate。
+- **具体文件路径：** `services/cloud-api/app/knowledge/parsers/__init__.py`、`services/cloud-api/app/knowledge/parsers/base.py`、`services/cloud-api/app/knowledge/parsers/pdf.py`、`services/cloud-api/app/knowledge/parsers/docx.py`、`services/cloud-api/app/knowledge/parsers/xlsx.py`、`services/cloud-api/app/knowledge/document_ingestion.py`、`services/cloud-api/tests/knowledge/test_pdf_parser.py`、`services/cloud-api/tests/knowledge/test_docx_parser.py`、`services/cloud-api/tests/knowledge/test_xlsx_parser.py`、`services/cloud-api/tests/knowledge/test_document_ingestion.py`、`services/cloud-api/tests/fixtures/knowledge/`、`services/cloud-api/pyproject.toml`、`uv.lock`、`tests/release/dependency-license-policy.yaml`。
+- **创建 / 修改：** 支持 `.pdf`、`.docx`、`.xlsx` 的 MIME / 文件类型验证、大小 / 页数 / sheet / 解压比例上限、结构化解析、来源页码 / sheet 引用、文本规范化与 chunking；解析后调用 Task 30 Knowledge ingest。扫描件 OCR 不属于本任务；遇到无可提取文本的 PDF 返回明确 `DOCUMENT_TEXT_UNAVAILABLE`，不能伪装空文档成功。
+- **接口 / Schema：** `DocumentParser.parse(file_stream, filename, mime_type) -> ParsedDocument {text_sections, source_references, warnings}`；`ingest_file(input, trusted_authorization_context) -> document_id`；拒绝不支持格式、超限文件、宏 / 加密或畸形容器按明确错误返回。
+- **测试文件：** 所列 parser / ingestion tests，fixtures 覆盖有效、畸形、超限、空文本与恶意压缩比样本。
+- **RED：** 先写各格式文档、来源引用、边界 / 损坏 / zip bomb 拒绝和 ingest 端到端断言；运行 Knowledge parser tests，预期 Parser / dispatcher 缺失而失败。
+- **最小实现：** 采用经许可证审查批准的 parser packages；每种格式独立 adapter；统一通用 `KnowledgeChunkInput`，不写业务抽取规则。
+- **GREEN 命令：** `uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge/test_pdf_parser.py services/cloud-api/tests/knowledge/test_docx_parser.py services/cloud-api/tests/knowledge/test_xlsx_parser.py services/cloud-api/tests/knowledge/test_document_ingestion.py -q`。
+- **Refactor：** parser 不访问 DB、Provider Secret 或 OS；文件临时存储按策略清理；解析错误不留下半成品 Document / Chunk；依赖 license 证据与 lockfile 一致。
+- **验收命令：** 上述 parser tests；`pnpm test:security`；`pnpm test:integration`；依赖许可证 / 漏洞扫描；PG migration 与真实 Embedding ingestion integration。
+- **完成标准：** PDF / DOCX / XLSX 均有有效与 adversarial fixture；来源可追溯；ACL、真实 Embedding 和事务写入闭环成功；OCR 保持明确不支持。
+- **Release Gate：** `knowledge_document_ingestion_pdf_docx_xlsx`；依赖审查、解析安全测试或真实入库证据缺失均 BLOCKED。
+- **Commit：** `feat: parse and ingest PDF Word and Excel knowledge`
+
+### Task 32 — Trusted Knowledge RBAC / Trace / Audit
+
+- **目标：** 把认证主体、组织 Membership、Role / Permission 与 Knowledge ACL 连接起来；授权上下文只能由服务端构造，访问与来源进入 Trace / Audit。
+- **前置依赖：** Tasks 04、07、16、21。
+- **具体文件路径：** `services/cloud-api/app/knowledge/dependencies.py`、`services/cloud-api/app/knowledge/routes.py`、`services/cloud-api/app/knowledge/audit.py`、`services/cloud-api/app/knowledge/acl.py`、`services/cloud-api/app/persistence/postgres.py`、`services/cloud-api/tests/knowledge/test_routes_trusted_authorization.py`、`services/cloud-api/tests/knowledge/test_retrieval_trace_audit.py`、`tests/integration/test_knowledge_server_rbac.py`。
+- **创建 / 修改：** 通过已认证 User 与当前 Organization Membership 从 Identity / RBAC 服务端计算 scopes、classifications、permissions、privacy、budget_ref；HTTP 请求体只允许 query / top_k 等查询参数，忽略或拒绝 caller 提供 organization_id、subject_id、scope、classification、permission、budget_ref。查询、命中引用、拒绝和撤权产生带 trace_id 的结构化 Trace / Audit 记录，不写查询敏感正文或 Secret。
+- **接口 / Schema：** `KnowledgeAuthorizationContext` 只由 `build_knowledge_context(authenticated_principal, membership, rbac)` 构造；`POST /knowledge/search {query, top_k}`；response 只含已授权 `KnowledgeHit`；audit payload 包含 subject / org / trace / document refs / outcome / policy version。
+- **测试文件：** 所列 route / audit / integration tests。
+- **RED：** 以恶意请求体伪造其他 organization、permissions、scope、classification 和预算，断言不会越权；无 Membership、已撤销 Permission、RBAC 服务异常时拒绝；断言 Trace 与 append-only Audit 写入及结果引用存在且正文 / Secret 不出现。当前只传入 dataclass 的单元路径应不能满足 HTTP 信任测试。
+- **最小实现：** 新建窄 Knowledge Router 与 dependency；通过现有 Identity / RBAC port 与 persistence / Event audit port 生成上下文并调用既有 ACL-first Retriever。
+- **GREEN 命令：** `uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q`；`uv run --locked --package shuliu-cloud-api pytest tests/integration/test_knowledge_server_rbac.py -q`。
+- **Refactor：** 客户端不能注入授权字段；RBAC 查询与向量检索同一 organization transaction context；Audit 追加失败时敏感检索 Fail Closed；日志字段统一脱敏。
+- **验收命令：** `pnpm test:integration`；`pnpm test:security`；PG17 / PG18 Knowledge integration；权限撤销、跨组织伪造、Trace / Audit evidence 检查。
+- **完成标准：** end-to-end 授权来自服务端认证身份和有效 Membership；caller 伪造字段不能改变授权；检索前 ACL、撤权生效，trace/audit 可追踪且无敏感正文泄漏。
+- **Release Gate：** `knowledge_server_rbac_trace_audit`；无服务端身份来源、越权测试或审计证据时 BLOCKED。
+- **Commit：** `feat: enforce trusted knowledge authorization and audit`
+
+### Task 33 — Durable Tool Idempotency
+
+- **目标：** 为真实副作用 Tool 提供进程重启后仍有效的幂等 claim / result store；保留 `InMemoryIdempotencyStore` 仅供测试或短期进程使用。
+- **前置依赖：** Tasks 05、10、13、30（Task 30 仅作为顺序 migration base；Tool runtime 不依赖 Knowledge）。Cloud / Worker 共享动作使用 PostgreSQL；仅设备本地 task state 使用 SQLite；无可用 durable backend 时 Tool Broker Fail Closed。
+- **具体文件路径：** `services/cloud-api/app/persistence/postgres.py`、`services/cloud-api/migrations/versions/0007_tool_idempotency.py`、`runtimes/python-worker/shuliu_runtime/tools/idempotency.py`、`runtimes/python-worker/shuliu_runtime/tools/postgres_idempotency.py`、`runtimes/python-worker/shuliu_runtime/persistence/sqlite_idempotency.py`、`runtimes/python-worker/shuliu_runtime/tools/broker.py`、`runtimes/python-worker/tests/tools/test_durable_idempotency.py`、`runtimes/python-worker/tests/persistence/test_sqlite_idempotency_restart.py`、`tests/integration/test_postgres_tool_idempotency.py`、`tests/integration/test_tool_idempotency_crash.py`、`services/cloud-api/tests/persistence/test_postgres_migrations.py`。
+- **创建 / 修改：** durable schema 以 organization / tool / operation scope + idempotency_key 唯一约束，保存 request digest、状态、经过脱敏的结果引用及时间；状态区分 `CLAIMED`、`DISPATCHED`、`COMPLETED`、`INDETERMINATE`。只有确认尚未 dispatch 才能释放 Claim；dispatch 后异常或 ACK 丢失必须保留为待核验，禁止删除 key 后直接重做。DB/SQLite store unavailable 时禁止副作用执行。
+- **接口 / Schema：** durable `IdempotencyStore` 支持 `begin`、`mark_dispatched`、`complete`、`mark_indeterminate`、`release_before_dispatch`；同 key 不同 digest 返回 CONFLICT，同 key 已完成返回同一结果，同 key 执行中 / 结果未知只允许 WAIT / RECONCILE。
+- **测试文件：** 所列 durable store、restart、migration、crash integration tests。
+- **RED：** 先用计数型 Fake Side Effect Tool 验证：并发重复只 dispatch 一次；重开 SQLite / PostgreSQL 后返回已存结果；ACK 丢失后状态为 INDETERMINATE 且不重复 dispatch；digest 冲突、DB 不可用拒绝；migration schema 缺失而失败。不能只用 Mock store 证明持久化。
+- **最小实现：** 新增 PG / SQLite adapters 并接到 Broker；加入 dispatch 前后状态提交；对未知结果返回 `RECONCILIATION_REQUIRED`，绝不自动猜成功或失败。
+- **GREEN 命令：** `uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/tools runtimes/python-worker/tests/persistence -q`；`uv run --locked --package shuliu-cloud-api pytest tests/integration/test_postgres_tool_idempotency.py tests/integration/test_tool_idempotency_crash.py -q`。
+- **Refactor：** Store port 与 backend 分离；事务 / unique constraint 保证并发唯一；结果持久化遵守 Evidence retention 与敏感字段脱敏。
+- **验收命令：** `pnpm test:migration`；`pnpm test:integration`；`pnpm test:security`；PG17 / PG18 并发、重启、ACK loss 故障注入。
+- **完成标准：** Task 27 所需 durable evidence 可核验；真实副作用 Tool 未指定 durable adapter 或任何 store 失败时不能启用；不存在进程内存幂等冒充持久化。
+- **Release Gate：** `durable_idempotency`；跨进程 restart、ACK loss、重复请求或 PG17 / PG18 任一未通过则 BLOCKED。
+- **Commit：** `feat: add durable tool idempotency stores`
+
+### Task 34 — Full Process Crash Recovery
+
+- **目标：** 将 Task 13 Checkpoint / Reconciler、Task 22 Electron Sidecar Supervisor 和 Task 33 durable idempotency 接成真实进程退出 / 重启恢复闭环。
+- **前置依赖：** Tasks 13、22、26、33。不能以 checkpoint 单元测试、重建 Python 对象或 scheduler persistence 代替进程级故障注入。
+- **具体文件路径：** `apps/desktop/src/main/runtime/supervisor.ts`、`apps/desktop/src/main/runtime/recovery-coordinator.ts`、`apps/desktop/tests/ipc/runtime-crash-recovery.test.ts`、`runtimes/python-worker/shuliu_runtime/recovery/process_recovery.py`、`runtimes/python-worker/tests/recovery/test_process_restart_recovery.py`、`tests/integration/test_full_process_recovery.py`、`tests/integration/test_failure_recovery.py`、`.github/workflows/ci.yml`、`.github/workflows/windows-validation.yml`。
+- **创建 / 修改：** 有界重启/backoff、health handshake、Checkpoint 版本校验、pending Approval 等待恢复、Worker lease / fencing 校验、durable side-effect reconciliation、Crash Event / Trace、连续崩溃 Safe Mode。结果未知的外部副作用进入 WAIT / SAFE_MODE / DEAD_LETTER，不自动重放；启动参数和凭据仍不含长期 Secret。
+- **接口 / Schema：** `RuntimeRestartPolicy {max_restarts, backoff, health_timeout}`（数值可配置）；`recover_process(run_id) -> RESUME | WAIT | SAFE_MODE | DEAD_LETTER`；与 Task 13 `recover(run_id)`、Task 33 reconciliation 状态保持一致。
+- **测试文件：** 所列 Desktop、Python subprocess 和 integration tests。
+- **RED：** 使用子进程实际执行 Workflow：分别在 checkpoint 前、Tool dispatch 后 / ACK 前、Approval 等待中、checkpoint 写入后杀死 Runtime；重启后验证已完成副作用不重复、未知结果不续跑、Approval 不跳过、fencing 旧 Worker 被拒绝、连续崩溃进入 Safe Mode、Event / Audit trace 连续。先运行目标 tests，当前仅组件级恢复时预期失败。
+- **最小实现：** Desktop Supervisor 通过 NDJSON handshake 重启 Sidecar；新 Runtime 从持久化状态调用统一 recovery coordinator，先核验 durable idempotency / 外部状态再恢复；重试次数和延迟由配置提供。
+- **GREEN 命令：** `pnpm --filter @shuliu/desktop test -- runtime-crash-recovery`；`uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/recovery -q`；`uv run --locked --package shuliu-cloud-api pytest tests/integration/test_full_process_recovery.py -q`。
+- **Refactor：** Supervisor 只管理进程健康，不承载 Workflow 业务；Recovery coordinator 以 ports 注入并保持判定可测；各失败状态写安全错误码和 Trace，不记录 Secret。
+- **验收命令：** `pnpm test:ipc`；`pnpm test:integration`；`pnpm test:security`；Linux / macOS subprocess crash matrix；Windows runner 对 Sidecar restart / installer runtime health 执行平台验证。
+- **完成标准：** 每个故障注入场景通过真实子进程退出和重建复现；已完成副作用不重放、未知状态 fail closed、等待态和 Safe Mode 可恢复；Windows 专属运行证据仅由 Windows runner / 实机产生。
+- **Release Gate：** `process_crash_recovery`；无跨进程 checkpoint / durable idempotency 对账与恢复证据时 BLOCKED。
+- **Commit：** `feat: recover foundation runs after process crashes`
+
 ### Task 27 — End-to-End / Release Gate Closure
 
 - **目标：** 把 Architecture Spec 验收标准、ADR-027 全门禁与最小 Foundation Demo 串成可重复 Release Evidence。
-- **前置依赖：** Tasks 01–26。
-- **具体文件路径：** `packages/testing/src/fakes.ts`、`runtimes/python-worker/tests/fakes/fake_computer.py`、`runtimes/python-worker/tests/fakes/fake_worker.py`、`runtimes/python-worker/tests/fakes/fake_tool.py`、`runtimes/python-worker/tests/fakes/fake_approval.py`、`tests/e2e/test_foundation_lifecycle.spec.ts`、`tests/integration/test_failure_recovery.py`、`tests/security/test_release_security.py`、`tests/release/gate-manifest.yaml`、`tests/release/evidence-policy.yaml`、`tests/release/dependency-license-policy.yaml`、`apps/desktop/package.json`、`apps/desktop/tests/fixtures/secure-storage-platform/main.cjs`、`apps/desktop/tests/security/secure-storage-platform.test.ts`、`.github/workflows/ci.yml`、`.github/workflows/windows-validation.yml`、`docs/release/foundation-v0.1-checklist.md`。
-- **创建 / 修改：** TypeScript / Python FakeModel、FakeBrowser、FakeComputer、FakeWorker、FakeTool、FakeApproval；Demo Browser Skill lifecycle；release gate aggregator；evidence manifest；SBOM / dependency / license scan；可配置 evidence retention；CI 报告每个 gate pass / fail / not run。增加 Electron 原生 secureStorage smoke fixture：在 Mac 和 Windows runner 的 Electron Main 进程中注入真实 `safeStorage`，调用 Task 06 的 `LocalSecureStorage`，验证可用性、加密后读回、磁盘无明文及删除；不得使用 FakeSafeStorage 作为平台证据。增加持久化 Tool 幂等门禁：`InMemoryIdempotencyStore` 仅可用于测试 / 短期进程；任何真实副作用 Tool 未接入 durable idempotency store 并通过崩溃 / 重启 / ACK 丢失 / 重试验证前均不得启用。
-- **接口 / Schema：** Release result 为 `PASS | BLOCKED`；required gates 固定为 unit / contract / integration / migration / security / IPC handshake / Windows build / installer smoke / runtime health，并增加独立 `secure_storage_macos`、`secure_storage_windows`、`durable_idempotency` gates；任何 missing / not-run 都算 BLOCKED。幂等 evidence 至少记录 store adapter 类型、持久化确认、进程重启后的 key/result 对账及重复请求结果，不记录 Secret。原生 smoke evidence 只包含 `platform`、`safe_storage_available`、`round_trip`、`plaintext_absent`、`delete_verified`、`run_id`、`commit_sha`，不得包含 secret 明文或密文。
-- **测试文件：** 所列 E2E、integration、security 与 gate manifest tests；平台 smoke 由 `apps/desktop/tests/security/secure-storage-platform.test.ts` 启动 `apps/desktop/tests/fixtures/secure-storage-platform/main.cjs`，分别在 `macos-latest` 和 `windows-latest` 执行。Mac runner 的 Electron `safeStorage` 路径用于验证 Keychain；Windows runner 的 Electron `safeStorage` 路径用于验证 DPAPI。
+- **前置依赖：** Tasks 01–26、28–34；所有 supplemental capability task 均须先完成并留存证据。
+- **具体文件路径：** `packages/testing/src/fakes.ts`、`runtimes/python-worker/tests/fakes/fake_computer.py`、`runtimes/python-worker/tests/fakes/fake_worker.py`、`runtimes/python-worker/tests/fakes/fake_tool.py`、`runtimes/python-worker/tests/fakes/fake_approval.py`、`tests/e2e/test_foundation_lifecycle.spec.ts`、`tests/integration/test_failure_recovery.py`、`tests/security/test_release_security.py`、`tests/release/gate-manifest.yaml`、`tests/release/evidence-policy.yaml`、`tests/release/dependency-license-policy.yaml`、`tests/release/model-provider-evidence.schema.json`、`apps/desktop/package.json`、`apps/desktop/tests/fixtures/secure-storage-platform/main.cjs`、`apps/desktop/tests/security/secure-storage-platform.test.ts`、`.github/workflows/ci.yml`、`.github/workflows/windows-validation.yml`、`docs/release/foundation-v0.1-checklist.md`；并汇总 Tasks 28–34 列出的 Provider、Model usage、Knowledge、Idempotency 与 Recovery tests。
+- **创建 / 修改：** TypeScript / Python FakeModel、FakeBrowser、FakeComputer、FakeWorker、FakeTool、FakeApproval；Demo Browser Skill lifecycle；release gate aggregator；evidence manifest；SBOM / dependency / license scan；可配置 evidence retention；CI 报告每个 gate pass / fail / not run。将 Tasks 28–34 的真实 Provider 连接、真实 Embedding / 文档入库、持久化 ModelCall / budget、服务端 RBAC / Trace / Audit、durable idempotency 和完整 process crash recovery 设为独立 required gates，不在 Task 27 临时实现这些能力。增加 Electron 原生 secureStorage smoke fixture：在 Mac 和 Windows runner 的 Electron Main 进程中调用真实 `safeStorage`，验证可用性、加密后读回、磁盘无明文及删除；不得用 FakeSafeStorage 作为平台证据。
+- **接口 / Schema：** Release result 为 `PASS | BLOCKED`；required gates 固定为 unit / contract / integration / migration / security / IPC handshake / Windows build / installer smoke / runtime health，并增加 `secure_storage_macos`、`secure_storage_windows`、`real_model_provider_connection`、`model_provider_license_security`、`model_usage_budget_persistence`、`real_embedding_knowledge_retrieval`、`knowledge_document_ingestion_pdf_docx_xlsx`、`knowledge_server_rbac_trace_audit`、`durable_idempotency`、`process_crash_recovery`；任何 missing / fail / not-run 均 BLOCKED。Idempotency evidence 记录 store adapter 类型、持久化确认、重启后 key/result 对账及重复请求结果；不得记录 Secret。原生 smoke evidence 只包含 `platform`、`safe_storage_available`、`round_trip`、`plaintext_absent`、`delete_verified`、`run_id`、`commit_sha`。
+- **测试文件：** 所列 E2E、integration、security、gate manifest tests，以及 Tasks 28–34 中所有 required capability tests；平台 smoke 由 `apps/desktop/tests/security/secure-storage-platform.test.ts` 启动 `apps/desktop/tests/fixtures/secure-storage-platform/main.cjs`，分别在 `macos-latest` 和 `windows-latest` 执行。Mac runner 的 Electron `safeStorage` 路径用于验证 Keychain；Windows runner 的 Electron `safeStorage` 路径用于验证 DPAPI。
 - **原生 secure storage RED：** 先在两个原生 runner 上添加 smoke gate，但不提供 Electron fixture / adapter 调用；预期 gate 因缺少可核验证据而 `BLOCKED`。另验证 FakeSafeStorage-only 的结果不能满足两个平台 gate。
-- **RED：** E2E 创建 Task → Policy → Approval → Tool → verify → Event / Audit；注入拒绝、crash、ack loss、worker stale fence、skill tamper、ACL revoke、bad update；Release gate 少一个或 not-run 时预期 BLOCKED。使用进程内幂等存储运行真实副作用 Tool 时，`durable_idempotency` gate 必须 BLOCKED；进程重启导致 key/result 状态丢失也必须 BLOCKED。
+- **RED：** E2E 创建 Task → Policy → Approval → Tool → verify → Event / Audit；注入拒绝、crash、ack loss、worker stale fence、skill tamper、ACL revoke、bad update；分别缺少真实 Provider、持久化 usage、真实 Embedding、文档解析、服务端 RBAC / Audit、durable idempotency 或进程恢复 evidence 时对应 Gate 必须 BLOCKED。使用 Fake-only / InMemory store / 组件级重建冒充真实能力也必须 BLOCKED；任何 gate missing / fail / not-run 时整体不得 PASS。
 - **最小实现：** 通用 E2E 编排只连接 Fake / local test service，不在测试中调用真实账号或真实外部发送；原生 secure storage smoke 是明确例外，只调用本机 Electron OS secure storage API，不访问外部账号或发送数据。CI 将 macOS 与 Windows smoke 分别绑定到原生 runner，并将平台结果作为独立 evidence gate。
-- **GREEN 命令：** `pnpm test:e2e`；`pnpm test:integration`；`pnpm test:security`；`pnpm test:ipc`；持久化幂等存储故障注入测试；在 `macos-latest` 和 `windows-latest` 分别执行 `pnpm --filter @shuliu/desktop test:secure-storage-platform`；Windows build / installer Gate 在 Windows runner / 实机单独运行。
+- **GREEN 命令：** `pnpm test:e2e`；`pnpm test:integration`；`pnpm test:security`；`pnpm test:ipc`；Tasks 28–34 的 migration / integration / crash tests；带外部配置的真实 Provider / Embedding tests；在 `macos-latest` 和 `windows-latest` 分别执行 `pnpm --filter @shuliu/desktop test:secure-storage-platform`；Windows build / installer Gate 在 Windows runner / 实机单独运行。
 - **Refactor：** gate manifest 是唯一 required list；Evidence content 与 metadata / retention policy 分离；性能目标在测量环境和阈值获批前仅记录，不作阻断指标。
 - **验收命令：** `pnpm test:unit`；`pnpm test:contract`；`pnpm test:integration`；`pnpm test:migration`；`pnpm test:security`；`pnpm test:ipc`；`pnpm test:e2e`；`pnpm --filter @shuliu/desktop test:secure-storage-platform`（必须分别在原生 macOS 和 Windows runner 成功）；Windows build / installer / Computer Use / upgrade / rollback；runtime health gate。
-- **完成标准：** Spec §20.2 每项至少有一条自动化验收；ADR-027 所有 gate 有可查证通过证据；Mac Keychain 与 Windows DPAPI 的真实 Electron `safeStorage` adapter 验收均通过并保存不含 Secret 的 runner evidence；任何失败 / 缺失阻止 Release；Foundation 仍无岗位业务逻辑。该平台 Gate 是 Task 06 的明确后续 Release 验收项，不阻塞开始 Task 07，但两项未通过前 Foundation V0.1 不得 Release。
+- **完成标准：** Spec §20.2 每项至少有一条自动化验收；ADR-027 与本计划列出的所有 required gates 有可查证通过证据；Mac Keychain 与 Windows DPAPI 的真实 Electron `safeStorage` adapter 验收均通过并保存不含 Secret 的 runner evidence；Tasks 28–34 的真实能力与进程恢复 Gate 全部通过；任何失败 / 缺失阻止 Release；Foundation 仍无岗位业务逻辑。
 - **Commit：** `test: add foundation end-to-end release gates`
 
 ## 非阻塞实现配置及负责人
@@ -525,12 +665,17 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 | 配置 | 负责人 | 截止门槛 | 未满足时处理 |
 |---|---|---|---|
-| Desktop Runtime restart / backoff 和 Safe Mode 恢复参数 | Desktop / Runtime Owner | Crash-recovery 集成验收前 | 不通过崩溃恢复门禁 |
+| Desktop Runtime restart / backoff 和 Safe Mode 恢复参数 | Desktop / Runtime Owner | Task 34 process-crash integration 前 | Task 34 / Release Gate BLOCKED |
 | 生产 Cloud 部署目标 / Identity Provider | Cloud / Security Owner | 生产 Cloud 接入前 | 使用 Fake Provider 做测试；不得声称生产身份已接入 |
 | Worker device key backend、Session TTL / rotation、Lease / heartbeat / grace 数值 | Worker / Security Owner | Windows 设备试点前 | 拒绝设备注册或任务提交 |
 | Schedule IANA timezone、DST 语义、misfire 默认配置 | Scheduler Owner | Scheduler Integration 前 | 拒绝缺 timezone 的生产 Schedule |
-| Knowledge parser / Embedding profile / index migration / cache invalidation | Knowledge Owner | 真实 Knowledge source 前 | 保留 FakeEmbedding；不启用真实检索 |
-| Model Provider / Model mapping / budgets / LOCAL_ONLY eligible models | Model Gateway Owner | 接入真实 Provider 前 | 仅 Fake Provider；生产模型请求阻断 |
+| Provider / Model Profile、真实 Secret 引用与连接 evidence | Model Gateway Owner | Task 28 / 真实 Provider Gate 前 | 只允许 Fake Provider；真实调用 Gate BLOCKED |
+| ModelCall / 成本 / 预算 durable ledger | Model Gateway Owner | Task 29 / Release 前 | 不得将进程内预算或 telemetry 当作持久化完成 |
+| Embedding profile / vector dimension / index migration / cache invalidation | Knowledge Owner | Task 30 / 真实 Knowledge Gate 前 | 保留 FakeEmbedding；真实检索 Gate BLOCKED |
+| PDF / DOCX / XLSX parser packages 与许可证审查 | Knowledge Owner / Repository Owner | Task 31 添加 lockfile 依赖前 | 未通过 license / security review 不引入依赖，Document Ingestion Gate BLOCKED |
+| 服务端可信 Knowledge RBAC context 与 Trace / Audit | Cloud / Security Owner | Task 32 / 真实 Knowledge API 前 | 禁止暴露真实 Knowledge 搜索 API |
+| Tool durable idempotency backend 与结果保留配置 | Tool / Persistence Owner | Task 33 / 任何真实副作用 Tool 激活前 | 只允许测试 / 短时 Fake Tool；真实副作用 Tool 禁止启用 |
+| 完整 Sidecar / Workflow process crash recovery 与恢复参数 | Desktop / Runtime Owner | Task 34 / Release 前 | Process Recovery Gate BLOCKED；未知动作不得自动重放 |
 | Permission 粒度、Tool timeout 与有界重试值 | Tool / Policy Owner | Tool / Workflow Integration 前 | 对应 Tool 不可启用 |
 | 每个 OS 的 Skill sandbox backend / signature trust root | Skill Security Owner | 对应 OS 激活 executable Skill 前 | 对该 OS 禁止激活 |
 | 数据静态加密策略与外部渗透测试范围 | Security Owner | 生产数据写入前 | Production Release BLOCKED |
@@ -540,11 +685,11 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 ## 最终自检
 
-- **任务总数：27（符合 20–35）。**
-- **直接可执行任务：27 项在用户批准 Implementation Plan 后具备精确路径、前置依赖、接口 / Schema、测试、RED、最小实现、GREEN、Refactor、验收、完成标准和 commit message；Task 25、Task 26 的 Windows 部分必须有 Windows runner / 实机。**
-- **Critical Architecture TBD：无。** Cloud Provider、部署参数、时间数值、具体模型 / parser、逐 OS sandbox 后端、保留值和发布阈值均被分配到非阻塞配置表及明确门槛；安全不变量和不满足时的 fail-closed 行为已确定。
-- **Implementation Plan 审批状态：等待用户审批；审批前不写产品代码。**
+- **任务总数：34（原 27 项 + 补充 Task 28–34，共在 20–35 范围内）。**
+- **直接可执行任务：34 项均有精确路径、依赖、接口 / Schema、测试、RED、最小实现、GREEN、Refactor、验收、完成标准、Release Gate 和 commit message；Task 25、Task 26、Task 34 的 Windows 专属部分必须在 Windows runner / 实机验证。**
+- **Critical Architecture TBD：无。** 7 项审计出的能力缺口已各自成为前置依赖清楚的工程任务；实施配置 / Provider credentials 缺少时对应 Gate 保持 BLOCKED，不以 Fake 或最终验收代替实现。
+- **Implementation Plan 审批状态：已由用户批准；当前只执行 Task 17。** Task 28–34 与 Task 27 是后续施工和发布门槛，不得提前插入 Task 17。
 
 ## 实施入口门禁
 
-批准后从 Task 01 开始：创建 `feat/foundation-v0.1` 独立 worktree；逐任务 TDD；每个 Task 单独提交；Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。
+当前从已批准顺序继续执行 Task 17；保持 `feat/foundation-v0.1` 独立 worktree，逐任务 TDD、独立提交并验证 CI。Task 17 完成后按用户要求暂停。后续依依赖拓扑完成 Task 18–26、Task 28–34，最后 Task 27 Release Gate；Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。
