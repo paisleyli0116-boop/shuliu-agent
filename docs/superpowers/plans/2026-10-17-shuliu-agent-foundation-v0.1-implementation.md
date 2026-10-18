@@ -1,6 +1,6 @@
 # ShuLiu Agent Foundation V0.1 Implementation Plan
 
-> **状态：Implementation Plan 已获批准；当前执行至 Task 17。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
+> **状态：Implementation Plan 已获批准；当前执行至 Task 18。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
 
 ## 目标与边界
 
@@ -41,7 +41,7 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 ## 任务执行规约
 
-1. 所有任务按下方“任务顺序总览”的拓扑顺序执行；只允许在依赖已完成后开始。新增 Task 28–34 是原任务缺失能力的补充施工项，必须在 Task 27 Release Gate Closure 前完成。任务依赖图必须保持有向无环。
+1. 所有任务按下方“任务顺序总览”的拓扑顺序执行；只允许在依赖已完成后开始。新增 Task 28–35 是原任务缺失能力的补充施工项，必须在 Task 27 Release Gate Closure 前完成。任务依赖图必须保持有向无环。
 2. 一个任务对应一个可审查 commit；先添加本任务失败测试并确认 RED，再做最小实现得到 GREEN，再 Refactor 并重跑验收。
 3. 写任务测试时依赖 FakeModel / FakeTool / FakeBrowser / FakeComputer / FakeWorker / FakeApproval；不调用真实模型、真实企业账号或不稳定第三方站点。
 4. 一项需要 Windows runner / 实机的任务，如果当前没有可用 Windows 环境，只能标记未完成，不能用 Mac 结果替代。
@@ -87,9 +87,10 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 | 32 | Trusted Knowledge RBAC / Trace / Audit | 04、07、16、21 |
 | 33 | Durable Tool Idempotency | 05、10、13、30（仅 migration 顺序） |
 | 34 | Full Process Crash Recovery | 13、22、26、33 |
-| 27 | End-to-End / Release Gates | 01–26、28–34 |
+| 35 | Skill Security Scanner / Security Gate | 17–18 |
+| 27 | End-to-End / Release Gates | 01–26、28–35 |
 
-以上是执行拓扑顺序；Task 27 是最终 Release Gate，Task 28–34 虽保留新编号以避免重编号已执行任务，仍必须先于 Task 27 完成。依赖边无环。Foundation 与岗位机器人分离：`skills/examples` 只放无业务语义的协议演示 Skill。
+以上是执行拓扑顺序；Task 27 是最终 Release Gate，Task 28–35 虽保留新编号以避免重编号已执行任务，仍必须先于 Task 27 完成。依赖边无环。Foundation 与岗位机器人分离：`skills/examples` 只放无业务语义的协议演示 Skill。
 
 ### 原计划能力缺口映射
 
@@ -102,8 +103,11 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 | 服务端可信 Knowledge RBAC 上下文与 Trace / Audit | Task 16 有 authorization context 类型与 ACL query，但尚无可信 HTTP 入口构造和 Audit 集成 | Task 32 | `knowledge_server_rbac_trace_audit` |
 | 真实副作用 Tool 的持久化幂等 | Task 27 曾只有门禁，没有实现工程项 | Task 33 | `durable_idempotency` |
 | 完整进程崩溃恢复 | Task 13 有 checkpoint / reconcile 组件测试，没有 Sidecar 进程重启端到端验收 | Task 34 | `process_crash_recovery` |
+| Skill 安全扫描 | Task 17 校验签名 / checksum，不执行恶意代码扫描；Architecture Spec §16、§19 要求检查扫描结果 | Task 35 | `skill_security_scan` |
 
-以上 7 项均为未完成实现，不因映射到任务而自动视为完成；对应任务和 Release Gate 未通过前禁止宣称生产能力已就绪。
+原计划审计出的 7 项均为未完成实现，不因映射到任务而自动视为完成；对应任务和 Release Gate 未通过前禁止宣称生产能力已就绪。
+
+Skill 安全扫描同样是独立未完成能力；签名、Publisher 和 checksum 不能替代扫描，Task 27 的整体 `security` Gate 通过也不能替代专属 `skill_security_scan` evidence。
 
 ## 逐文件 TDD 工程任务
 
@@ -381,18 +385,18 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 ### Task 18 — Skill Process Sandbox
 
-- **目标：** 为可执行 Skill 提供独立进程隔离与受控能力通道；环境不满足隔离时拒绝启动。
+- **目标：** 为可执行 Skill 提供独立子进程和受控能力通道，并验证超时、异常退出、进程崩溃与资源清理；独立进程只提供进程边界，不得被描述为完整 OS sandbox。
 - **前置依赖：** Tasks 06、10、17。
-- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/skills/sandbox.py`、`runtimes/python-worker/shuliu_runtime/skills/process_host.py`、`runtimes/python-worker/shuliu_runtime/skills/capability_proxy.py`、`runtimes/python-worker/tests/skills/test_sandbox_denials.py`、`runtimes/python-worker/tests/skills/test_tool_proxy_only.py`。
-- **创建 / 修改：** 启动参数 allowlist、有限 filesystem / IPC / network policy、capability proxy；OS sandbox provider abstract interface；拒绝直接 DB / Secret / OS / arbitrary network。
-- **接口 / Schema：** `SandboxPolicy {skill_id, permissions, filesystem_roots, network_allowlist, secret_refs=[]}`；Skill 通过宿主 RPC 申请 Tool capability，不接收 Secret value。
-- **测试文件：** 所列 sandbox tests；平台集成测试按 OS 分目录。
-- **RED：** Skill 测试进程尝试读取 Secret、访问未授权文件、直连网络、连接 DB、执行 OS command；预期 sandbox 之前均能访问或宿主判定缺失。
-- **最小实现：** 进程隔离 host + 能力 RPC；对当前 OS 无法强制的限制明确拒绝 executable Skill 启动。
-- **GREEN 命令：** `uv run --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills/test_sandbox_denials.py runtimes/python-worker/tests/skills/test_tool_proxy_only.py -q`。
+- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/skills/sandbox.py`、`runtimes/python-worker/shuliu_runtime/skills/process_host.py`、`runtimes/python-worker/shuliu_runtime/skills/capability_proxy.py`、`runtimes/python-worker/tests/skills/test_sandbox_denials.py`、`runtimes/python-worker/tests/skills/test_tool_proxy_only.py`、`runtimes/python-worker/tests/skills/test_process_host_lifecycle.py`、`runtimes/python-worker/tests/skills/test_process_host_crash_cleanup.py`、`runtimes/python-worker/tests/skills/platform/test_linux_sandbox.py`、`runtimes/python-worker/tests/skills/platform/test_macos_sandbox.py`、`runtimes/python-worker/tests/skills/platform/test_windows_sandbox.py`、`.github/workflows/ci.yml`、`.github/workflows/windows-validation.yml`、`docs/risk-register.md`。
+- **创建 / 修改：** 启动参数 allowlist、最小化环境变量、临时工作目录、有限文件系统 / IPC / network policy、capability proxy、OS sandbox provider abstract interface；子进程不继承 Secret、Cloud DB URL、Foundation DB path 或任意父进程环境。不能由已验证 OS provider 强制所请求隔离规则时 Fail Closed，不启动可执行 Skill。
+- **接口 / Schema：** `SandboxPolicy {skill_id, permissions, filesystem_roots, network_allowlist, secret_refs=[]}`；`SandboxProvider.assess(policy) -> {supported, enforced_controls}`；`SkillProcessHost.run(package_path, policy, input, timeout) -> result`；Skill 仅可通过宿主 NDJSON RPC 请求 Tool capability，不接收 Secret value，不直接接触 executor。
+- **测试文件：** 所列 denial、Tool proxy、进程生命周期 / 崩溃清理测试及 Linux / macOS / Windows 平台测试。
+- **RED：** 先写测试并实际启动子进程；尝试读取 Secret / DB 凭据、访问未授权文件、连接未许可网络、执行任意 OS 命令或绕过 Broker / Policy / Approval 时必须拒绝；策略无法 enforced 时进程不得启动。另测试超时杀进程树、非零退出与崩溃回收句柄 / 临时目录、并发隔离及父进程收到取消后清理子进程。
+- **最小实现：** 进程 host + 单一受控 NDJSON capability RPC；默认移除敏感环境变量、限制可执行文件 / 参数、cwd 和资源；provider 明确返回实际可强制的控制项。测试中的 permissive provider 仅用于生命周期测试 fixture，不可作为生产安全 evidence。
+- **GREEN 命令：** `uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills/test_sandbox_denials.py runtimes/python-worker/tests/skills/test_tool_proxy_only.py runtimes/python-worker/tests/skills/test_process_host_lifecycle.py runtimes/python-worker/tests/skills/test_process_host_crash_cleanup.py -q`。
 - **Refactor：** sandbox policy 不依赖 Skill 自报；对每个平台使用独立 adapter；失效时 fail closed。
-- **验收命令：** `pnpm test:security`；逐平台 sandbox runner job。
-- **完成标准：** 四类越权尝试均失败；Side Effect 只能经 Tool Broker；未验证 OS 不激活 Skill。
+- **验收命令：** 上述 Skill tests；`pnpm test:security`；Generic CI 的 Linux / macOS sandbox runner；Windows Validation 的 Windows sandbox runner；`git diff --check`。
+- **完成标准：** Secret / DB 凭据不进入子进程；无 Broker 通道的副作用请求失败；有副作用 Tool 只能经 Tool Broker → Policy → Approval → Executor；timeout、异常退出、崩溃与取消均终止子进程并清理资源。每个平台的 OS 限制以实际 `enforced_controls` 和攻击性 runner 证据为准；不能被 provider 强制的权限不允许 executable Skill 启动。单独的进程 / PID 隔离不代表完整 OS sandbox。
 - **Commit：** `feat: isolate executable skills behind capability broker`
 
 ### Task 19 — Worker Protocol / Registration
@@ -642,21 +646,38 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 - **Release Gate：** `process_crash_recovery`；无跨进程 checkpoint / durable idempotency 对账与恢复证据时 BLOCKED。
 - **Commit：** `feat: recover foundation runs after process crashes`
 
+### Task 35 — Skill Security Scanner / Security Gate
+
+- **目标：** 在 Skill staging 前对实际安装的完整包内容执行恶意代码 / 内容安全扫描；扫描结果必须独立于 publisher signature、checksum 和兼容性校验，不能相互替代。
+- **前置依赖：** Tasks 17–18；执行前先完成扫描引擎的维护状态、安全公告、许可证、离线能力、跨平台支持和规则更新机制审查。无获批且可在目标环境执行的扫描引擎时，本任务与 Skill 激活保持 BLOCKED，不得用 Fake 作为真实扫描证据。
+- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/skills/security_scan.py`、`runtimes/python-worker/shuliu_runtime/skills/lifecycle.py`、`runtimes/python-worker/tests/skills/test_security_scan.py`、`runtimes/python-worker/tests/skills/test_security_scan_integration.py`、`runtimes/python-worker/tests/fixtures/skills/eicar.com`、`tests/release/skill-scanner-policy.yaml`、`tests/release/gate-manifest.yaml`、`tests/release/test_skill_security_gate.py`、`.github/workflows/ci.yml`、`uv.lock`（仅当通过依赖审查的 scanner SDK 需要时）。
+- **创建 / 修改：** 定义可替换 `SkillSecurityScanner` port 和 `CLEAN | DETECTED | ERROR` 结果；把扫描接入签名 / checksum 验证之后、staging 之前；超时、scanner 不可用、结果未知或检测到内容一律拒绝安装和激活；只扫描已经验证 checksum 的字节并记录 package digest / scanner engine version / ruleset version / verdict，不记录包内 Secret 或扫描内容。
+- **接口 / Schema：** `scan(package_path, expected_checksum, timeout) -> ScanEvidence {status, package_digest, engine, engine_version, ruleset_version, scanned_at}`；仅 `CLEAN` 且 digest 与已验证 package 相同可继续；其余结果 Fail Closed。真实 engine / 版本 / ruleset 由完成依赖审查后确定并记录，不在 Skill manifest 内由发布者自选。
+- **测试文件：** `runtimes/python-worker/tests/skills/test_security_scan.py`、`runtimes/python-worker/tests/skills/test_security_scan_integration.py`、`tests/release/test_skill_security_gate.py`。
+- **RED：** 先测试感染样本、scanner timeout、scanner unavailable、scanner error、checksum 与扫描字节不一致均阻止 staging / active pointer 切换；clean verdict 只对精确 package digest 有效。真实 scanner integration 使用 EICAR 测试字符串（不是恶意软件），验证被识别；Fake scanner 测试不得满足 Release Gate。
+- **最小实现：** 先 pin 经审查的 scanner engine 与规则更新来源，再实现适配器、超时和 Fail Closed 集成；CI runner 真正运行扫描引擎并保存脱敏 evidence；不得把签名校验、checksum、静态 lint 或独立进程隔离标成安全扫描完成。
+- **GREEN 命令：** `uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills/test_security_scan.py runtimes/python-worker/tests/skills/test_security_scan_integration.py -q`；`pnpm test:security`。
+- **Refactor：** scanner port 与具体 engine 分离；证据 schema 对 engine / ruleset 有版本；包读取限制、timeout 和失败分类共用统一策略；离线 / 未支持平台仍 Fail Closed。
+- **验收命令：** `uv sync --locked --all-packages`；上述 Skill scanner tests；`pnpm test:security`；GitHub Actions 在真实配置 scanner 的 runner 上执行 CLEAN package 和 EICAR detection；检查 release manifest 将 `skill_security_scan` 标为 required 且缺失 / not-run / Fake-only 均返回 BLOCKED；依赖许可证与安全审查通过。
+- **完成标准：** 真实 scanner 引擎和 ruleset 有版本化证据；EICAR 测试可检出；感染、超时、未知和不可用场景均不能进入 staging / active；`skill_security_scan` gate 只接受真实引擎 evidence；所有已支持 OS 的 scanner availability 有 runner 证据，不支持的环境禁止 Skill 激活。
+- **Release Gate：** `skill_security_scan`；无引擎、许可证审查、真实扫描运行、干净包 / EICAR 结果、规则版本或 Fail Closed 证据时 BLOCKED。此 Gate 在 Task 35 完成后仍须由 Task 27 汇总检查，不能在 Task 27 临时补做扫描实现。
+- **Commit：** `feat: scan skill packages before staging`
+
 ### Task 27 — End-to-End / Release Gate Closure
 
 - **目标：** 把 Architecture Spec 验收标准、ADR-027 全门禁与最小 Foundation Demo 串成可重复 Release Evidence。
-- **前置依赖：** Tasks 01–26、28–34；所有 supplemental capability task 均须先完成并留存证据。
-- **具体文件路径：** `packages/testing/src/fakes.ts`、`runtimes/python-worker/tests/fakes/fake_computer.py`、`runtimes/python-worker/tests/fakes/fake_worker.py`、`runtimes/python-worker/tests/fakes/fake_tool.py`、`runtimes/python-worker/tests/fakes/fake_approval.py`、`tests/e2e/test_foundation_lifecycle.spec.ts`、`tests/integration/test_failure_recovery.py`、`tests/security/test_release_security.py`、`tests/release/gate-manifest.yaml`、`tests/release/evidence-policy.yaml`、`tests/release/dependency-license-policy.yaml`、`tests/release/model-provider-evidence.schema.json`、`apps/desktop/package.json`、`apps/desktop/tests/fixtures/secure-storage-platform/main.cjs`、`apps/desktop/tests/security/secure-storage-platform.test.ts`、`.github/workflows/ci.yml`、`.github/workflows/windows-validation.yml`、`docs/release/foundation-v0.1-checklist.md`；并汇总 Tasks 28–34 列出的 Provider、Model usage、Knowledge、Idempotency 与 Recovery tests。
-- **创建 / 修改：** TypeScript / Python FakeModel、FakeBrowser、FakeComputer、FakeWorker、FakeTool、FakeApproval；Demo Browser Skill lifecycle；release gate aggregator；evidence manifest；SBOM / dependency / license scan；可配置 evidence retention；CI 报告每个 gate pass / fail / not run。将 Tasks 28–34 的真实 Provider 连接、真实 Embedding / 文档入库、持久化 ModelCall / budget、服务端 RBAC / Trace / Audit、durable idempotency 和完整 process crash recovery 设为独立 required gates，不在 Task 27 临时实现这些能力。增加 Electron 原生 secureStorage smoke fixture：在 Mac 和 Windows runner 的 Electron Main 进程中调用真实 `safeStorage`，验证可用性、加密后读回、磁盘无明文及删除；不得用 FakeSafeStorage 作为平台证据。
-- **接口 / Schema：** Release result 为 `PASS | BLOCKED`；required gates 固定为 unit / contract / integration / migration / security / IPC handshake / Windows build / installer smoke / runtime health，并增加 `secure_storage_macos`、`secure_storage_windows`、`real_model_provider_connection`、`model_provider_license_security`、`model_usage_budget_persistence`、`real_embedding_knowledge_retrieval`、`knowledge_document_ingestion_pdf_docx_xlsx`、`knowledge_server_rbac_trace_audit`、`durable_idempotency`、`process_crash_recovery`；任何 missing / fail / not-run 均 BLOCKED。Idempotency evidence 记录 store adapter 类型、持久化确认、重启后 key/result 对账及重复请求结果；不得记录 Secret。原生 smoke evidence 只包含 `platform`、`safe_storage_available`、`round_trip`、`plaintext_absent`、`delete_verified`、`run_id`、`commit_sha`。
-- **测试文件：** 所列 E2E、integration、security、gate manifest tests，以及 Tasks 28–34 中所有 required capability tests；平台 smoke 由 `apps/desktop/tests/security/secure-storage-platform.test.ts` 启动 `apps/desktop/tests/fixtures/secure-storage-platform/main.cjs`，分别在 `macos-latest` 和 `windows-latest` 执行。Mac runner 的 Electron `safeStorage` 路径用于验证 Keychain；Windows runner 的 Electron `safeStorage` 路径用于验证 DPAPI。
+- **前置依赖：** Tasks 01–26、28–35；所有 supplemental capability task 均须先完成并留存证据。
+- **具体文件路径：** `packages/testing/src/fakes.ts`、`runtimes/python-worker/tests/fakes/fake_computer.py`、`runtimes/python-worker/tests/fakes/fake_worker.py`、`runtimes/python-worker/tests/fakes/fake_tool.py`、`runtimes/python-worker/tests/fakes/fake_approval.py`、`tests/e2e/test_foundation_lifecycle.spec.ts`、`tests/integration/test_failure_recovery.py`、`tests/security/test_release_security.py`、`tests/release/gate-manifest.yaml`、`tests/release/evidence-policy.yaml`、`tests/release/dependency-license-policy.yaml`、`tests/release/model-provider-evidence.schema.json`、`apps/desktop/package.json`、`apps/desktop/tests/fixtures/secure-storage-platform/main.cjs`、`apps/desktop/tests/security/secure-storage-platform.test.ts`、`.github/workflows/ci.yml`、`.github/workflows/windows-validation.yml`、`docs/release/foundation-v0.1-checklist.md`；并汇总 Tasks 28–35 列出的 Provider、Model usage、Knowledge、Idempotency、Recovery 与 Skill scan tests。
+- **创建 / 修改：** TypeScript / Python FakeModel、FakeBrowser、FakeComputer、FakeWorker、FakeTool、FakeApproval；Demo Browser Skill lifecycle；release gate aggregator；evidence manifest；SBOM / dependency / license scan；可配置 evidence retention；CI 报告每个 gate pass / fail / not run。将 Tasks 28–35 的真实 Provider 连接、真实 Embedding / 文档入库、持久化 ModelCall / budget、服务端 RBAC / Trace / Audit、durable idempotency、完整 process crash recovery 与 `skill_security_scan` 真实 evidence 设为独立 required gates，不在 Task 27 临时实现这些能力。增加 Electron 原生 secureStorage smoke fixture：在 Mac 和 Windows runner 的 Electron Main 进程中调用真实 `safeStorage`，验证可用性、加密后读回、磁盘无明文及删除；不得用 FakeSafeStorage 作为平台证据。
+- **接口 / Schema：** Release result 为 `PASS | BLOCKED`；required gates 固定为 unit / contract / integration / migration / security / IPC handshake / Windows build / installer smoke / runtime health，并增加 `secure_storage_macos`、`secure_storage_windows`、`real_model_provider_connection`、`model_provider_license_security`、`model_usage_budget_persistence`、`real_embedding_knowledge_retrieval`、`knowledge_document_ingestion_pdf_docx_xlsx`、`knowledge_server_rbac_trace_audit`、`durable_idempotency`、`process_crash_recovery`、`skill_security_scan`；任何 missing / fail / not-run 均 BLOCKED。Skill scan evidence 至少记录 package digest、真实 engine / ruleset 版本、扫描时间和 verdict，Fake-only 不通过。Idempotency evidence 记录 store adapter 类型、持久化确认、重启后 key/result 对账及重复请求结果；不得记录 Secret。原生 smoke evidence 只包含 `platform`、`safe_storage_available`、`round_trip`、`plaintext_absent`、`delete_verified`、`run_id`、`commit_sha`。
+- **测试文件：** 所列 E2E、integration、security、gate manifest tests，以及 Tasks 28–35 中所有 required capability tests；平台 smoke 由 `apps/desktop/tests/security/secure-storage-platform.test.ts` 启动 `apps/desktop/tests/fixtures/secure-storage-platform/main.cjs`，分别在 `macos-latest` 和 `windows-latest` 执行。Mac runner 的 Electron `safeStorage` 路径用于验证 Keychain；Windows runner 的 Electron `safeStorage` 路径用于验证 DPAPI。
 - **原生 secure storage RED：** 先在两个原生 runner 上添加 smoke gate，但不提供 Electron fixture / adapter 调用；预期 gate 因缺少可核验证据而 `BLOCKED`。另验证 FakeSafeStorage-only 的结果不能满足两个平台 gate。
-- **RED：** E2E 创建 Task → Policy → Approval → Tool → verify → Event / Audit；注入拒绝、crash、ack loss、worker stale fence、skill tamper、ACL revoke、bad update；分别缺少真实 Provider、持久化 usage、真实 Embedding、文档解析、服务端 RBAC / Audit、durable idempotency 或进程恢复 evidence 时对应 Gate 必须 BLOCKED。使用 Fake-only / InMemory store / 组件级重建冒充真实能力也必须 BLOCKED；任何 gate missing / fail / not-run 时整体不得 PASS。
+- **RED：** E2E 创建 Task → Policy → Approval → Tool → verify → Event / Audit；注入拒绝、crash、ack loss、worker stale fence、skill tamper、ACL revoke、bad update；分别缺少真实 Provider、持久化 usage、真实 Embedding、文档解析、服务端 RBAC / Audit、durable idempotency、进程恢复或真实 Skill scan evidence 时对应 Gate 必须 BLOCKED。使用 Fake-only / InMemory store / 组件级重建 / Skill 签名校验冒充真实能力也必须 BLOCKED；任何 gate missing / fail / not-run 时整体不得 PASS。
 - **最小实现：** 通用 E2E 编排只连接 Fake / local test service，不在测试中调用真实账号或真实外部发送；原生 secure storage smoke 是明确例外，只调用本机 Electron OS secure storage API，不访问外部账号或发送数据。CI 将 macOS 与 Windows smoke 分别绑定到原生 runner，并将平台结果作为独立 evidence gate。
-- **GREEN 命令：** `pnpm test:e2e`；`pnpm test:integration`；`pnpm test:security`；`pnpm test:ipc`；Tasks 28–34 的 migration / integration / crash tests；带外部配置的真实 Provider / Embedding tests；在 `macos-latest` 和 `windows-latest` 分别执行 `pnpm --filter @shuliu/desktop test:secure-storage-platform`；Windows build / installer Gate 在 Windows runner / 实机单独运行。
+- **GREEN 命令：** `pnpm test:e2e`；`pnpm test:integration`；`pnpm test:security`；`pnpm test:ipc`；Tasks 28–35 的 migration / integration / crash / Skill scan tests；带外部配置的真实 Provider / Embedding tests；在 `macos-latest` 和 `windows-latest` 分别执行 `pnpm --filter @shuliu/desktop test:secure-storage-platform`；Windows build / installer Gate 在 Windows runner / 实机单独运行。
 - **Refactor：** gate manifest 是唯一 required list；Evidence content 与 metadata / retention policy 分离；性能目标在测量环境和阈值获批前仅记录，不作阻断指标。
 - **验收命令：** `pnpm test:unit`；`pnpm test:contract`；`pnpm test:integration`；`pnpm test:migration`；`pnpm test:security`；`pnpm test:ipc`；`pnpm test:e2e`；`pnpm --filter @shuliu/desktop test:secure-storage-platform`（必须分别在原生 macOS 和 Windows runner 成功）；Windows build / installer / Computer Use / upgrade / rollback；runtime health gate。
-- **完成标准：** Spec §20.2 每项至少有一条自动化验收；ADR-027 与本计划列出的所有 required gates 有可查证通过证据；Mac Keychain 与 Windows DPAPI 的真实 Electron `safeStorage` adapter 验收均通过并保存不含 Secret 的 runner evidence；Tasks 28–34 的真实能力与进程恢复 Gate 全部通过；任何失败 / 缺失阻止 Release；Foundation 仍无岗位业务逻辑。
+- **完成标准：** Spec §20.2 每项至少有一条自动化验收；ADR-027 与本计划列出的所有 required gates 有可查证通过证据；Mac Keychain 与 Windows DPAPI 的真实 Electron `safeStorage` adapter 验收均通过并保存不含 Secret 的 runner evidence；Tasks 28–35 的真实能力、进程恢复与 Skill scan Gate 全部通过；任何失败 / 缺失阻止 Release；Foundation 仍无岗位业务逻辑。
 - **Commit：** `test: add foundation end-to-end release gates`
 
 ## 非阻塞实现配置及负责人
@@ -678,6 +699,7 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 | 完整 Sidecar / Workflow process crash recovery 与恢复参数 | Desktop / Runtime Owner | Task 34 / Release 前 | Process Recovery Gate BLOCKED；未知动作不得自动重放 |
 | Permission 粒度、Tool timeout 与有界重试值 | Tool / Policy Owner | Tool / Workflow Integration 前 | 对应 Tool 不可启用 |
 | 每个 OS 的 Skill sandbox backend / signature trust root | Skill Security Owner | 对应 OS 激活 executable Skill 前 | 对该 OS 禁止激活 |
+| Skill Security Scanner engine、规则来源与 License | Skill Security Owner / Repository Owner | Task 35 / Skill Security Gate 前 | Skill 不得 staging / 激活；`skill_security_scan` 保持 BLOCKED |
 | 数据静态加密策略与外部渗透测试范围 | Security Owner | 生产数据写入前 | Production Release BLOCKED |
 | Evidence retention、容量、export / deletion policy | Security / Operations Owner | Release 前 | Release BLOCKED |
 | Compatibility window、rollout、health thresholds、性能门槛 | Release Owner | Stable Release 前 | 不发布 stable |
@@ -685,11 +707,11 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 ## 最终自检
 
-- **任务总数：34（原 27 项 + 补充 Task 28–34，共在 20–35 范围内）。**
-- **直接可执行任务：34 项均有精确路径、依赖、接口 / Schema、测试、RED、最小实现、GREEN、Refactor、验收、完成标准、Release Gate 和 commit message；Task 25、Task 26、Task 34 的 Windows 专属部分必须在 Windows runner / 实机验证。**
-- **Critical Architecture TBD：无。** 7 项审计出的能力缺口已各自成为前置依赖清楚的工程任务；实施配置 / Provider credentials 缺少时对应 Gate 保持 BLOCKED，不以 Fake 或最终验收代替实现。
-- **Implementation Plan 审批状态：已由用户批准；当前只执行 Task 17。** Task 28–34 与 Task 27 是后续施工和发布门槛，不得提前插入 Task 17。
+- **任务总数：35（原 27 项 + 补充 Task 28–35，共在 20–35 范围内）。**
+- **直接可执行任务：35 项均有精确路径、依赖、接口 / Schema、测试、RED、最小实现、GREEN、Refactor、验收、完成标准、Release Gate 和 commit message；Task 25、Task 26、Task 34 的 Windows 专属部分必须在 Windows runner / 实机验证。**
+- **Critical Architecture TBD：无。** 原计划审计出的 7 项能力缺口与 Skill 安全扫描均有独立实施任务和 Release Gate；实施配置 / Provider credentials 缺少时对应 Gate 保持 BLOCKED，不以 Fake 或最终验收代替实现。
+- **Implementation Plan 审批状态：已由用户批准；当前只执行 Task 18。** Task 28–35 与 Task 27 是后续施工和发布门槛；Task 35 只补入安全扫描能力，不改变已 Accepted ADR。
 
 ## 实施入口门禁
 
-当前从已批准顺序继续执行 Task 17；保持 `feat/foundation-v0.1` 独立 worktree，逐任务 TDD、独立提交并验证 CI。Task 17 完成后按用户要求暂停。后续依依赖拓扑完成 Task 18–26、Task 28–34，最后 Task 27 Release Gate；Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。
+当前从已批准顺序继续执行 Task 18；保持 `feat/foundation-v0.1` 独立 worktree，逐任务 TDD、独立提交并验证 CI。Task 18 完成后按用户要求暂停。后续依依赖拓扑完成 Task 19–26、Task 28–35，最后 Task 27 Release Gate；Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。
