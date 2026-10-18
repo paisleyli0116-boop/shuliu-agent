@@ -32,7 +32,13 @@ def test_crashed_skill_process_is_reaped_and_temp_resources_are_removed(tmp_path
 
     assert crashed.value.code == "SKILL_PROCESS_CRASHED"
     assert crashed.value.return_code is not None
-    assert crashed.value.return_code < 0 or crashed.value.return_code in {3, 134, 139}
+    assert crashed.value.return_code < 0 or crashed.value.return_code in {
+        3,
+        134,
+        139,
+        3221225477,
+        3221226505,
+    }
     assert crashed.value.working_directory is not None
     assert not crashed.value.working_directory.exists()
     import time
