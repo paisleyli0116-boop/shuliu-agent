@@ -30,6 +30,7 @@ _MAX_INPUT_BYTES = 1024 * 1024
 _MAX_PENDING_TOOL_CALLS = 8
 _SANDBOX_LAUNCH_TOKEN = object()
 _TOOL_DISPATCH_SLOTS = threading.BoundedSemaphore(_MAX_PENDING_TOOL_CALLS)
+_WINDOWS_CREATE_SUSPENDED = 0x00000004
 
 
 class SkillProcessError(RuntimeError):
@@ -629,7 +630,7 @@ def _spawn(
         # Keep the initial thread suspended until it has been assigned to its
         # Job Object, so top-level Skill code cannot create an uncontained child.
         kwargs["creationflags"] = (
-            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_SUSPENDED
+            subprocess.CREATE_NEW_PROCESS_GROUP | _WINDOWS_CREATE_SUSPENDED
         )
     else:
         kwargs["start_new_session"] = True
