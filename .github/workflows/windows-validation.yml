@@ -28,6 +28,12 @@ jobs:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
       - run: uv sync --locked --all-packages
+      - name: Run Python Skill process isolation tests
+        run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q
+      - name: Run Windows sandbox fail-closed validation
+        run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills/platform -q
+      - name: Run repository security tests
+        run: pnpm test:security
       - name: Validate Windows packaging tools
         shell: pwsh
         run: |
