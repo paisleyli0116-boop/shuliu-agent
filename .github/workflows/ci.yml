@@ -45,6 +45,8 @@ jobs:
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/workflow -q
       - name: Run Python Model Gateway unit tests
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/models -q
+      - name: Run Python Worker protocol and registration unit tests
+        run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/worker -q
       - name: Run Python Skill lifecycle and process isolation tests
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q
       - name: Run repository security tests
