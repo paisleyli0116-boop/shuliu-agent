@@ -79,7 +79,8 @@
         "lease_id": { "type": "string", "minLength": 1 },
         "fencing_token": { "type": "integer", "minimum": 1 },
         "idempotency_key": { "type": "string", "minLength": 1 },
-        "expires_at": { "type": "string", "minLength": 1 }
+        "expires_at": { "type": "string", "minLength": 1 },
+        "task": { "type": "object" }
       },
       "required": ["task_id", "lease_id", "fencing_token", "idempotency_key", "expires_at"]
     },

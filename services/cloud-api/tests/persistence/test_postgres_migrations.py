@@ -89,6 +89,23 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "idempotency_key" in item["column_names"]
                 for item in event_constraints
             )
+            worker_columns = {
+                column["name"] for column in inspector.get_columns("workers")
+            }
+            lease_columns = {
+                column["name"] for column in inspector.get_columns("worker_leases")
+            }
+            assert {
+                "worker_version",
+                "protocol_version",
+                "capabilities",
+                "last_heartbeat_at",
+            } <= worker_columns
+            assert "idempotency_key" in lease_columns
+            assert "ix_worker_leases_org_task_status" in {
+                index["name"]
+                for index in inspector.get_indexes("worker_leases")
+            }
     finally:
         engine.dispose()
 

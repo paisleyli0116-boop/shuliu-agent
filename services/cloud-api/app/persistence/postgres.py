@@ -213,6 +213,10 @@ workers = Table(
     Column("worker_id", String(128), primary_key=True),
     Column("organization_id", String(128), nullable=False),
     Column("status", String(32), nullable=False),
+    Column("worker_version", String(64), nullable=False, server_default="unknown"),
+    Column("protocol_version", Integer, nullable=False, server_default="1"),
+    Column("capabilities", JSON, nullable=False, server_default="[]"),
+    Column("last_heartbeat_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     UniqueConstraint("organization_id", "worker_id", name="uq_workers_org_worker"),
 )
@@ -227,6 +231,7 @@ worker_leases = Table(
     Column("fencing_token", BigInteger, nullable=False),
     Column("status", String(32), nullable=False),
     Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("idempotency_key", String(256)),
     ForeignKeyConstraint(
         ["organization_id", "worker_id"],
         ["workers.organization_id", "workers.worker_id"],
@@ -240,6 +245,12 @@ worker_leases = Table(
     UniqueConstraint(
         "organization_id", "worker_id", "fencing_token", name="uq_worker_fencing_token"
     ),
+)
+Index(
+    "ix_worker_leases_org_task_status",
+    worker_leases.c.organization_id,
+    worker_leases.c.task_id,
+    worker_leases.c.status,
 )
 
 knowledge_documents = Table(
