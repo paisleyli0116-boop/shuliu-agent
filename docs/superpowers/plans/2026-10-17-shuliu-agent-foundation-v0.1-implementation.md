@@ -367,15 +367,15 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 - **目标：** 实现 Manifest 验证、签名 / Publisher / checksum / compatibility / dependencies / permissions 校验、staging、版本切换和回滚。
 - **前置依赖：** Tasks 02–03、06、08、10。
-- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/skills/manifest.py`、`runtimes/python-worker/shuliu_runtime/skills/registry.py`、`runtimes/python-worker/shuliu_runtime/skills/lifecycle.py`、`runtimes/python-worker/shuliu_runtime/skills/signature.py`、`runtimes/python-worker/tests/skills/test_lifecycle.py`、`runtimes/python-worker/tests/skills/test_package_verification.py`、`runtimes/python-worker/tests/skills/test_permission_change.py`、`skills/examples/echo/manifest.yaml`、`skills/examples/echo/README.md`、`.github/workflows/ci.yml`。
-- **创建 / 修改：** V0.1 trusted publisher allowlist interface；状态机 DISCOVERED → DOWNLOADED → VERIFIED → STAGED → INSTALLED → ENABLED / DISABLED → DEPRECATED → REMOVED；staging 和 active version 分离；Generic CI 显式运行此目录的 Skill tests。
+- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/skills/manifest.py`、`runtimes/python-worker/shuliu_runtime/skills/registry.py`、`runtimes/python-worker/shuliu_runtime/skills/lifecycle.py`、`runtimes/python-worker/shuliu_runtime/skills/signature.py`、`runtimes/python-worker/tests/skills/test_lifecycle.py`、`runtimes/python-worker/tests/skills/test_package_verification.py`、`runtimes/python-worker/tests/skills/test_permission_change.py`、`skills/examples/echo/manifest.yaml`、`skills/examples/echo/README.md`、`runtimes/python-worker/pyproject.toml`、`uv.lock`、`.github/workflows/ci.yml`。
+- **创建 / 修改：** V0.1 trusted publisher allowlist interface；以 safe YAML loader 解析 Manifest、以可替换 verifier 接口和 Ed25519 验签实现验证 publisher signature；package content 使用确定性 SHA-256 checksum；状态机 DISCOVERED → DOWNLOADED → VERIFIED → STAGED → INSTALLED → ENABLED / DISABLED → DEPRECATED → REMOVED；staging 和 active version 分离；声明直接依赖 `cryptography==50.0.2`、`PyYAML==6.0.3` 并更新 `uv.lock`；Generic CI 显式运行此目录的 Skill tests。
 - **接口 / Schema：** Manifest 含 id / version / publisher / signature / checksum / foundation range / skill protocol / capabilities / permissions / dependencies；`install(package) -> SkillInstallResult`。
 - **测试文件：** 所列 Skill tests。
 - **RED：** 测试未知 Publisher、篡改签名、checksum 错、协议不兼容、依赖缺失、权限增加未审批、升级失败后旧版本仍 enabled、活跃 Run 阻止卸载。
 - **最小实现：** 校验完整后写 Staging，Contract Test 通过才切换 active pointer；示例 Skill 只做 echo，不包含岗位业务。
 - **GREEN 命令：** `uv run --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q`。
 - **Refactor：** 生命周期转移表纯函数化；signature provider 可替换；安装失败不污染旧版本和业务数据。
-- **验收命令：** `uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q`；`pnpm test:contract`；`pnpm test:security`；`pnpm test:integration`；GitHub Generic CI 实际执行 Skill test step。
+- **验收命令：** `uv sync --locked --all-packages`；`uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q`；`pnpm test:contract`；`pnpm test:security`；`pnpm test:integration`；GitHub Generic CI 实际执行 Skill test step。
 - **完成标准：** 只有可信、签名有效、兼容且权限已批准的 Skill 可启用；更新失败旧版仍可用；无第三方 Store。
 - **Commit：** `feat: add verified skill lifecycle runtime`
 
