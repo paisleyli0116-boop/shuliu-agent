@@ -14,7 +14,7 @@
     "test:integration": "pnpm exec vitest run tests/integration --passWithNoTests && uvx --from uv==0.12.20 uv run --locked --all-packages pytest -m integration",
     "test:migration": "uvx --from uv==0.12.20 uv run --locked --all-packages pytest -m migration",
     "test:security": "vitest run tests/security",
-    "test:ipc": "vitest run tests/contract --testNamePattern IPC",
+    "test:ipc": "corepack pnpm@11.28.6 --filter @shuliu/desktop build:ipc-test && corepack pnpm@11.28.6 --filter @shuliu/desktop test:ipc && corepack pnpm@11.28.6 exec vitest run tests/contract/ipc-roundtrip.test.ts && uvx --from uv==0.12.20 uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/ipc -q",
     "test:e2e": "vitest run tests/e2e",
     "test:windows": "vitest run tests/windows"
   },

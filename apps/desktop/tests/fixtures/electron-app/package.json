@@ -1,0 +1,6 @@
+{
+  "name": "shuliu-ipc-electron-test-app",
+  "version": "0.0.0",
+  "private": true,
+  "main": "main.cjs"
+}

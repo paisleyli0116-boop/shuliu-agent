@@ -1,6 +1,6 @@
 # ShuLiu Agent Foundation V0.1 Implementation Plan
 
-> **状态：Implementation Plan 已获批准；Task 21 实现、本地验证及 GitHub CI 均通过；下一任务为 Task 22（本轮未开始）。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
+> **状态：Implementation Plan 已获批准；Task 21 实现、本地验证及 GitHub CI 均通过；Task 22 实现与本地验收通过，GitHub CI 待运行；Task 23 尚未开始。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
 
 ## 目标与边界
 
@@ -452,16 +452,16 @@ Skill 安全扫描同样是独立未完成能力；签名、Publisher 和 checks
 
 - **目标：** 实现 Electron Main 管理 Python Sidecar 的 stdio + NDJSON IPC、握手、超时和恢复信号。
 - **前置依赖：** Tasks 02–03、06。
-- **具体文件路径：** `apps/desktop/src/main/runtime/supervisor.ts`、`apps/desktop/src/main/runtime/ndjson-channel.ts`、`apps/desktop/src/main/runtime/handshake.ts`、`apps/desktop/src/preload/api.ts`、`runtimes/python-worker/shuliu_runtime/ipc/server.py`、`runtimes/python-worker/tests/ipc/test_ndjson_server.py`、`apps/desktop/tests/ipc/handshake.test.ts`、`tests/contract/ipc-roundtrip.test.ts`。
+- **具体文件路径：** `apps/desktop/src/main/runtime/supervisor.ts`、`apps/desktop/src/main/runtime/ndjson-channel.ts`、`apps/desktop/src/main/runtime/handshake.ts`、`apps/desktop/src/main/runtime/ipc.ts`、`apps/desktop/src/preload/api.ts`、`apps/desktop/tests/ipc/handshake.test.ts`、`apps/desktop/tests/fixtures/electron-app/`、`apps/desktop/tsconfig.ipc-test.json`、`apps/desktop/scripts/build-ipc-test.mjs`、`apps/desktop/package.json`、`runtimes/python-worker/shuliu_runtime/ipc/server.py`、`runtimes/python-worker/tests/ipc/test_ndjson_server.py`、`runtimes/python-worker/tests/fixtures/ipc_sidecar.py`、`packages/protocols/schemas/runtime-ipc-v1.schema.json`、`tests/contract/fixtures/protocols/runtime-ipc.valid.json`、`tests/contract/ipc-roundtrip.test.ts`、根 `package.json`、`pnpm-lock.yaml`、`.github/workflows/ci.yml`、`.github/workflows/windows-validation.yml`、`.gitignore`、`docs/risk-register.md`。
 - **创建 / 修改：** Main spawn / supervise；stdout parser 只收 NDJSON、stderr logger；preload allowlist；startup protocol handshake + runtime health；request / trace id 和 timeout。
 - **接口 / Schema：** `request_id`, `trace_id`, `protocol_version`, `method`, `params`; response 为 `result | ShuLiuError`；Renderer 仅用 typed allowlist API。
 - **测试文件：** 所列 IPC tests。
 - **RED：** 测试 stdout 插入 log、partial line、非法 JSON、版本不匹配、超时、sidecar crash、Renderer 任意命令请求；预期握手 / 解析 / allowlist 错误未被阻断。
-- **最小实现：** newline-framed JSON parser、单请求 correlation、有限重启并健康检查；连续崩溃进入 Safe Mode。
-- **GREEN 命令：** `pnpm --filter @shuliu/desktop test -- ipc`；`uv run --package shuliu-python-runtime pytest runtimes/python-worker/tests/ipc -q`。
+- **最小实现：** Schema 校验的 newline-framed JSON parser、并发 request correlation、timeout / cancellation、受控 renderer health allowlist、受限 Sidecar 环境变量、一次有限重启并 health check；连续崩溃或协议不兼容进入 Safe Mode。
+- **GREEN 命令：** `pnpm test:ipc`（包含真实 Electron Main + Python Sidecar 子进程 roundtrip）；`pnpm test:contract`；`pnpm typecheck`。
 - **Refactor：** Main IPC 与 UI renderer 分离；禁止在 stdout 打印调试日志；Sidecar 启动参数无长期 Secret。
 - **验收命令：** `pnpm test:ipc`；`pnpm test:contract`。
-- **完成标准：** stdout 纯协议、stderr 日志、握手可验证、请求错误可关联、主进程可拒绝任意 OS 命令。
+- **完成标准：** stdout 纯协议、stderr 经安全字段 allowlist 后进入普通日志；真实 Electron Main 启动真实 Python Sidecar 并验证握手、并发关联、超时、取消、崩溃、有限重启、协议不兼容与 Safe Mode；Renderer 只能通过 Preload 请求 Main 的健康 allowlist，不能发任意 IPC、命令或文件路径；通用 Linux / macOS 与 Windows Validation workflow 的 IPC gate 全绿。完整 checkpoint / durable idempotency / 副作用崩溃恢复仍由 Task 34 验收，不属于本 Task 的已完成能力。
 - **Commit：** `feat: add supervised NDJSON runtime IPC`
 
 ### Task 23 — Desktop UI

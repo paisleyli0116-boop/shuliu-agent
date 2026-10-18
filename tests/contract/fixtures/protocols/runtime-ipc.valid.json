@@ -4,5 +4,6 @@
   "message_id": "msg-runtime-ipc-001",
   "request_id": "req-runtime-ipc-001",
   "trace_id": "trace-runtime-ipc-001",
-  "payload": {}
+  "message_type": "request",
+  "payload": { "method": "runtime.health", "params": {} }
 }

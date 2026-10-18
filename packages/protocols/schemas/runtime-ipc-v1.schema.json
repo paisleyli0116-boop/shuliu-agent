@@ -3,26 +3,70 @@
   "$id": "urn:shuliu:protocol:runtime-ipc:v1",
   "title": "ShuLiu runtime-ipc protocol v1",
   "allOf": [
-    {
-      "$ref": "urn:shuliu:protocol:common:v1#/$defs/envelope"
-    },
+    { "$ref": "urn:shuliu:protocol:common:v1#/$defs/envelope" },
     {
       "type": "object",
       "properties": {
-        "protocol_name": {
-          "const": "runtime-ipc"
-        },
-        "protocol_version": {
-          "const": 1
-        },
-        "payload": {
-          "$ref": "urn:shuliu:protocol:common:v1#/$defs/payload"
-        }
+        "protocol_name": { "const": "runtime-ipc" },
+        "protocol_version": { "const": 1 },
+        "message_type": { "enum": ["request", "response", "cancel"] },
+        "payload": { "$ref": "urn:shuliu:protocol:common:v1#/$defs/payload" }
       },
-      "required": [
-        "protocol_name",
-        "protocol_version",
-        "payload"
+      "required": ["protocol_name", "protocol_version", "message_type", "payload"],
+      "oneOf": [
+        {
+          "properties": {
+            "message_type": { "const": "request" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "method": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "params": { "type": "object" }
+              },
+              "required": ["method", "params"],
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "message_type": { "const": "response" },
+            "payload": {
+              "type": "object",
+              "oneOf": [
+                { "properties": { "result": { "type": "object" } }, "required": ["result"], "additionalProperties": false },
+                {
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": { "type": "string", "minLength": 1 },
+                        "category": { "enum": ["VALIDATION", "AUTH", "PERMISSION", "POLICY", "APPROVAL", "MODEL", "TOOL", "BROWSER", "COMPUTER", "NETWORK", "WORKER", "WORKFLOW", "STORAGE", "SYSTEM"] },
+                        "message": { "type": "string", "minLength": 1 },
+                        "retryable": { "type": "boolean" },
+                        "recoverable": { "type": "boolean" },
+                        "severity": { "type": "string", "minLength": 1 },
+                        "details": { "type": "object" },
+                        "cause": {},
+                        "trace_id": { "type": "string", "minLength": 1 }
+                      },
+                      "required": ["code", "category", "message", "retryable", "recoverable", "severity", "details", "trace_id"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "message_type": { "const": "cancel" },
+            "payload": { "type": "object", "maxProperties": 0 }
+          }
+        }
       ]
     }
   ]

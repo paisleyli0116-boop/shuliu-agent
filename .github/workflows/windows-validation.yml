@@ -34,6 +34,8 @@ jobs:
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills/platform -q
       - name: Run repository security tests
         run: pnpm test:security
+      - name: Run Electron ↔ Python IPC tests with real subprocesses
+        run: pnpm test:ipc
       - name: Validate Windows packaging tools
         shell: pwsh
         run: |

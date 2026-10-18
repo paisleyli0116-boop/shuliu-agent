@@ -1,6 +1,7 @@
 node_modules/
 .venv/
 dist/
+.ipc-test-build/
 coverage/
 .pytest_cache/
 __pycache__/

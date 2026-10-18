@@ -4,6 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:ipc": "vitest run tests/ipc",
+    "build:ipc-test": "node scripts/build-ipc-test.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.9.0"
   }
 }
