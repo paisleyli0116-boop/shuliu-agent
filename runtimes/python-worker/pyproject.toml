@@ -6,6 +6,7 @@ dependencies = [
     "apscheduler==3.11.3",
     "jsonschema>=4.24,<5",
     "keyring>=25.7.0",
+    "litellm-core>=1.106.0",
     "psycopg[binary]==3.3.6",
     "sqlalchemy==2.1.5",
 ]
