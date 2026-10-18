@@ -7,6 +7,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from app.persistence.postgres import (
     IdempotencyConflictError,
@@ -50,6 +51,9 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "permissions",
                 "membership_roles",
                 "role_permissions",
+                "schedules",
+                "schedule_occurrences",
+                "apscheduler_jobs",
             } <= tables
 
             for table in {
@@ -64,6 +68,8 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "roles",
                 "membership_roles",
                 "role_permissions",
+                "schedules",
+                "schedule_occurrences",
             }:
                 organization_id = next(
                     column
@@ -79,6 +85,54 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "idempotency_key" in item["column_names"]
                 for item in event_constraints
             )
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.migration
+def test_schedule_occurrences_enforce_one_active_run_per_schedule():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            upgrade_to_head(connection)
+            connection.execute(
+                text(
+                    "INSERT INTO schedules "
+                    "(schedule_id, organization_id, workflow_version_id, trigger_json, "
+                    "timezone, coalesce, misfire_grace_time, enabled, created_at, updated_at) "
+                    "VALUES ('schedule-1', 'org-1', 'workflow-v1', '{}', 'UTC', "
+                    "'latest', 60, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            for index, occurrence_id in enumerate(("occurrence-1", "occurrence-2")):
+                values = {
+                    "id": occurrence_id,
+                    "key": f"key:{occurrence_id}",
+                    "scheduled_at": f"2026-10-18T00:0{index}:00+00:00",
+                }
+                if index == 1:
+                    with pytest.raises(IntegrityError):
+                        connection.execute(
+                            text(
+                                "INSERT INTO schedule_occurrences "
+                                "(occurrence_id, organization_id, schedule_id, scheduled_at, "
+                                "idempotency_key, status, created_at, updated_at) "
+                                "VALUES (:id, 'org-1', 'schedule-1', :scheduled_at, "
+                                ":key, 'RUNNING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                            ),
+                            values,
+                        )
+                else:
+                    connection.execute(
+                        text(
+                            "INSERT INTO schedule_occurrences "
+                            "(occurrence_id, organization_id, schedule_id, scheduled_at, "
+                            "idempotency_key, status, created_at, updated_at) "
+                            "VALUES (:id, 'org-1', 'schedule-1', :scheduled_at, "
+                            ":key, 'RUNNING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                        ),
+                        values,
+                    )
     finally:
         engine.dispose()
 

@@ -11,10 +11,14 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKeyConstraint,
     Index,
+    Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
@@ -229,6 +233,56 @@ knowledge_documents = Table(
     ),
 )
 
+schedules = Table(
+    "schedules",
+    metadata,
+    Column("schedule_id", String(128), primary_key=True),
+    Column("organization_id", String(128), nullable=False),
+    Column("workflow_version_id", String(128), nullable=False),
+    Column("trigger_json", JSON, nullable=False),
+    Column("timezone", String(128), nullable=False),
+    Column("coalesce", String(16), nullable=False),
+    Column("misfire_grace_time", Integer, nullable=False),
+    Column("enabled", Boolean, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("organization_id", "schedule_id", name="uq_schedules_org_schedule"),
+)
+
+schedule_occurrences = Table(
+    "schedule_occurrences",
+    metadata,
+    Column("occurrence_id", String(128), primary_key=True),
+    Column("organization_id", String(128), nullable=False),
+    Column("schedule_id", String(128), nullable=False),
+    Column("scheduled_at", DateTime(timezone=True), nullable=False),
+    Column("idempotency_key", String(256), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("workflow_run_id", String(128)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ["organization_id", "schedule_id"],
+        ["schedules.organization_id", "schedules.schedule_id"],
+        name="fk_schedule_occurrences_schedule",
+    ),
+    UniqueConstraint(
+        "organization_id", "schedule_id", "scheduled_at", name="uq_schedule_occurrence_time"
+    ),
+    UniqueConstraint("idempotency_key", name="uq_schedule_occurrence_idempotency"),
+    UniqueConstraint(
+        "organization_id", "schedule_id", "occurrence_id", name="uq_schedule_occurrence_scope"
+    ),
+)
+
+apscheduler_jobs = Table(
+    "apscheduler_jobs",
+    metadata,
+    Column("id", String(191), primary_key=True),
+    Column("next_run_time", Float),
+    Column("job_state", LargeBinary, nullable=False),
+)
+
 Index("ix_events_org_received_at", events.c.organization_id, events.c.received_at)
 Index("ix_worker_leases_org_status", worker_leases.c.organization_id, worker_leases.c.status)
 Index(
@@ -253,6 +307,20 @@ Index(
     role_permissions.c.organization_id,
     role_permissions.c.permission_id,
 )
+Index(
+    "uq_schedule_occurrences_one_active",
+    schedule_occurrences.c.schedule_id,
+    unique=True,
+    sqlite_where=schedule_occurrences.c.status.in_(["CLAIMED", "RUNNING"]),
+    postgresql_where=schedule_occurrences.c.status.in_(["CLAIMED", "RUNNING"]),
+)
+Index(
+    "ix_schedule_occurrences_pending",
+    schedule_occurrences.c.schedule_id,
+    schedule_occurrences.c.status,
+    schedule_occurrences.c.scheduled_at,
+)
+Index("ix_apscheduler_jobs_next_run_time", apscheduler_jobs.c.next_run_time)
 
 
 class MigrationStateError(RuntimeError):

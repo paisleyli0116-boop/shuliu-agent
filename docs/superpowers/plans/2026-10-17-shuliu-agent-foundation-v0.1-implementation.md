@@ -298,16 +298,16 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 - **目标：** 以 APScheduler persistent datastore 产生 Schedule occurrence，交由 Workflow Engine 执行。
 - **前置依赖：** Tasks 05、12–13。
-- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/scheduler/service.py`、`runtimes/python-worker/shuliu_runtime/scheduler/store.py`、`runtimes/python-worker/shuliu_runtime/scheduler/occurrence.py`、`runtimes/python-worker/tests/scheduler/test_schedule_semantics.py`、`runtimes/python-worker/tests/scheduler/test_misfire_dst.py`。
-- **创建 / 修改：** Stable `schedule_id`、启动 conflict replace、default `coalesce=latest`、显式 `all`、同 Schedule no overlap、configurable `misfire_grace_time`；Occurrence 用稳定 idempotency key 入 Workflow queue。
-- **接口 / Schema：** `Schedule {schedule_id, trigger, timezone, coalesce, misfire_grace_time, workflow_version_id}`；`fire(schedule_id, occurrence) -> workflow_run_id`。
-- **测试文件：** 所列 Scheduler tests。
-- **RED：** 覆盖 restart 后持久化、同 ID replace、missed latest/all、同 Schedule overlap、过期 misfire、DST 场景；测试证明 Scheduler 不直接调用 Tool。
+- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/scheduler/service.py`、`runtimes/python-worker/shuliu_runtime/scheduler/store.py`、`runtimes/python-worker/shuliu_runtime/scheduler/occurrence.py`、`runtimes/python-worker/tests/scheduler/test_schedule_semantics.py`、`runtimes/python-worker/tests/scheduler/test_misfire_dst.py`、`runtimes/python-worker/pyproject.toml`、`uv.lock`、`services/cloud-api/app/persistence/postgres.py`、`services/cloud-api/migrations/versions/0003_scheduler.py`、`services/cloud-api/tests/persistence/test_postgres_migrations.py`。
+- **创建 / 修改：** Stable `schedule_id`、启动 conflict replace、default `coalesce=latest`、显式 `all`、同 Schedule no overlap、configurable `misfire_grace_time`；在 PostgreSQL migration 中创建 Schedule、occurrence 和 APScheduler job-store schema；Occurrence 用稳定 idempotency key 入 Workflow command port。Scheduler 不调用 Tool，也不声称实现完整 Workflow 崩溃恢复或持久化副作用幂等。
+- **接口 / Schema：** `Schedule {schedule_id, organization_id, trigger, timezone, coalesce, misfire_grace_time, workflow_version_id}`；`ScheduleOccurrence {occurrence_id, schedule_id, scheduled_at, idempotency_key, status, workflow_run_id}`；`WorkflowCommandPort.enqueue_workflow(schedule, occurrence, idempotency_key) -> workflow_run_id`。
+- **测试文件：** 所列 Scheduler tests 与 `services/cloud-api/tests/persistence/test_postgres_migrations.py`。
+- **RED：** 覆盖 restart 后持久化、同 ID replace、missed latest/all、同 Schedule overlap、过期 misfire、DST / 显式 IANA timezone、无效持久化 Trigger fail-closed、跨 organization 的 schedule_id 重绑拒绝、DB partial unique active occurrence；测试证明 Scheduler 不直接调用 Tool。
 - **最小实现：** APScheduler adapter + occurrence repository + Workflow command port。
 - **GREEN 命令：** `uv run --package shuliu-python-runtime pytest runtimes/python-worker/tests/scheduler -q`。
 - **Refactor：** Trigger 与 Execution adapter 分离；timezone 必须显式；APScheduler callbacks 不承载业务逻辑。
 - **验收命令：** `pnpm test:integration`；`pnpm test:migration`。
-- **完成标准：** scheduler store 可恢复；latest / all / overlap / grace 行为可测；副作用幂等键稳定；DST 使用显式配置。
+- **完成标准：** PostgreSQL Schedule / occurrence / APScheduler schema 均经 migration；persistent scheduler store 可恢复；latest / all / overlap / grace 行为可测；副作用幂等键稳定并传给 Workflow command port；DST 使用显式 IANA timezone。Task 13 的完整 crash recovery 与持久化副作用幂等仍是未关闭的强制 Release Gate；DST 边界选择仍待部署策略确认。
 - **Commit：** `feat: add persistent trigger scheduler`
 
 ### Task 15 — Model Gateway
@@ -330,7 +330,7 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 - **目标：** 实现 Cloud PostgreSQL + pgvector 知识写入 / 检索，并在数据库检索前完成 organization / scope / classification / Permission ACL 过滤。
 - **前置依赖：** Tasks 05–06、15。
-- **具体文件路径：** `services/cloud-api/app/knowledge/ingest.py`、`services/cloud-api/app/knowledge/retrieval.py`、`services/cloud-api/app/knowledge/acl.py`、`services/cloud-api/tests/knowledge/test_acl_before_vector_search.py`、`services/cloud-api/tests/knowledge/test_revocation_invalidation.py`、`services/cloud-api/migrations/versions/0003_knowledge_pgvector.py`、`runtimes/python-worker/shuliu_runtime/knowledge/client.py`。
+- **具体文件路径：** `services/cloud-api/app/knowledge/ingest.py`、`services/cloud-api/app/knowledge/retrieval.py`、`services/cloud-api/app/knowledge/acl.py`、`services/cloud-api/tests/knowledge/test_acl_before_vector_search.py`、`services/cloud-api/tests/knowledge/test_revocation_invalidation.py`、`services/cloud-api/migrations/versions/0004_knowledge_pgvector.py`、`runtimes/python-worker/shuliu_runtime/knowledge/client.py`。
 - **创建 / 修改：** Document / Chunk / ACL schema、embedding gateway port、retrieval query、cache invalidation hook；parser 和具体 Embedding Provider 经配置注入。
 - **接口 / Schema：** `retrieve(query, authorization_context, top_k) -> list[KnowledgeHit]`；`KnowledgeHit` 只含已授权 chunk 与来源引用。
 - **测试文件：** 所列 Cloud tests 与 `tests/integration/test_knowledge_permissions.py`。
