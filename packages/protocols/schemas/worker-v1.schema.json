@@ -16,7 +16,7 @@
           "const": 1
         },
         "message_type": {
-          "enum": ["register", "registered", "heartbeat", "lease", "ack", "progress", "cancel", "result", "error"]
+          "enum": ["register", "registered", "authenticate", "authenticated", "heartbeat", "lease_request", "lease", "ack", "progress", "cancel", "result", "error"]
         },
         "payload": {
           "type": "object"
@@ -33,7 +33,10 @@
       "oneOf": [
         { "type": "object", "properties": { "message_type": { "const": "register" }, "payload": { "$ref": "#/$defs/register" } } },
         { "type": "object", "properties": { "message_type": { "const": "registered" }, "payload": { "$ref": "#/$defs/registered" } } },
+        { "type": "object", "properties": { "message_type": { "const": "authenticate" }, "payload": { "$ref": "#/$defs/authenticate" } } },
+        { "type": "object", "properties": { "message_type": { "const": "authenticated" }, "payload": { "$ref": "#/$defs/authenticated" } } },
         { "type": "object", "properties": { "message_type": { "const": "heartbeat" }, "payload": { "$ref": "#/$defs/heartbeat" } } },
+        { "type": "object", "properties": { "message_type": { "const": "lease_request" }, "payload": { "$ref": "#/$defs/lease_request" } } },
         { "type": "object", "properties": { "message_type": { "const": "lease" }, "payload": { "$ref": "#/$defs/lease" } } },
         { "type": "object", "properties": { "message_type": { "const": "ack" }, "payload": { "$ref": "#/$defs/ack" } } },
         { "type": "object", "properties": { "message_type": { "const": "progress" }, "payload": { "$ref": "#/$defs/progress" } } },
@@ -49,11 +52,13 @@
       "properties": {
         "registration_token": { "type": "string", "minLength": 1 },
         "worker_version": { "type": "string", "minLength": 1 },
+        "protocol_version": { "const": 1 },
         "capabilities": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "device_key_algorithm": { "type": "string", "minLength": 1 },
-        "device_public_key": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}=?$" }
+        "device_public_key": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}=?$" },
+        "device_signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}(?:==)?$" }
       },
-      "required": ["registration_token", "worker_version", "capabilities", "device_key_algorithm", "device_public_key"]
+      "required": ["registration_token", "worker_version", "protocol_version", "capabilities", "device_key_algorithm", "device_public_key", "device_signature"]
     },
     "registered": {
       "type": "object",
@@ -63,6 +68,16 @@
         "expires_at": { "type": "string", "minLength": 1 }
       },
       "required": ["worker_id", "session_credential", "expires_at"]
+    },
+    "authenticate": {
+      "type": "object",
+      "properties": { "session_credential": { "type": "string", "minLength": 1 } },
+      "required": ["session_credential"]
+    },
+    "authenticated": {
+      "type": "object",
+      "properties": { "worker_id": { "type": "string", "minLength": 1 } },
+      "required": ["worker_id"]
     },
     "heartbeat": {
       "type": "object",
@@ -83,6 +98,14 @@
         "task": { "type": "object" }
       },
       "required": ["task_id", "lease_id", "fencing_token", "idempotency_key", "expires_at"]
+    },
+    "lease_request": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "idempotency_key": { "type": "string", "minLength": 1 }
+      },
+      "required": ["task_id", "idempotency_key"]
     },
     "ack": {
       "type": "object",
@@ -118,10 +141,11 @@
         "task_id": { "type": "string", "minLength": 1 },
         "lease_id": { "type": "string", "minLength": 1 },
         "idempotency_key": { "type": "string", "minLength": 1 },
+        "fencing_token": { "type": "integer", "minimum": 1 },
         "status": { "enum": ["SUCCEEDED", "FAILED", "CANCELLED"] },
         "result": { "type": "object" }
       },
-      "required": ["task_id", "lease_id", "idempotency_key", "status", "result"]
+      "required": ["task_id", "lease_id", "idempotency_key", "fencing_token", "status", "result"]
     },
     "error": {
       "type": "object",

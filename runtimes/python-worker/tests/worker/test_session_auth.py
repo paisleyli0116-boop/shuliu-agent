@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from shuliu_runtime.worker.credentials import WorkerAuthenticationError
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from shuliu_runtime.worker.credentials import (
+    WorkerAuthenticationError,
+    registration_proof_bytes,
+)
 from shuliu_runtime.worker.protocol import WorkerMessage, WorkerProtocolError
 from tests.fakes.fake_cloud import FakeCloud
 
@@ -16,9 +22,23 @@ def _enrolled_cloud(now: datetime) -> tuple[FakeCloud, str]:
         clock=lambda: now,
     )
     token = cloud.issue_registration_token(expires_at=now + timedelta(minutes=1))
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    proof_body = {
+        "registration_token": token,
+        "worker_version": "0.1.0",
+        "protocol_version": 1,
+        "capabilities": [],
+        "device_key_algorithm": "Ed25519",
+        "device_public_key": base64.urlsafe_b64encode(public_key).rstrip(b"=").decode(),
+    }
     result = cloud.register(
         token,
-        b"x" * 32,
+        public_key,
+        private_key.sign(registration_proof_bytes(proof_body)),
         device_key_algorithm="Ed25519",
         worker_version="0.1.0",
         capabilities=(),

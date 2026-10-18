@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import uuid4
@@ -49,6 +50,12 @@ class WorkerRegistrationResult:
         }
 
 
+@dataclass(frozen=True)
+class WorkerSessionGrant:
+    session_credential: str = field(repr=False)
+    expires_at: datetime
+
+
 class WorkerDeviceKeyStore:
     """Creates device keys and stores private material only through SecretStore."""
 
@@ -89,5 +96,34 @@ class WorkerDeviceKeyStore:
             format=serialization.PublicFormat.Raw,
         )
 
+    def sign(self, reference: str | SecretRef, message: bytes) -> bytes:
+        if not isinstance(message, bytes) or not message:
+            raise ValueError("device proof message must be non-empty bytes")
+        return self.load(reference).sign(message)
+
     def delete(self, reference: str | SecretRef) -> None:
         self._secret_store.delete(reference)
+
+
+def registration_proof_bytes(payload: dict[str, object]) -> bytes:
+    """Canonical proof input shared by Worker registration and Cloud verification."""
+    fields = (
+        "registration_token",
+        "worker_version",
+        "protocol_version",
+        "capabilities",
+        "device_key_algorithm",
+        "device_public_key",
+    )
+    canonical = {field: payload[field] for field in fields}
+    return b"shuliu-worker-registration-v1\\n" + json.dumps(
+        canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("ascii")
+
+
+def session_proof_bytes(*, worker_id: str, challenge_id: str, nonce: str) -> bytes:
+    """Domain-separated proof for issuing a fresh short-lived session credential."""
+    return (
+        "shuliu-worker-session-v1\\n"
+        f"{worker_id}\\n{challenge_id}\\n{nonce}"
+    ).encode("utf-8")

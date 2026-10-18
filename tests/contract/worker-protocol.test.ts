@@ -11,14 +11,17 @@ const envelope = {
 
 describe("Worker protocol v1", () => {
   it.each([
-    ["register", { registration_token: "one-time-token", worker_version: "0.1.0", capabilities: ["worker.runtime"], device_key_algorithm: "Ed25519", device_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }],
+    ["register", { registration_token: "one-time-token", worker_version: "0.1.0", protocol_version: 1, capabilities: ["worker.runtime"], device_key_algorithm: "Ed25519", device_public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", device_signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" }],
     ["registered", { worker_id: "worker_01", session_credential: "opaque-session", expires_at: "2026-10-18T00:05:00Z" }],
+    ["authenticate", { session_credential: "opaque-session" }],
+    ["authenticated", { worker_id: "worker_01" }],
     ["heartbeat", { worker_id: "worker_01", sent_at: "2026-10-18T00:00:00Z" }],
+    ["lease_request", { task_id: "task_01", idempotency_key: "idem_01" }],
     ["lease", { task_id: "task_01", lease_id: "lease_01", fencing_token: 1, idempotency_key: "idem_01", expires_at: "2026-10-18T00:01:00Z", task: { required_capabilities: ["worker.runtime"], payload: {} } }],
     ["ack", { task_id: "task_01", lease_id: "lease_01", idempotency_key: "idem_01" }],
     ["progress", { task_id: "task_01", lease_id: "lease_01", idempotency_key: "idem_01", progress: { completed: 1, total: 2 } }],
     ["cancel", { task_id: "task_01", lease_id: "lease_01", reason_code: "USER_CANCELLED" }],
-    ["result", { task_id: "task_01", lease_id: "lease_01", idempotency_key: "idem_01", status: "SUCCEEDED", result: {} }],
+    ["result", { task_id: "task_01", lease_id: "lease_01", idempotency_key: "idem_01", fencing_token: 1, status: "SUCCEEDED", result: {} }],
     ["error", { task_id: "task_01", lease_id: "lease_01", code: "WORKER_TASK_FAILED", retryable: false }],
   ] as const)("accepts %s messages", (message_type, payload) => {
     expect(validateProtocol("worker", { ...envelope, message_type, payload }).valid).toBe(true);

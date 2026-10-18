@@ -1,6 +1,6 @@
 # ShuLiu Agent Foundation V0.1 Implementation Plan
 
-> **状态：Implementation Plan 已获批准；当前执行至 Task 18。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
+> **状态：Implementation Plan 已获批准；Task 21 实现及本地验证已完成，等待本轮远端 CI；CI 全绿后才进入 Task 22。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
 
 ## 目标与边界
 
@@ -434,18 +434,18 @@ Skill 安全扫描同样是独立未完成能力；签名、Publisher 和 checks
 
 ### Task 21 — Cloud API
 
-- **目标：** 暴露经过 Identity / RBAC / Policy 的 Foundation API 与 Worker WebSocket 接入点。
+- **目标：** 提供经过服务端 Identity / RBAC 检查的 Foundation HTTP API，并将 Worker Protocol 接入真实 TLS WebSocket 路由和 Task 20 Coordinator。
 - **前置依赖：** Tasks 05、07–10、20。
-- **具体文件路径：** `services/cloud-api/app/main.py`、`services/cloud-api/app/routes/tasks.py`、`services/cloud-api/app/routes/approvals.py`、`services/cloud-api/app/routes/health.py`、`services/cloud-api/app/routes/workers.py`、`services/cloud-api/tests/api/test_task_routes.py`、`services/cloud-api/tests/api/test_health.py`、`services/cloud-api/tests/api/test_authz.py`、`tests/integration/test_cloud_api_contract.py`。
-- **创建 / 修改：** FastAPI app factory、dependency injection、task create/read、approval list/decision、health、Worker WS handshake；无岗位业务 endpoint。
-- **接口 / Schema：** `POST /v1/tasks`、`GET /v1/tasks/{task_id}`、`GET /v1/approvals`、`POST /v1/approvals/{approval_id}/decision`、`GET /health`、`/v1/workers/ws`；输入输出由共享 JSON Schema 与 OpenAPI 一致性测试约束。
-- **测试文件：** 所列 Cloud API tests。
-- **RED：** 缺认证、跨 organization、缺 Permission、无效 approval context、错误 protocol handshake、未知任务；断言拒绝响应与没有副作用。
-- **最小实现：** app factory 和依赖注入；路由只调用已实现的 application service，数据库通过 repository ports 注入。
-- **GREEN 命令：** `uv run --package shuliu-cloud-api pytest services/cloud-api/tests/api -q`；`uv run --package shuliu-cloud-api pytest tests/integration/test_cloud_api_contract.py -q`。
-- **Refactor：** 路由不含领域决策；统一 ShuLiuError mapping、request_id / trace_id 和 structured logging。
-- **验收命令：** `pnpm test:contract`；`pnpm test:integration`；`pnpm test:security`。
-- **完成标准：** API 认证授权在服务端执行；HTTP / WS 都遵守 schema、Policy、事件和错误模型；不存在业务机器人路由。
+- **具体文件路径：** `services/cloud-api/app/main.py`、`services/cloud-api/app/identity/api_auth.py`、`services/cloud-api/app/routes/tasks.py`、`services/cloud-api/app/routes/approvals.py`、`services/cloud-api/app/routes/health.py`、`services/cloud-api/app/approval/routes.py`、`services/cloud-api/app/workers/auth.py`、`services/cloud-api/app/workers/routes.py`、`services/cloud-api/app/workers/coordinator.py`、`services/cloud-api/app/workers/leases.py`、`services/cloud-api/app/persistence/postgres.py`、`services/cloud-api/migrations/versions/0006_worker_authentication.py`、`services/cloud-api/migrations/versions/0007_task_scoped_fencing_tokens.py`、`runtimes/python-worker/shuliu_runtime/worker/credentials.py`、`runtimes/python-worker/shuliu_runtime/worker/registration.py`、`runtimes/python-worker/shuliu_runtime/worker/transport.py`、`packages/protocols/schemas/worker-v1.schema.json`、`services/cloud-api/tests/api/test_task_routes.py`、`services/cloud-api/tests/api/test_health.py`、`services/cloud-api/tests/api/test_authz.py`、`services/cloud-api/tests/workers/test_worker_api_auth.py`、`services/cloud-api/tests/workers/test_worker_auth_postgres.py`、`services/cloud-api/tests/workers/test_lease_fencing.py`、`services/cloud-api/tests/persistence/test_postgres_migrations.py`、`runtimes/python-worker/tests/worker/test_registration.py`、`runtimes/python-worker/tests/worker/test_session_auth.py`、`tests/integration/test_worker_wss_cloud_loop.py`、`.github/workflows/ci.yml`、`services/cloud-api/pyproject.toml`、`runtimes/python-worker/pyproject.toml`、`uv.lock`。
+- **创建 / 修改：** FastAPI app factory 和依赖注入；通用 Task create/read、Approval list/decision、health；Worker 注册、设备签名验证、会话挑战与换发、一次性短期 Session 验证、WebSocket 连接管理和 Coordinator 消息适配；无岗位业务 endpoint。Session signing key 只能经注入的 Cloud Secret Manager resolver 读取，缺失时 Fail Closed；Registration Token 只以 digest 持久化。
+- **接口 / Schema：** `POST /v1/tasks`、`GET /v1/tasks/{task_id}`、`GET /v1/approvals`、`POST /v1/approvals/{approval_id}/decision`、`GET /health`、`POST /v1/workers/registrations`、`POST /v1/workers/session-challenges`、`POST /v1/workers/sessions`、`WSS /v1/workers/ws`。设备注册签名覆盖规范化注册字段；Worker 客户端身份由已验证的短期凭据映射到服务端注册记录，消息中的 `worker_id` 不作为认证事实。WSS 消息包括 authenticate / authenticated、heartbeat、lease_request / lease、result / ack；result 必须带 fencing token 和 idempotency key。
+- **测试文件：** 上述 API、认证、Worker、迁移和 TLS 网络集成测试；Generic CI 运行 API / Worker 单测和真实本机 WSS 集成；PG17/PG18 矩阵运行认证持久化、迁移及 Worker 集成测试。
+- **RED：** 先运行新增 API / Worker 测试并确认失败：无 Cloud API app、设备签名无验证、注册 Token 可重放 / 过期、短期 Session 可过期后继续使用 / 重放、伪造 worker_id 可影响身份、无 TLS Worker 路由、Coordinator 消息未接线、跨 organization 或缺 Permission 可读写 Task、跨 Task fencing scope 与唯一约束不一致。断言失败请求不产生越权记录。
+- **最小实现：** app factory 显式注入 Engine、IdentityProvider、RBACRepository、Clock 和 Cloud Secret Manager resolver；注册 Token 使用 hash 且以数据库条件更新原子消费；Worker 使用 Ed25519 证明设备私钥持有，Cloud 签发有过期时间和唯一 jti 的短期凭据并在 WSS 首次使用时原子消费；重连使用短期 nonce challenge + 设备签名换新 Session。WSS 认证成功后以服务端派生的 WorkerPrincipal 接入 Coordinator；heartbeat、lease、result、ACK 走现有 Coordinator。未知执行结果保留 Lease，不自动重试；到期后的恢复必须由显式 `OUTCOME_UNKNOWN` / `RETRY_SAFE` 判定。
+- **GREEN 命令：** `uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/api services/cloud-api/tests/workers -q -m "not integration"`；`uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/worker -q`；`uv run --locked --all-packages pytest tests/integration/test_worker_wss_cloud_loop.py -q`；配置 `SHULIU_DATABASE_URL` 时运行 `uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/workers/test_worker_auth_postgres.py -q`。
+- **Refactor：** Router 只做 schema / HTTP 映射，不拥有租约或重试决策；统一安全错误码；禁止 Session / Registration Token / device private key 进入日志、配置、Event 或普通数据库字段。应用需由 HTTPS/WSS TLS ingress 暴露；本地证书集成测试不代替生产 TLS 部署证据。
+- **验收命令：** `pnpm test:contract`；`pnpm test:integration`；`pnpm test:migration`；`pnpm test:security`；PG17 / PG18 `services/cloud-api/tests/workers -m integration`；Generic CI Linux / macOS 与 Windows Validation 全绿。
+- **完成标准：** 真实 Worker Runtime 使用 HTTPS 注册并通过 WSS 建连；注册签名、Token 一次性使用、session expiry / replay、心跳、Lease、fencing token、结果 ACK、断线和设备签名重连均有测试证据；expired / outcome-unknown 不自动重派，只能显式 `RETRY_SAFE`；PG migration 与持久化认证在 PG17/18 通过；FakeWebSocket 单测不能作为真实连接验收证据；无岗位业务路由。真实部署域名、生产证书和 Cloud Secret Manager 的运行环境证据仍由 Release Gate 单独验证。
 - **Commit：** `feat: add authenticated foundation cloud API`
 
 ### Task 22 — Electron ↔ Python IPC
@@ -466,18 +466,18 @@ Skill 安全扫描同样是独立未完成能力；签名、Publisher 和 checks
 
 ### Task 23 — Desktop UI
 
-- **目标：** 提供创建 / 查看任务、审批、健康状态和设置的桌面界面，通过窄 preload API 工作。
+- **目标：** 提供创建 / 查看任务、审批、健康状态和通用模型 Provider 设置的桌面界面，通过窄 preload API 工作。
 - **前置依赖：** Tasks 03、08–09、11、22。
-- **具体文件路径：** `apps/desktop/src/renderer/App.tsx`、`apps/desktop/src/renderer/routes/tasks.tsx`、`apps/desktop/src/renderer/routes/approvals.tsx`、`apps/desktop/src/renderer/components/runtime-health.tsx`、`apps/desktop/src/renderer/api/client.ts`、`apps/desktop/tests/ui/task-flow.test.tsx`、`apps/desktop/tests/ui/approval-flow.test.tsx`、`apps/desktop/tests/ui/health-state.test.tsx`。
-- **创建 / 修改：** 通用 Foundation UI：task create/status、approval detail/decision、Runtime health / Safe Mode；不添加采购等岗位页面。
-- **接口 / Schema：** Renderer 调用 `window.shuliu.tasks.create/get`、`window.shuliu.approvals.list/decide`、`window.shuliu.health.get`；权限错误用共享 ShuLiuError 呈现。
-- **测试文件：** 所列 UI tests。
-- **RED：** 以 Fake IPC 测试创建 Task、拒绝审批后状态、Safe Mode 提示、缺权限隐藏 / 禁用；无 UI / typed API 时失败。
-- **最小实现：** 页面 + typed API client + loading/error/empty states。
+- **具体文件路径：** `apps/desktop/src/renderer/App.tsx`、`apps/desktop/src/renderer/routes/tasks.tsx`、`apps/desktop/src/renderer/routes/approvals.tsx`、`apps/desktop/src/renderer/routes/settings/providers.tsx`、`apps/desktop/src/renderer/components/runtime-health.tsx`、`apps/desktop/src/renderer/components/provider-profile-form.tsx`、`apps/desktop/src/renderer/api/client.ts`、`apps/desktop/src/renderer/api/providers.ts`、`apps/desktop/src/preload/api.ts`、`apps/desktop/tests/ui/task-flow.test.tsx`、`apps/desktop/tests/ui/approval-flow.test.tsx`、`apps/desktop/tests/ui/health-state.test.tsx`、`apps/desktop/tests/ui/provider-settings.test.tsx`、`apps/desktop/tests/ipc/provider-settings-allowlist.test.ts`。
+- **创建 / 修改：** 通用 Foundation UI：task create/status、approval detail/decision、Runtime health / Safe Mode，以及模型 Provider 设置表单。Provider 表单负责 Provider / Model 选择、capability 显示、API Key 输入、手动连接测试、保存配置和更换 / 替换凭据；Renderer 只通过窄 typed preload API 提交动作，不持有 Provider 实现、Secret Store 或 DB 权限。不添加采购等岗位页面。
+- **接口 / Schema：** Renderer 调用 `window.shuliu.tasks.create/get`、`window.shuliu.approvals.list/decide`、`window.shuliu.health.get` 和 `window.shuliu.providers.list/testConnection/saveProfile/replaceCredential`。API Key 只在用户触发的表单请求中短暂驻留内存，测试 / 保存结束后清空输入；不得写入 localStorage、普通配置、渲染日志、Event、错误文本或测试快照。Task 23 使用 Fake IPC 验证界面行为；实际 SecretRef / Gateway 调用由 Task 28 提供。
+- **测试文件：** 所列 UI tests 与 provider settings allowlist / secret redaction tests。
+- **RED：** 以 Fake IPC 测试创建 Task、拒绝审批后状态、Safe Mode 提示、缺权限隐藏 / 禁用；Provider 测试覆盖 Provider / Model 选择、输入 Key、测试连接成功 / 失败状态、保存、替换旧凭据、完成后清空 Key、错误 / snapshot / log 不包含原始 Key；无 UI / typed API 时失败。
+- **最小实现：** 页面 + typed API client + loading/error/empty states；Provider 按钮只调用窄 preload contract，不在 Task 23 内实现真实 Provider、模型调用或 Secret 持久化。
 - **GREEN 命令：** `pnpm --filter @shuliu/desktop test -- ui`。
 - **Refactor：** 页面只读写业务 API，不持有 Secret / DB access / arbitrary filesystem access。
 - **验收命令：** `pnpm --filter @shuliu/desktop test`；`pnpm --filter @shuliu/desktop typecheck`。
-- **完成标准：** 用户能查看任务、Approval、runtime health；拒绝 / 错误明确可见；UI 不能绕过 Policy。
+- **完成标准：** 用户能查看任务、Approval、runtime health，并能在统一设置页输入 API Key、选模型、发起连接测试、保存或更换凭据；UI 状态可用 Fake IPC 验收，明文 Key 不持久化 / 日志化；UI 不能绕过 Policy。真实 Provider 连接与安全存储由 Task 28 验收。
 - **Commit：** `feat: add foundation desktop task and approval UI`
 
 ### Task 24 — Browser Runtime
@@ -531,9 +531,9 @@ Skill 安全扫描同样是独立未完成能力；签名、Publisher 和 checks
 ### Task 28 — Real Model Provider Configuration / Connection Test
 
 - **目标：** 将配置化 Provider Profile、SecretRef/API Key 解析和受策略约束的真实连接测试接入现有 Model Gateway；Fake Provider 仍用于常规 CI。
-- **前置依赖：** Tasks 06、15。具体 Provider / Model 与测试凭据是运行环境输入，不是 Skill 字段或新 ADR；没有用户配置的 Secret 时，真实连接 Gate 为 BLOCKED，不得以 Fake 结果代替。
-- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/models/config.py`、`runtimes/python-worker/shuliu_runtime/models/connection.py`、`runtimes/python-worker/shuliu_runtime/models/gateway.py`、`runtimes/python-worker/tests/models/test_provider_configuration.py`、`runtimes/python-worker/tests/models/test_provider_secret_resolution.py`、`runtimes/python-worker/tests/models/test_provider_connection.py`、`tests/release/model-provider-evidence.schema.json`、`runtimes/python-worker/pyproject.toml`、`uv.lock`。
-- **创建 / 修改：** 提供经过校验的环境 / 组织级 Provider Profile 加载器、`secret_ref` 与 SecretResolver 集成、显式手动触发的连接测试入口及脱敏 evidence。只允许由 Gateway 经 Policy、预算、health 和 LiteLLM adapter 发出低敏 canary 请求；不得把 API Key 写入 manifest、普通配置、日志、异常、Evidence 或测试快照。为真实 Provider / Model 记录 license、数据处理与安全审查结果。
+- **前置依赖：** Tasks 06、15、22、23。具体 Provider / Model 与测试凭据是运行环境输入，不是 Skill 字段或新 ADR；没有用户配置的 Secret 时，真实连接 Gate 为 BLOCKED，不得以 Fake 结果代替。
+- **具体文件路径：** `runtimes/python-worker/shuliu_runtime/models/config.py`、`runtimes/python-worker/shuliu_runtime/models/connection.py`、`runtimes/python-worker/shuliu_runtime/models/gateway.py`、`runtimes/python-worker/tests/models/test_provider_configuration.py`、`runtimes/python-worker/tests/models/test_provider_secret_resolution.py`、`runtimes/python-worker/tests/models/test_provider_connection.py`、`apps/desktop/src/main/ipc/providers.ts`、`apps/desktop/src/preload/api.ts`、`apps/desktop/tests/ipc/provider-settings.test.ts`、`apps/desktop/tests/security/provider-secret-redaction.test.ts`、`tests/release/model-provider-evidence.schema.json`、`runtimes/python-worker/pyproject.toml`、`uv.lock`。
+- **创建 / 修改：** 提供经过校验的环境 / 组织级 Provider Profile 加载器、`secret_ref` 与 SecretResolver 集成、显式手动触发的连接测试入口及脱敏 evidence；实现 Task 23 声明的 Main / preload `providers.list/testConnection/saveProfile/replaceCredential` 窄接口并桥接 Python Model Gateway。只允许由 Gateway 经 Policy、预算、health 和 LiteLLM adapter 发出低敏 canary 请求；API Key 只能由 SecretResolver 写入 OS secure storage / Cloud Secret Manager，Profile 仅持有 `secret_ref`，不得把 API Key 写入 Renderer 持久状态、manifest、普通配置、日志、异常、Event、Evidence 或测试快照。为真实 Provider / Model 记录 license、数据处理与安全审查结果。
 - **接口 / Schema：** `ProviderProfile {provider_id, model, capabilities, priority, is_local, secret_ref, enabled}`；`test_provider_connection(provider_id, capability) -> ProviderConnectionResult {status, provider_id, model, capability, latency_ms, trace_id, safe_error_code}`。明文 credential 只允许在 adapter 调用期间存在内存中。
 - **测试文件：** 上述三个 `tests/models/test_provider_*.py` 与 release evidence schema test。
 - **RED：** 测试无效 / 重复 Provider、未知 capability、缺失 SecretRef、SecretResolver 不可用、明文 API Key 被序列化、连接错误泄露 credential、测试入口绕开 Policy / 预算、LOCAL_ONLY 错误路由；先运行 Model tests，预期新入口或约束缺失而失败。Fake-only evidence 必须被判定为没有真实连接证据。
@@ -544,6 +544,18 @@ Skill 安全扫描同样是独立未完成能力；签名、Publisher 和 checks
 - **完成标准：** 缺 Secret 或配置时安全失败；真实请求必须通过 Gateway、Policy、预算、SecretResolver；外部返回可以证明真实配置 Provider 成功完成 canary；CI Fake 测试与真实连接证据分开。无真实 Provider 配置或 Secret 时本任务保持未完成。
 - **Release Gate：** `real_model_provider_connection` 与 `model_provider_license_security`；任一缺失 / not-run 均 BLOCKED。
 - **Commit：** `feat: configure secure model providers and connection checks`
+
+#### Task 23 与 Task 28 的 Provider 设置职责边界
+
+| 用户操作 / 能力 | 负责任务 | UI / 实际实现文件 | 验收标准 |
+|---|---|---|---|
+| Provider / Model 选择与能力展示 | Task 23 | `apps/desktop/src/renderer/routes/settings/providers.tsx`、`apps/desktop/src/renderer/components/provider-profile-form.tsx` | 可选择配置中可用 Provider / Model 与 capability；未知 Provider / Model 有明确错误；不允许 Skill 固定 Provider。 |
+| API Key 输入 | Task 23 | `apps/desktop/src/renderer/components/provider-profile-form.tsx`、`apps/desktop/src/renderer/api/providers.ts`、`apps/desktop/src/preload/api.ts` | 使用受控敏感输入；只在用户操作时经 typed preload 传递；测试证明不进入 localStorage、日志、Event、异常或 snapshot，并在完成后清空。 |
+| 手动连接测试 | Task 23（界面）；Task 28（真实调用） | `apps/desktop/src/renderer/routes/settings/providers.tsx`、`apps/desktop/src/main/ipc/providers.ts`、`runtimes/python-worker/shuliu_runtime/models/connection.py` | Task 23 用 Fake IPC 验证 pending/success/failure 状态；Task 28 用已配置真实 Provider / Secret，经 Gateway、Policy、预算和 SecretResolver 发低敏 canary；Fake 不能满足真实 Gate。 |
+| 保存 Provider / Model 配置 | Task 23（界面）；Task 28（后端） | `apps/desktop/src/renderer/api/providers.ts`、`apps/desktop/src/main/ipc/providers.ts`、`runtimes/python-worker/shuliu_runtime/models/config.py` | 配置保存只保留 Provider / Model / capability / SecretRef，不保留明文 Key；未配置 Secret 时 fail closed。 |
+| 更换 / 替换 API Key | Task 23（界面）；Task 28（后端） | `apps/desktop/src/renderer/components/provider-profile-form.tsx`、`apps/desktop/src/main/ipc/providers.ts`、`runtimes/python-worker/shuliu_runtime/models/config.py` | 显示现有凭据“已配置”状态但不回显；新 Key 保存到 secure storage 并更新 SecretRef；旧引用按明确替换流程处理；日志与审计只记录 SecretRef / safe error code。 |
+
+Task 23 的 UI 可先用 Fake IPC 完成可交互验收；Task 28 才把相同 typed API 接到真实 Provider、Gateway 与安全存储。两个任务均不得把 API Key 暴露给 Skill、Browser Runtime 或普通 Renderer 持久化层。
 
 ### Task 29 — Persistent ModelCall / Cost / Budget
 
@@ -727,8 +739,8 @@ Skill 安全扫描同样是独立未完成能力；签名、Publisher 和 checks
 - **任务总数：36（原 27 项 + 补充 Task 28–36）。**
 - **直接可执行任务：36 项均有精确路径、依赖、接口 / Schema、测试、RED、最小实现、GREEN、Refactor、验收、完成标准、Release Gate 和 commit message；Task 25、Task 26、Task 34、Task 36 的 Windows 专属部分必须在 Windows runner / 实机验证。**
 - **Critical Architecture TBD：无。** 原计划审计出的 7 项能力缺口与 Skill 安全扫描均有独立实施任务和 Release Gate；实施配置 / Provider credentials 缺少时对应 Gate 保持 BLOCKED，不以 Fake 或最终验收代替实现。
-- **Implementation Plan 审批状态：已由用户批准；当前只执行 Task 18。** Task 28–36 与 Task 27 是后续施工和发布门槛；Task 35 补入独立安全扫描能力，Task 36 补入平台 sandbox provider 与攻击验证，不改变已 Accepted ADR。
+- **Implementation Plan 审批状态：已由用户批准；Task 21 Cloud API 本地验证完成，正在等待本轮远端 CI；只有全绿后才允许进入 Task 22。** Task 28–36 与 Task 27 是后续施工和发布门槛；Task 35 补入独立安全扫描能力，Task 36 补入平台 sandbox provider 与攻击验证，不改变已 Accepted ADR。
 
 ## 实施入口门禁
 
-当前从已批准顺序继续执行 Task 18；保持 `feat/foundation-v0.1` 独立 worktree，逐任务 TDD、独立提交并验证 CI。Task 18 完成后按用户要求暂停。后续依依赖拓扑完成 Task 19–26、Task 28–36，最后 Task 27 Release Gate；Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。
+Task 21 的代码与文档提交并推送后，须验证 Generic CI、PG17 / PG18、Windows Validation 全绿，才可视为正式完成；本轮工作不得自动进入 Task 22。后续按依赖拓扑完成 Task 22–26、Task 28–36，最后执行 Task 27 Release Gate；Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。

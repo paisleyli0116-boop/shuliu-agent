@@ -56,6 +56,9 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "schedules",
                 "schedule_occurrences",
                 "apscheduler_jobs",
+                "worker_registration_tokens",
+                "worker_session_tokens",
+                "worker_auth_challenges",
             } <= tables
 
             for table in {
@@ -106,6 +109,13 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 index["name"]
                 for index in inspector.get_indexes("worker_leases")
             }
+            fencing_constraints = inspector.get_unique_constraints("worker_leases")
+            assert any(
+                constraint["column_names"]
+                == ["organization_id", "task_id", "fencing_token"]
+                for constraint in fencing_constraints
+            )
+            assert {"device_key_algorithm", "device_public_key"} <= worker_columns
     finally:
         engine.dispose()
 

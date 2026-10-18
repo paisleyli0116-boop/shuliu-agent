@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 from typing import Protocol
 
 from shuliu_runtime.security.secret_store import SecretStore
 from shuliu_runtime.worker.credentials import (
     RegistrationGrant,
+    registration_proof_bytes,
     WorkerAuthenticationError,
     WorkerDeviceKeyStore,
     WorkerRegistrationOutcomeUnknown,
@@ -17,6 +19,7 @@ class WorkerRegistrationCloud(Protocol):
         self,
         registration_token: str,
         device_public_key: bytes,
+        device_signature: bytes,
         *,
         device_key_algorithm: str,
         worker_version: str,
@@ -50,10 +53,23 @@ class WorkerRegistrationClient:
                 "WORKER_REGISTRATION_TOKEN_INVALID", "worker registration token is invalid"
             )
         device_key_ref, public_key = self._device_keys.create()
+        proof_body: dict[str, object] = {
+            "registration_token": registration_token,
+            "worker_version": self._worker_version,
+            "protocol_version": 1,
+            "capabilities": list(self._capabilities),
+            "device_key_algorithm": self._device_keys.algorithm,
+            "device_public_key": base64.urlsafe_b64encode(public_key)
+            .rstrip(b"=")
+            .decode("ascii"),
+        }
         try:
             grant = self._cloud.register(
                 registration_token,
                 public_key,
+                self._device_keys.sign(
+                    device_key_ref, registration_proof_bytes(proof_body)
+                ),
                 device_key_algorithm=self._device_keys.algorithm,
                 worker_version=self._worker_version,
                 capabilities=self._capabilities,

@@ -7,7 +7,7 @@ from app.persistence.postgres import tasks
 from app.workers.coordinator import WorkerCoordinator
 from app.workers.leases import LeaseConfig, RecoveryDecision, WorkerCoordinatorError
 from shuliu_runtime.worker.protocol import validate_worker_message
-from sqlalchemy import select
+from sqlalchemy import insert, select
 
 
 def test_expired_lease_requires_explicit_safe_reconciliation_and_fences_old_worker(
@@ -76,6 +76,26 @@ def test_lease_renewal_rejects_a_stale_fencing_token(worker_harness):
         coordinator.renew(lease.lease_id, worker, fencing_token=lease.fencing_token + 1)
 
     assert error.value.code == "WORKER_LEASE_FENCED"
+
+
+def test_fencing_tokens_are_unique_within_each_task_and_worker_can_lease_multiple_tasks(worker_harness):
+    coordinator = worker_harness["coordinator"]
+    worker = worker_harness["principals"]["worker-old"]
+    first = coordinator.lease("task-1", worker, idempotency_key="first-effect")
+    with worker_harness["engine"].begin() as connection:
+        connection.execute(
+            insert(tasks).values(
+                task_id="task-2",
+                organization_id="org-1",
+                status="READY",
+                payload={"required_capabilities": ["worker.runtime"]},
+                created_at=worker_harness["clock"](),
+            )
+        )
+
+    second = coordinator.lease("task-2", worker, idempotency_key="second-effect")
+
+    assert second.fencing_token == first.fencing_token == 1
 
 
 def test_lease_capability_matching_fails_closed(worker_harness):

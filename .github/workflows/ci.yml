@@ -33,6 +33,8 @@ jobs:
       - run: uv sync --locked --all-packages
       - name: Run Cloud API identity unit tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/identity -q
+      - name: Run Cloud API route and authorization tests
+        run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/api services/cloud-api/tests/approval -q
       - name: Run Cloud Worker lease and coordination unit tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/workers -q -m "not integration"
       - name: Run Python Policy unit tests
@@ -53,8 +55,6 @@ jobs:
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q
       - name: Run repository security tests
         run: pnpm test:security
-      - name: Run Cloud API Approval route tests
-        run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/approval -q
       - name: Run Cloud API Knowledge unit tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
       - run: pnpm test:contract

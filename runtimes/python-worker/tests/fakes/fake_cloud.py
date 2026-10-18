@@ -10,10 +10,13 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Callable
 from uuid import uuid4
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from shuliu_runtime.worker.credentials import (
     RegistrationGrant,
     WorkerAuthenticationError,
+    registration_proof_bytes,
 )
 
 
@@ -75,6 +78,7 @@ class FakeCloud:
         self,
         registration_token: str,
         device_public_key: bytes,
+        device_signature: bytes,
         *,
         device_key_algorithm: str,
         worker_version: str,
@@ -92,6 +96,22 @@ class FakeCloud:
             raise WorkerAuthenticationError(
                 "WORKER_REGISTRATION_METADATA_INVALID", "worker registration metadata is invalid"
             )
+        proof_body = {
+            "registration_token": registration_token,
+            "worker_version": worker_version,
+            "protocol_version": 1,
+            "capabilities": list(capabilities),
+            "device_key_algorithm": device_key_algorithm,
+            "device_public_key": _b64url_encode(device_public_key),
+        }
+        try:
+            Ed25519PublicKey.from_public_bytes(device_public_key).verify(
+                device_signature, registration_proof_bytes(proof_body)
+            )
+        except (ValueError, InvalidSignature):
+            raise WorkerAuthenticationError(
+                "WORKER_DEVICE_SIGNATURE_INVALID", "worker device signature is invalid"
+            ) from None
         digest = hashlib.sha256(registration_token.encode("utf-8")).hexdigest()
         now = self._current_time()
         with self._lock:

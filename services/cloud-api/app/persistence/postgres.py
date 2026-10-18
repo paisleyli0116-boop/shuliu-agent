@@ -216,9 +216,54 @@ workers = Table(
     Column("worker_version", String(64), nullable=False, server_default="unknown"),
     Column("protocol_version", Integer, nullable=False, server_default="1"),
     Column("capabilities", JSON, nullable=False, server_default="[]"),
+    Column("device_key_algorithm", String(32)),
+    Column("device_public_key", LargeBinary),
     Column("last_heartbeat_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     UniqueConstraint("organization_id", "worker_id", name="uq_workers_org_worker"),
+)
+
+worker_registration_tokens = Table(
+    "worker_registration_tokens",
+    metadata,
+    Column("token_digest", String(64), primary_key=True),
+    Column("organization_id", String(128), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+worker_session_tokens = Table(
+    "worker_session_tokens",
+    metadata,
+    Column("jti", String(64), primary_key=True),
+    Column("organization_id", String(128), nullable=False),
+    Column("worker_id", String(128), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ["organization_id", "worker_id"],
+        ["workers.organization_id", "workers.worker_id"],
+        name="fk_worker_session_tokens_worker",
+    ),
+)
+
+worker_auth_challenges = Table(
+    "worker_auth_challenges",
+    metadata,
+    Column("challenge_id", String(64), primary_key=True),
+    Column("organization_id", String(128), nullable=False),
+    Column("worker_id", String(128), nullable=False),
+    Column("nonce", LargeBinary, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ["organization_id", "worker_id"],
+        ["workers.organization_id", "workers.worker_id"],
+        name="fk_worker_auth_challenges_worker",
+    ),
 )
 
 worker_leases = Table(
@@ -243,7 +288,7 @@ worker_leases = Table(
         name="fk_worker_leases_org_task",
     ),
     UniqueConstraint(
-        "organization_id", "worker_id", "fencing_token", name="uq_worker_fencing_token"
+        "organization_id", "task_id", "fencing_token", name="uq_worker_fencing_token"
     ),
 )
 Index(
