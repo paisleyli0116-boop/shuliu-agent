@@ -15,15 +15,122 @@
         "protocol_version": {
           "const": 1
         },
+        "message_type": {
+          "enum": ["register", "registered", "heartbeat", "lease", "ack", "progress", "cancel", "result", "error"]
+        },
         "payload": {
-          "$ref": "urn:shuliu:protocol:common:v1#/$defs/payload"
+          "type": "object"
         }
       },
       "required": [
         "protocol_name",
         "protocol_version",
+        "message_type",
         "payload"
       ]
+    },
+    {
+      "oneOf": [
+        { "type": "object", "properties": { "message_type": { "const": "register" }, "payload": { "$ref": "#/$defs/register" } } },
+        { "type": "object", "properties": { "message_type": { "const": "registered" }, "payload": { "$ref": "#/$defs/registered" } } },
+        { "type": "object", "properties": { "message_type": { "const": "heartbeat" }, "payload": { "$ref": "#/$defs/heartbeat" } } },
+        { "type": "object", "properties": { "message_type": { "const": "lease" }, "payload": { "$ref": "#/$defs/lease" } } },
+        { "type": "object", "properties": { "message_type": { "const": "ack" }, "payload": { "$ref": "#/$defs/ack" } } },
+        { "type": "object", "properties": { "message_type": { "const": "progress" }, "payload": { "$ref": "#/$defs/progress" } } },
+        { "type": "object", "properties": { "message_type": { "const": "cancel" }, "payload": { "$ref": "#/$defs/cancel" } } },
+        { "type": "object", "properties": { "message_type": { "const": "result" }, "payload": { "$ref": "#/$defs/result" } } },
+        { "type": "object", "properties": { "message_type": { "const": "error" }, "payload": { "$ref": "#/$defs/error" } } }
+      ]
     }
-  ]
+  ],
+  "$defs": {
+    "register": {
+      "type": "object",
+      "properties": {
+        "registration_token": { "type": "string", "minLength": 1 },
+        "worker_version": { "type": "string", "minLength": 1 },
+        "capabilities": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "device_key_algorithm": { "type": "string", "minLength": 1 },
+        "device_public_key": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}=?$" }
+      },
+      "required": ["registration_token", "worker_version", "capabilities", "device_key_algorithm", "device_public_key"]
+    },
+    "registered": {
+      "type": "object",
+      "properties": {
+        "worker_id": { "type": "string", "minLength": 1 },
+        "session_credential": { "type": "string", "minLength": 1 },
+        "expires_at": { "type": "string", "minLength": 1 }
+      },
+      "required": ["worker_id", "session_credential", "expires_at"]
+    },
+    "heartbeat": {
+      "type": "object",
+      "properties": {
+        "worker_id": { "type": "string", "minLength": 1 },
+        "sent_at": { "type": "string", "minLength": 1 }
+      },
+      "required": ["worker_id", "sent_at"]
+    },
+    "lease": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "fencing_token": { "type": "integer", "minimum": 1 },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "expires_at": { "type": "string", "minLength": 1 }
+      },
+      "required": ["task_id", "lease_id", "fencing_token", "idempotency_key", "expires_at"]
+    },
+    "ack": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "idempotency_key": { "type": "string", "minLength": 1 }
+      },
+      "required": ["task_id", "lease_id", "idempotency_key"]
+    },
+    "progress": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "progress": { "type": "object" }
+      },
+      "required": ["task_id", "lease_id", "idempotency_key", "progress"]
+    },
+    "cancel": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "reason_code": { "type": "string", "minLength": 1 }
+      },
+      "required": ["task_id", "lease_id", "reason_code"]
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["SUCCEEDED", "FAILED", "CANCELLED"] },
+        "result": { "type": "object" }
+      },
+      "required": ["task_id", "lease_id", "idempotency_key", "status", "result"]
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "code": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      },
+      "required": ["task_id", "lease_id", "code", "retryable"]
+    }
+  }
 }
