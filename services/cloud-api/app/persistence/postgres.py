@@ -22,8 +22,10 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    Text,
     UniqueConstraint,
     and_,
+    cast,
     create_engine,
     inspect,
     insert,
@@ -33,9 +35,30 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.types import UserDefinedType
 
 
 metadata = MetaData()
+
+
+class VectorType(UserDefinedType):
+    """Dimension-agnostic pgvector column; the active profile owns dimensions."""
+
+    cache_ok = True
+
+    def get_col_spec(self, **kw: object) -> str:
+        return "vector"
+
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None:
+                return None
+            return "[" + ",".join(format(float(item), ".17g") for item in value) + "]"
+
+        return process
+
+    def bind_expression(self, bindvalue):
+        return cast(bindvalue, self)
 
 schema_migrations = Table(
     "schema_migrations",
@@ -233,6 +256,41 @@ knowledge_documents = Table(
     ),
 )
 
+knowledge_chunks = Table(
+    "knowledge_chunks",
+    metadata,
+    Column("chunk_id", String(256), primary_key=True),
+    Column("organization_id", String(128), nullable=False),
+    Column("document_id", String(128), nullable=False),
+    Column("chunk_index", Integer, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("source_reference", JSON, nullable=False),
+    Column("embedding", VectorType(), nullable=False),
+    ForeignKeyConstraint(
+        ["organization_id", "document_id"],
+        ["knowledge_documents.organization_id", "knowledge_documents.document_id"],
+        name="fk_knowledge_chunks_org_document",
+        ondelete="CASCADE",
+    ),
+    UniqueConstraint(
+        "organization_id", "document_id", "chunk_index", name="uq_knowledge_chunks_order"
+    ),
+)
+
+knowledge_document_acl = Table(
+    "knowledge_document_acl",
+    metadata,
+    Column("organization_id", String(128), primary_key=True),
+    Column("document_id", String(128), primary_key=True),
+    Column("permission_code", String(160), primary_key=True),
+    ForeignKeyConstraint(
+        ["organization_id", "document_id"],
+        ["knowledge_documents.organization_id", "knowledge_documents.document_id"],
+        name="fk_knowledge_document_acl_org_document",
+        ondelete="CASCADE",
+    ),
+)
+
 schedules = Table(
     "schedules",
     metadata,
@@ -290,6 +348,16 @@ Index(
     knowledge_documents.c.organization_id,
     knowledge_documents.c.scope,
     knowledge_documents.c.classification,
+)
+Index(
+    "ix_knowledge_chunks_org_document",
+    knowledge_chunks.c.organization_id,
+    knowledge_chunks.c.document_id,
+)
+Index(
+    "ix_knowledge_document_acl_permission",
+    knowledge_document_acl.c.organization_id,
+    knowledge_document_acl.c.permission_code,
 )
 Index(
     "ix_memberships_org_user_status",

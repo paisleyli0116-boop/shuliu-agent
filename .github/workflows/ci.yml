@@ -47,6 +47,8 @@ jobs:
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/models -q
       - name: Run Cloud API Approval route tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/approval -q
+      - name: Run Cloud API Knowledge unit tests
+        run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
       - run: pnpm test:contract
       - run: pnpm test:migration
       - run: pnpm test:integration
@@ -94,3 +96,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: uv sync --locked --all-packages
       - run: pnpm test:migration
+      - name: Run PostgreSQL Knowledge unit and revocation tests
+        run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
+      - name: Run PostgreSQL Knowledge ACL integration tests
+        run: uv run --locked --package shuliu-cloud-api pytest tests/integration/test_knowledge_permissions.py -q
