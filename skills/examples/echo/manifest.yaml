@@ -1,0 +1,12 @@
+id: echo
+version: 1.0.0
+publisher: example-untrusted
+signature: AA==
+checksum: sha256:94687145e7966b93eff08bb0c478c9b52b1f97d0372d63cfdd9658892bab3527
+requires:
+  foundation: ">=0.1.0 <2.0.0"
+  skill_protocol: 1
+capabilities:
+  - text.echo
+permissions: []
+dependencies: {}
