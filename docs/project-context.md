@@ -35,7 +35,7 @@ Agent Core 只负责通用任务状态、运行编排和受控决策，不知道
 
 - `AGENTS.md`：每次新会话或开始工作时的项目入口与协作约束。
 - `docs/superpowers/specs/2026-10-17-shuliu-agent-foundation-v0.1-design.md`：架构事实源，明确范围、边界、协议和待决项。
-- `docs/superpowers/plans/2026-10-17-shuliu-agent-foundation-v0.1-implementation.md`：施工事实源。Implementation Plan 已获批准，现有 36 项逐文件 TDD 工程任务（含独立 Skill 安全扫描 Task 35、OS sandbox provider Task 36 和 Release Gate）；Task 21 Cloud API 已通过本地 TLS WSS / Worker Runtime 真实网络集成及服务端身份认证验证，GitHub Generic CI、PostgreSQL 17 / 18 和 Windows Validation 全绿；下一项为 Task 22 Electron ↔ Python IPC（本轮未开始）。经验证的 OS sandbox provider 尚未就绪，因此 executable Skill 默认 fail closed。计划获批不代表所有能力或 Release Gate 已完成。
+- `docs/superpowers/plans/2026-10-17-shuliu-agent-foundation-v0.1-implementation.md`：施工事实源。Implementation Plan 已获批准，现有 36 项逐文件 TDD 工程任务（含独立 Skill 安全扫描 Task 35、OS sandbox provider Task 36 和 Release Gate）；Task 21 Cloud API 与 Task 22 Electron ↔ Python IPC 已通过本地验收及 GitHub Generic CI、PostgreSQL 17 / 18 和 Windows Validation；下一项为 Task 23 Desktop UI，尚未开始。经验证的 OS sandbox provider 尚未就绪，因此 executable Skill 默认 fail closed。计划获批不代表所有能力或 Release Gate 已完成。
 - `docs/architecture-decisions.md`：按 Architecture Spec 汇总已确认与 Pending 的架构决策。
 - `docs/technical-baseline.md`：列出 Spec 已记录的技术基线及尚未归档到 Spec 的实现选型输入。
 - `docs/risk-register.md`：记录已知风险与需要验证的控制项；状态不表示功能已实现。
