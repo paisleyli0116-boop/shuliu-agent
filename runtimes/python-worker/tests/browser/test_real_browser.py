@@ -127,12 +127,18 @@ def real_factory():
 
 def launch_page(runtime, origin):
     launch = call(runtime, "launch")
-    assert launch.output["status"] == "VERIFIED", launch.output
+    assert launch.output["status"] == "VERIFIED", _diagnostic(launch.output)
     assert launch.output["browser"]["browser_version"] != "FAKE"
     session = launch.output["session_id"]
     navigated = call(runtime, "navigate", {"session_id": session, "url": origin + "/"}, key="real-nav")
-    assert navigated.output["status"] == "VERIFIED", navigated.output
+    assert navigated.output["status"] == "VERIFIED", _diagnostic(navigated.output)
     return session
+
+
+def _diagnostic(output):
+    observation = output.get("observation") or {}
+    return {"status": output.get("status"), "error_code": output.get("error_code"),
+            "outcome_unknown": output.get("outcome_unknown"), "observed_url": observation.get("url")}
 
 
 def observation(runtime, session):
@@ -280,9 +286,16 @@ def test_real_unapproved_origin_is_not_contacted(tmp_path, fixture_site, real_fa
     thread.start()
     runtime, *_ = make_runtime(tmp_path, factory=real_factory, origin=origin, timeout=10)
     try:
-        session = call(runtime, "launch").output["session_id"]
+        launched = call(runtime, "launch")
+        assert launched.output["status"] == "VERIFIED", _diagnostic(launched.output)
+        session = launched.output["session_id"]
         url = f"{origin}/{kind}?to=http://127.0.0.1:{server.server_port}/"
         result = call(runtime, "navigate", {"session_id": session, "url": url}, key="attack-nav")
+        if kind == "redirect":
+            assert result.output["status"] == "UNVERIFIED", _diagnostic(result.output)
+            assert result.output["error_code"] == "BROWSER_TARGET_DENIED", _diagnostic(result.output)
+        else:
+            assert result.output["status"] == "VERIFIED", _diagnostic(result.output)
         if kind == "popup":
             assert result.output["status"] == "VERIFIED", result.output
             element_action(runtime, session, "click", "Open popup", "Never", key="popup")

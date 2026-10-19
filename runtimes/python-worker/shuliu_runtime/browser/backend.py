@@ -99,8 +99,18 @@ class BrowserUseBackend:
                 if message.get("error"):
                     # Never propagate upstream exceptions, page text or driver stderr.
                     code = message["error"]
+                    if code == "BROWSER_START_FAILED" and message.get("stage") in {
+                        "import_browser", "construct_browser", "start_browser", "create_page",
+                        "register_guards", "configure_targets", "configure_network_guard",
+                        "disable_downloads", "read_browser_version",
+                    }:
+                        code = "BROWSER_START_" + message["stage"].upper() + "_FAILED"
                     raise BrowserError(code if code in {"BROWSER_TARGET_DENIED", "BROWSER_TARGET_CHANGED", "BROWSER_ACCOUNT_CHANGED",
-                        "BROWSER_ELEMENT_STALE", "BROWSER_ELEMENT_OBSCURED", "BROWSER_SENSITIVE_ELEMENT", "BROWSER_INPUT_UNSUPPORTED"}
+                        "BROWSER_ELEMENT_STALE", "BROWSER_ELEMENT_OBSCURED", "BROWSER_SENSITIVE_ELEMENT", "BROWSER_INPUT_UNSUPPORTED",
+                        "BROWSER_START_IMPORT_BROWSER_FAILED", "BROWSER_START_CONSTRUCT_BROWSER_FAILED", "BROWSER_START_START_BROWSER_FAILED",
+                        "BROWSER_START_CREATE_PAGE_FAILED", "BROWSER_START_REGISTER_GUARDS_FAILED", "BROWSER_START_CONFIGURE_TARGETS_FAILED",
+                        "BROWSER_START_CONFIGURE_NETWORK_GUARD_FAILED", "BROWSER_START_DISABLE_DOWNLOADS_FAILED",
+                        "BROWSER_START_READ_BROWSER_VERSION_FAILED"}
                         else "BROWSER_CONNECTION_LOST")
                 result = message.get("result")
                 if not isinstance(result, dict):

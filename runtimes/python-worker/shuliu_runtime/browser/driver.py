@@ -62,27 +62,41 @@ class Driver:
         self.browser = self.page = None
         self.allowed = frozenset()
         self.pending = set()
+        self.stage = "idle"
+        self.main_frame_id = None
+        self.navigation_denied = False
 
     async def request(self, operation, payload):
         if operation == "start":
+            self.stage = "import_browser"
             from browser_use import Browser
             self.allowed = frozenset(payload["allowed_origins"])
+            self.stage = "construct_browser"
             self.browser = Browser(headless=True, executable_path=payload["executable_path"],
                 user_data_dir=payload["profile"], downloads_path=str(Path(payload["profile"]) / "downloads"),
                 use_cloud=False, enable_default_extensions=False, accept_downloads=False,
                 chromium_sandbox=True, disable_security=False, keep_alive=False,
                 ignore_default_args=True, args=["--no-first-run", "--no-default-browser-check", "--disable-background-networking",
                     "--disable-extensions", "--disable-component-update", "--disable-sync", "--no-pings"])
+            self.stage = "start_browser"
             await self.browser.start()
+            self.stage = "create_page"
             self.page = await self.browser.new_page()
             session_id = await self.page.session_id
             client = self.browser.cdp_client
+            frame_tree = await client.send.Page.getFrameTree(session_id=session_id)
+            self.main_frame_id = frame_tree["frameTree"]["frame"]["id"]
+            self.stage = "register_guards"
             client.register.Fetch.requestPaused(self._intercept)
             client.register.Target.attachedToTarget(self._target_attached)
+            self.stage = "configure_targets"
             await client.send.Target.setAutoAttach({"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True})
+            self.stage = "configure_network_guard"
             await client.send.Fetch.enable({"patterns": [{"urlPattern": "*", "requestStage": "Request"}]}, session_id=session_id)
             await client.send.Network.setBypassServiceWorker({"bypass": True}, session_id=session_id)
+            self.stage = "disable_downloads"
             await client.send.Browser.setDownloadBehavior({"behavior": "deny"})
+            self.stage = "read_browser_version"
             version = await client.send.Browser.getVersion()
             return {"browser_version": version["product"], "process_id": os.getpid(),
                     "browser_pid": self.browser._local_browser_watchdog.browser_pid}
@@ -90,7 +104,15 @@ class Driver:
             return await self.observe()
         if operation == "navigate":
             check_url(payload["url"], self.allowed)
-            await self.page.goto(payload["url"])
+            self.navigation_denied = False
+            try:
+                await self.page.goto(payload["url"])
+            except Exception:
+                if self.navigation_denied:
+                    raise BrowserError("BROWSER_TARGET_DENIED") from None
+                raise
+            if self.navigation_denied:
+                raise BrowserError("BROWSER_TARGET_DENIED")
             await self.wait_ready(payload["url"])
         elif operation in ("click", "type"):
             element = await self.page.get_element(payload["node_id"])
@@ -184,6 +206,9 @@ class Driver:
         try:
             check_url(event["request"]["url"], self.allowed)
         except BrowserError:
+            if (event.get("resourceType") == "Document"
+                    and event.get("frameId") == self.main_frame_id):
+                self.navigation_denied = True
             await self.browser.cdp_client.send.Fetch.failRequest({"requestId": event["requestId"], "errorReason": "BlockedByClient"}, session_id=session_id)
         else:
             await self.browser.cdp_client.send.Fetch.continueRequest({"requestId": event["requestId"]}, session_id=session_id)
@@ -231,7 +256,12 @@ async def main():
             result = await driver.request(frame["operation"], frame["payload"])
             response = {"id": frame["id"], "result": result}
         except Exception as error:
-            response = {"id": frame["id"], "error": error.code if isinstance(error, BrowserError) else "BROWSER_CONNECTION_LOST"}
+            response = {"id": frame["id"], "error": error.code if isinstance(error, BrowserError) else
+                       ("BROWSER_START_FAILED" if frame["operation"] == "start" else "BROWSER_CONNECTION_LOST")}
+            if frame["operation"] == "start" and not isinstance(error, BrowserError):
+                # Only a fixed internal phase label crosses the protocol. Never
+                # emit exception text, paths, browser output, or page content.
+                response["stage"] = driver.stage
         PROTOCOL.write(json.dumps(response, ensure_ascii=True) + "\n")
         PROTOCOL.flush()
 
