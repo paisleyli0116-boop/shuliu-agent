@@ -20,6 +20,7 @@ members = ["services/cloud-api", "runtimes/python-worker"]
 [tool.pytest.ini_options]
 pythonpath = ["runtimes/python-worker", "services/cloud-api"]
 markers = [
+    "real_browser: launches real Chrome through the separately locked browser-use driver",
     "integration: exercises multiple Foundation persistence adapters",
     "migration: validates database migrations and migration state",
 ]

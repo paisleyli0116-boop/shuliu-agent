@@ -238,6 +238,9 @@ class ToolBroker:
         executor = self._registry._executor(tool_id)
         safe_args = dict(args)
         safe_context = dict(context)
+        # Executor resource/session ownership must use the authenticated identity,
+        # never a caller-controlled identity field in the request context.
+        safe_context["_principal"] = principal
         try:
             output = executor.execute(tool_id, safe_args, safe_context, idempotency_key)
         except Exception as error:

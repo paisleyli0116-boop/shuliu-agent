@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:shuliu:tool-payload:browser:v1",
+  "title": "Browser Tool result payload v1 (inside Tool Protocol)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "trace_id", "session_id", "retryable", "outcome_unknown", "evidence_ref"],
+  "properties": {
+    "status": {"enum": ["VERIFIED", "UNVERIFIED", "FAILED"]},
+    "trace_id": {"type": "string", "minLength": 1},
+    "session_id": {"type": ["string", "null"]},
+    "retryable": {"const": false},
+    "outcome_unknown": {"type": "boolean"},
+    "evidence_ref": {"type": "string", "minLength": 1},
+    "before_evidence_ref": {"type": "string", "minLength": 1},
+    "error_code": {"type": "string", "pattern": "^BROWSER_[A-Z_]+$"},
+    "browser": {
+      "type": "object", "additionalProperties": false,
+      "required": ["browser_version", "process_id"],
+      "properties": {"browser_version": {"type": "string"}, "process_id": {"type": "integer", "minimum": 0}}
+    },
+    "observation": {"$ref": "#/$defs/observation"}
+  },
+  "allOf": [{
+    "if": {"properties": {"status": {"const": "VERIFIED"}}},
+    "then": {"properties": {"outcome_unknown": {"const": false}, "error_code": false}}
+  }],
+  "$defs": {
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["observation_id", "url", "text", "trust", "scroll_y", "elements"],
+      "properties": {
+        "observation_id": {"type": "string", "minLength": 1},
+        "url": {"type": "string"},
+        "text": {"type": "string", "maxLength": 8000},
+        "trust": {"const": "UNTRUSTED_PAGE_CONTENT"},
+        "scroll_y": {"type": "number"},
+        "elements": {
+          "type": "array", "maxItems": 100,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["element_ref", "tag", "label"],
+            "properties": {"element_ref": {"type": "string", "minLength": 1},
+              "tag": {"type": "string"}, "label": {"type": "string", "maxLength": 256}}
+          }
+        }
+      }
+    }
+  }
+}

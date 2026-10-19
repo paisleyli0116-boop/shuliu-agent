@@ -28,6 +28,18 @@ jobs:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
       - run: uv sync --locked --all-packages
+      - name: Install separately locked browser-use driver
+        run: uv sync --locked --project runtimes/browser-driver --python 3.11
+      - name: Run Browser Runtime and real Windows Chrome integration tests
+        env:
+          SHULIU_REQUIRE_REAL_BROWSER: "1"
+        run: uv run --locked --all-packages pytest runtimes/python-worker/tests/browser tests/integration/test_browser_tool_policy.py -q --junitxml=browser-tests.xml
+      - name: Save real browser test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-tests-windows
+          path: browser-tests.xml
       - name: Run Python Skill process isolation tests
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q
       - name: Run Windows sandbox fail-closed validation

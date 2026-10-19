@@ -184,6 +184,18 @@ def test_broker_runs_identity_policy_executor_verification_then_event():
     assert executor.calls[0][1] == {"document_id": "doc-1"}
 
 
+def test_executor_identity_is_resolved_by_broker_not_supplied_by_caller():
+    broker, executor, _, _, _ = _broker()
+    broker.execute(
+        "foundation.document.write", {"document_id": "doc-1"}, _actor(),
+        _context(_principal=IdentityPrincipal("forged", "org-1", ())),
+        idempotency_key="identity-binding",
+    )
+    assert executor.calls[0][2]["_principal"] == IdentityPrincipal(
+        "agent-1", "org-1", ("foundation.document.write",)
+    )
+
+
 def test_invalid_arguments_are_rejected_before_identity_policy_or_executor():
     broker, executor, policy, _, order = _broker()
 

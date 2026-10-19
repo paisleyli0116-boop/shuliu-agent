@@ -31,6 +31,18 @@ jobs:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
       - run: uv sync --locked --all-packages
+      - name: Install separately locked browser-use driver
+        run: uv sync --locked --project runtimes/browser-driver --python 3.11
+      - name: Run Browser Runtime and real Chrome integration tests
+        env:
+          SHULIU_REQUIRE_REAL_BROWSER: "1"
+        run: uv run --locked --all-packages pytest runtimes/python-worker/tests/browser tests/integration/test_browser_tool_policy.py -q --junitxml=browser-tests.xml
+      - name: Save real browser test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-tests-${{ matrix.os }}
+          path: browser-tests.xml
       - name: Run Cloud API identity unit tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/identity -q
       - name: Run Cloud API route and authorization tests
@@ -55,6 +67,8 @@ jobs:
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q
       - name: Run repository security tests
         run: pnpm test:security
+      - name: Run TypeScript unit and Browser Fake contract tests
+        run: pnpm test:unit
       - name: Run Electron ↔ Python IPC tests with real subprocesses
         run: pnpm test:ipc
       - name: Run Desktop UI, IPC, and security unit tests
