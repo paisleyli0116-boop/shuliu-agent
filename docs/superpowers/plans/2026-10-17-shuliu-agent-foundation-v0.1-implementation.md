@@ -1,6 +1,6 @@
 # ShuLiu Agent Foundation V0.1 Implementation Plan
 
-> **状态：Implementation Plan 已获批准；Task 21、Task 22 实现、本地验证及 GitHub CI 均通过；Task 23 实现与本地验收通过，GitHub CI 待本次推送验证。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
+> **状态：Implementation Plan 已获批准；Task 21、Task 22、Task 23 实现、本地验证及 GitHub CI 均通过。** Architecture Spec 是架构事实源，本文件是施工事实源。计划获批不代表代码已实现、测试已通过或 Release 已批准。
 
 ## 目标与边界
 
@@ -480,7 +480,7 @@ Skill 安全扫描同样是独立未完成能力；签名、Publisher 和 checks
 - **完成标准：** 用户能查看任务、Approval、runtime health，并能在统一设置页输入 API Key、选模型、发起连接测试、保存或更换凭据；UI 状态可用 Fake IPC 验收，明文 Key 不持久化 / 日志化；UI 不能绕过 Policy。真实 Provider 连接与安全存储由 Task 28 验收。
 - **Commit：** `feat: add foundation desktop task and approval UI`
 
-**Task 23 本地执行记录（2026-10-19）：** 已实现统一工作台 Shell、任务 / 审批 / Runtime Health 与 Safe Mode 页面、Provider 设置交互、受控 Preload API 和 Main IPC。Provider 连接测试明确标记为模拟，未发起真实 Provider 请求；测试用 API Key 经 Main 进入既有 OS secure storage，UI 只返回脱敏状态，测试用户数据目录已在验证后删除。桌面 UI 9 个测试文件 / 23 项通过；Desktop typecheck、build、Root typecheck、Security 8 项、`pnpm test:ipc`（真实 Electron Main + Python Sidecar）及 Python 全套（255 passed / 8 skipped）通过。Worker-only 测试范围为 206 passed / 3 skipped；该命令只运行 `runtimes/python-worker/tests`，Task 21 的 240 项报告属于全 Python 包范围。Task 22 在 Worker 范围新增 IPC Server / Sidecar 测试，不存在从全套清单中删去 Worker 测试的改动。实际 Electron 版本 44.9.0 的内嵌 Node 为 24.22.0；本机项目 Node 工具链为 22.22.2（满足 >=22.12），GitHub CI 按 `.node-version` 锁定 22.23.3。已通过源码构建的真实 GUI 启动、导航、任务 / Provider 输入与操作、Sidecar 不可用时 Safe Mode、Renderer API 白名单检查及正常退出 smoke；安装包启动和升级 / 回滚验证仍属于 Task 26。截图留档：`docs/evidence/task-23-desktop-task-workspace.png`、`docs/evidence/task-23-desktop-provider-settings.png`。本记录当前等待 GitHub CI 结果。
+**Task 23 执行记录（2026-10-19）：** 已实现统一工作台 Shell、任务 / 审批 / Runtime Health 与 Safe Mode 页面、Provider 设置交互、受控 Preload API 和 Main IPC。Provider 连接测试明确标记为模拟，未发起真实 Provider 请求；测试用 API Key 经 Main 进入既有 OS secure storage，UI 只返回脱敏状态，测试用户数据目录已在验证后删除。桌面 UI 9 个测试文件 / 23 项通过；Desktop typecheck、build、Root typecheck、Security 8 项、`pnpm test:ipc`（真实 Electron Main + Python Sidecar）及 Python 全套（255 passed / 8 skipped）通过。Worker-only 测试范围为 206 passed / 3 skipped；该命令只运行 `runtimes/python-worker/tests`，Task 21 的 240 项报告属于全 Python 包范围。Task 22 在 Worker 范围新增 IPC Server / Sidecar 测试，不存在从全套清单中删去 Worker 测试的改动。实际 Electron 版本 44.9.0 的内嵌 Node 为 24.22.0；本机项目 Node 工具链为 22.22.2（满足 >=22.12），GitHub CI 按 `.node-version` 锁定 22.23.3。已通过源码构建的真实 GUI 启动、导航、任务 / Provider 输入与操作、Sidecar 不可用时 Safe Mode、Renderer API 白名单检查及正常退出 smoke；安装包启动和升级 / 回滚验证仍属于 Task 26。截图留档：`docs/evidence/task-23-desktop-task-workspace.png`、`docs/evidence/task-23-desktop-provider-settings.png`。Task 23 commit `23b4f561ac4d87e4d10466da993206ad3672e5b9` 的 Generic CI run `39196822845`（Linux、macOS、PostgreSQL 17 / 18）与 Windows Validation run `39196822808` 均通过。
 
 ### Task 24 — Browser Runtime
 
@@ -742,8 +742,8 @@ Task 23 的 UI 可先用 Fake IPC 完成可交互验收；Task 28 才把相同 t
 - **任务总数：36（原 27 项 + 补充 Task 28–36）。**
 - **直接可执行任务：36 项均有精确路径、依赖、接口 / Schema、测试、RED、最小实现、GREEN、Refactor、验收、完成标准、Release Gate 和 commit message；Task 25、Task 26、Task 34、Task 36 的 Windows 专属部分必须在 Windows runner / 实机验证。**
 - **Critical Architecture TBD：无。** 原计划审计出的 7 项能力缺口与 Skill 安全扫描均有独立实施任务和 Release Gate；实施配置 / Provider credentials 缺少时对应 Gate 保持 BLOCKED，不以 Fake 或最终验收代替实现。
-- **Implementation Plan 审批状态：已由用户批准；Task 21 Cloud API 与 Task 22 Electron ↔ Python IPC 的本地验证和 GitHub CI（Generic Linux / macOS、PostgreSQL 17 / 18、Windows Validation）均通过；Task 23 的本地实现 / 验收通过，当前 CI 待推送验证。** Task 28–36 与 Task 27 是后续施工和发布门槛；Task 35 补入独立安全扫描能力，Task 36 补入平台 sandbox provider 与攻击验证，不改变已 Accepted ADR。
+- **Implementation Plan 审批状态：已由用户批准；Task 21–23 的本地验证和 GitHub CI（Generic Linux / macOS、PostgreSQL 17 / 18、Windows Validation）均通过。** Task 24–26、Task 28–36 与 Task 27 是后续施工和发布门槛；Task 35 补入独立安全扫描能力，Task 36 补入平台 sandbox provider 与攻击验证，不改变已 Accepted ADR。
 
 ## 实施入口门禁
 
-Task 22 已提交并推送；真实 Electron Main ↔ Python Sidecar 子进程测试、Generic Linux / macOS、PG17 / PG18 与 Windows Validation 全绿。Task 23 已完成本地 RED → GREEN、桌面 Smoke 和安全边界验证，提交后等待 GitHub Generic、PG17 / PG18 与 Windows Validation；全部通过后继续 Task 24。后续按依赖拓扑完成 Task 24–26、Task 28–36，最后执行 Task 27 Release Gate；Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。
+Task 23 已提交并推送；Desktop UI、真实 Electron / Python Sidecar IPC、Generic Linux / macOS、PG17 / PG18 与 Windows Validation 全绿。下一项按依赖拓扑执行 Task 24；其后完成 Task 25–26、Task 28–36，最后执行 Task 27 Release Gate。Windows-only 项不得在 Mac 上标记完成。出现架构边界变化时先更新 Architecture Spec / ADR，再继续相关任务。
