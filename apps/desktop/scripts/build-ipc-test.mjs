@@ -20,11 +20,12 @@ await writeFile(resolve(buildDirectory, "package.json"), JSON.stringify({ type: 
 const require = createRequire(import.meta.url);
 const preloadApi = require(resolve(buildDirectory, "preload/api.js"));
 const rendererApiFactory = preloadApi.createRendererApi.toString().replaceAll(
-  "exports.RUNTIME_HEALTH_CHANNEL",
-  JSON.stringify(preloadApi.RUNTIME_HEALTH_CHANNEL),
+  "exports.DESKTOP_IPC_CHANNELS",
+  "DESKTOP_IPC_CHANNELS",
 );
 const preloadBundle = [
   'const { contextBridge, ipcRenderer } = require("electron");',
+  `const DESKTOP_IPC_CHANNELS = ${JSON.stringify(preloadApi.DESKTOP_IPC_CHANNELS)};`,
   `const createRendererApi = ${rendererApiFactory};`,
   'contextBridge.exposeInMainWorld("shuliu", createRendererApi((channel) => ipcRenderer.invoke(channel)));',
   "",

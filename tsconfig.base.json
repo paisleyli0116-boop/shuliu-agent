@@ -17,5 +17,8 @@
     "apps/**/*.ts",
     "packages/**/*.ts",
     "tests/**/*.ts"
+  ],
+  "exclude": [
+    "apps/desktop/src/renderer/**/*.ts"
   ]
 }

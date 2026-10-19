@@ -36,6 +36,12 @@ jobs:
         run: pnpm test:security
       - name: Run Electron ↔ Python IPC tests with real subprocesses
         run: pnpm test:ipc
+      - name: Run Desktop UI, IPC, and security unit tests
+        run: pnpm --filter @shuliu/desktop test
+      - name: Typecheck Electron Main, Preload, and Renderer
+        run: pnpm --filter @shuliu/desktop typecheck
+      - name: Build unpackaged Desktop Main, Preload, and Renderer
+        run: pnpm --filter @shuliu/desktop build
       - name: Validate Windows packaging tools
         shell: pwsh
         run: |

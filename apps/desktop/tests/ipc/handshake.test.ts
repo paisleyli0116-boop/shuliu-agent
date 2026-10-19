@@ -77,7 +77,7 @@ describe("Electron/Python NDJSON IPC", () => {
     });
     await expect(api.runtime.health.get()).resolves.toEqual({ status: "healthy" });
     expect(invokeCalls).toEqual([["shuliu:runtime:health:get"]]);
-    expect(Object.keys(api)).toEqual(["runtime"]);
+    expect(Object.keys(api).sort()).toEqual(["approvals", "providers", "runtime", "tasks"]);
 
     const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
     const ipcMain = { handle: (channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => handlers.set(channel, handler) };
