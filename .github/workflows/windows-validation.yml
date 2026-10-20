@@ -94,11 +94,8 @@ jobs:
           $env:SHULIU_ARTIFACTS_DIR = $v2
           corepack pnpm --filter @shuliu/desktop package:windows 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "task26-package-v2.log")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Sign and verify the update package
+      - name: Sign and verify update package with CI-only ephemeral key
         shell: pwsh
-        env:
-          SHULIU_UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.SHULIU_UPDATE_SIGNING_PRIVATE_KEY }}
-          SHULIU_UPDATE_SIGNING_KEY_ID: ${{ secrets.SHULIU_UPDATE_SIGNING_KEY_ID }}
         run: |
           $ErrorActionPreference = "Stop"
           $evidence = Join-Path $env:RUNNER_TEMP "shuliu-task26-evidence"
@@ -107,34 +104,28 @@ jobs:
           if ($installers.Count -ne 1) { throw "V2_INSTALLER_COUNT_INVALID" }
           $publicPath = Join-Path $evidence "update-verification-key.pem"
           $packagePath = Join-Path $evidence "signed-update"
-          $temporaryKeyDirectory = $null
-          $privateKeyPath = $null
-          if ([string]::IsNullOrWhiteSpace($env:SHULIU_UPDATE_SIGNING_PRIVATE_KEY)) {
-            $temporaryKeyDirectory = Join-Path $env:RUNNER_TEMP ("task26-ephemeral-key-" + [guid]::NewGuid().ToString("N"))
+          $temporaryKeyDirectory = Join-Path $env:RUNNER_TEMP ("task26-ephemeral-key-" + [guid]::NewGuid().ToString("N"))
+          $privateKeyPath = Join-Path $temporaryKeyDirectory "private.pem"
+          try {
             node apps/desktop/scripts/create-ci-test-signing-key.mjs $temporaryKeyDirectory
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $privateKeyPath = Join-Path $temporaryKeyDirectory "private.pem"
+            if ($LASTEXITCODE -ne 0) { throw "CI_TEST_SIGNING_KEY_GENERATION_FAILED" }
             $env:SHULIU_UPDATE_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath $privateKeyPath -Raw
             $env:SHULIU_UPDATE_SIGNING_KEY_ID = "ci-ephemeral"
-          } elseif ([string]::IsNullOrWhiteSpace($env:SHULIU_UPDATE_SIGNING_KEY_ID)) {
-            throw "UPDATE_SIGNING_KEY_ID_REQUIRED"
-          }
-          $env:SHULIU_UPDATE_TARGET_VERSION = "0.1.1"
-          $env:SHULIU_UPDATE_PUBLIC_KEY_OUTPUT = $publicPath
-          try {
+            $env:SHULIU_UPDATE_TARGET_VERSION = "0.1.1"
+            $env:SHULIU_UPDATE_PUBLIC_KEY_OUTPUT = $publicPath
             node apps/desktop/scripts/sign-update-package.mjs $installers[0].FullName $packagePath 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "task26-sign-update.log")
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($LASTEXITCODE -ne 0) { throw "CI_TEST_PACKAGE_SIGNING_FAILED" }
             node apps/desktop/scripts/verify-update-package.mjs $packagePath $publicPath
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($LASTEXITCODE -ne 0) { throw "CI_TEST_PACKAGE_VERIFICATION_FAILED" }
           } finally {
             Remove-Item Env:SHULIU_UPDATE_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+            Remove-Item Env:SHULIU_UPDATE_SIGNING_KEY_ID -ErrorAction SilentlyContinue
+            Remove-Item Env:SHULIU_UPDATE_TARGET_VERSION -ErrorAction SilentlyContinue
             Remove-Item Env:SHULIU_UPDATE_PUBLIC_KEY_OUTPUT -ErrorAction SilentlyContinue
-            if ($privateKeyPath -and (Test-Path -LiteralPath $privateKeyPath)) { Remove-Item -LiteralPath $privateKeyPath -Force }
-            if ($temporaryKeyDirectory) {
-              $temporaryPublicKey = Join-Path $temporaryKeyDirectory "public.pem"
-              if (Test-Path -LiteralPath $temporaryPublicKey) { Remove-Item -LiteralPath $temporaryPublicKey -Force }
-              if (Test-Path -LiteralPath $temporaryKeyDirectory) { Remove-Item -LiteralPath $temporaryKeyDirectory -Force }
-            }
+            if (Test-Path -LiteralPath $privateKeyPath) { Remove-Item -LiteralPath $privateKeyPath -Force }
+            $temporaryPublicKey = Join-Path $temporaryKeyDirectory "public.pem"
+            if (Test-Path -LiteralPath $temporaryPublicKey) { Remove-Item -LiteralPath $temporaryPublicKey -Force }
+            if (Test-Path -LiteralPath $temporaryKeyDirectory) { Remove-Item -LiteralPath $temporaryKeyDirectory -Force }
           }
       - name: Install and smoke-test the Windows package, Safe Mode, and uninstall
         shell: pwsh

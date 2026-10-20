@@ -72,6 +72,13 @@ describe("Foundation repository layout", () => {
     expect(read("runtimes/python-worker/pyproject.toml")).toContain('name = "shuliu-python-runtime"');
   });
 
+  it("keeps release signing credentials out of branch validation", () => {
+    const windows = read(".github/workflows/windows-validation.yml");
+    expect(windows).not.toContain("secrets.SHULIU_UPDATE_SIGNING_PRIVATE_KEY");
+    expect(windows).not.toContain("secrets.SHULIU_UPDATE_SIGNING_KEY_ID");
+    expect(windows).toContain('$env:SHULIU_UPDATE_SIGNING_KEY_ID = "ci-ephemeral"');
+  });
+
   it("keeps generic and Windows-only CI validation in separate workflows", () => {
     const generic = read(".github/workflows/ci.yml");
     const windows = read(".github/workflows/windows-validation.yml");
