@@ -21,6 +21,9 @@ class UnknownMigrationError(MigrationError):
     """The database contains a migration not known to this runtime."""
 
 
+DATABASE_SCHEMA_VERSION = "1.0.0"
+
+
 class IdempotencyConflictError(RuntimeError):
     """An idempotency key was reused for a different event payload."""
 

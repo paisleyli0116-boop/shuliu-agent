@@ -8,7 +8,7 @@ on:
 
 jobs:
   windows-validation:
-    name: Windows-only build and installer toolchain
+    name: Windows-only build, install, upgrade, rollback, and runtime validation
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +38,7 @@ jobs:
         with:
           name: computer-runtime-windows
           path: computer-tests.xml
+          if-no-files-found: warn
       - name: Install separately locked browser-use driver
         run: uv sync --locked --project runtimes/browser-driver --python 3.11
       - name: Run Browser Runtime and real Windows Chrome integration tests
@@ -50,6 +51,7 @@ jobs:
         with:
           name: browser-tests-windows
           path: browser-tests.xml
+          if-no-files-found: warn
       - name: Run Python Skill process isolation tests
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/skills -q
       - name: Run Windows sandbox fail-closed validation
@@ -58,21 +60,118 @@ jobs:
         run: pnpm test:security
       - name: Run Electron ↔ Python IPC tests with real subprocesses
         run: pnpm test:ipc
+      - name: Run Task 26 update, signature, health-probe, and packaging tests
+        shell: pwsh
+        run: |
+          corepack pnpm --filter @shuliu/desktop exec vitest run --root . tests/update tests/ipc/sidecar-launch.test.ts --reporter=default --reporter=junit --outputFile "$env:RUNNER_TEMP\task26-desktop-tests.xml"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run Desktop UI, IPC, and security unit tests
         run: pnpm --filter @shuliu/desktop test
       - name: Typecheck Electron Main, Preload, and Renderer
         run: pnpm --filter @shuliu/desktop typecheck
-      - name: Build unpackaged Desktop Main, Preload, and Renderer
+      - name: Build Electron Main, Preload, and Renderer
         run: pnpm --filter @shuliu/desktop build
-      - name: Validate Windows packaging tools
+      - name: Build standalone Windows Python Sidecar
         shell: pwsh
         run: |
-          python -m pip install pyinstaller
-          choco install nsis --yes --no-progress
-          pyinstaller --version
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /VERSION
+          $ErrorActionPreference = "Stop"
+          $log = Join-Path $env:RUNNER_TEMP "task26-pyinstaller.log"
+          uv run --locked pyinstaller --noconfirm --clean --distpath runtimes/python-worker/dist --workpath runtimes/python-worker/build apps/desktop/build/windows.spec *> $log
+          if ($LASTEXITCODE -ne 0) { Get-Content -LiteralPath $log -Tail 100; exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath "runtimes/python-worker/dist/ShuLiuRuntime.exe")) { throw "PYINSTALLER_OUTPUT_MISSING" }
+      - name: Build installable Windows NSIS packages for upgrade and rollback
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $v1 = Join-Path $env:RUNNER_TEMP "task26-installer-v1"
+          $v2 = Join-Path $env:RUNNER_TEMP "task26-installer-v2"
+          New-Item -ItemType Directory -Path $v1, $v2 -Force | Out-Null
+          $env:SHULIU_PACKAGE_VERSION = "0.1.0"
+          $env:SHULIU_ARTIFACTS_DIR = $v1
+          corepack pnpm --filter @shuliu/desktop package:windows 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "task26-package-v1.log")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:SHULIU_PACKAGE_VERSION = "0.1.1"
+          $env:SHULIU_ARTIFACTS_DIR = $v2
+          corepack pnpm --filter @shuliu/desktop package:windows 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "task26-package-v2.log")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Sign and verify the update package
+        shell: pwsh
+        env:
+          SHULIU_UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.SHULIU_UPDATE_SIGNING_PRIVATE_KEY }}
+          SHULIU_UPDATE_SIGNING_KEY_ID: ${{ secrets.SHULIU_UPDATE_SIGNING_KEY_ID }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidence = Join-Path $env:RUNNER_TEMP "shuliu-task26-evidence"
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP "task26-installer-v2") -File -Filter "*.exe")
+          if ($installers.Count -ne 1) { throw "V2_INSTALLER_COUNT_INVALID" }
+          $publicPath = Join-Path $evidence "update-verification-key.pem"
+          $packagePath = Join-Path $evidence "signed-update"
+          $temporaryKeyDirectory = $null
+          $privateKeyPath = $null
+          if ([string]::IsNullOrWhiteSpace($env:SHULIU_UPDATE_SIGNING_PRIVATE_KEY)) {
+            $temporaryKeyDirectory = Join-Path $env:RUNNER_TEMP ("task26-ephemeral-key-" + [guid]::NewGuid().ToString("N"))
+            node apps/desktop/scripts/create-ci-test-signing-key.mjs $temporaryKeyDirectory
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $privateKeyPath = Join-Path $temporaryKeyDirectory "private.pem"
+            $env:SHULIU_UPDATE_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath $privateKeyPath -Raw
+            $env:SHULIU_UPDATE_SIGNING_KEY_ID = "ci-ephemeral"
+          } elseif ([string]::IsNullOrWhiteSpace($env:SHULIU_UPDATE_SIGNING_KEY_ID)) {
+            throw "UPDATE_SIGNING_KEY_ID_REQUIRED"
+          }
+          $env:SHULIU_UPDATE_TARGET_VERSION = "0.1.1"
+          $env:SHULIU_UPDATE_PUBLIC_KEY_OUTPUT = $publicPath
+          try {
+            node apps/desktop/scripts/sign-update-package.mjs $installers[0].FullName $packagePath 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP "task26-sign-update.log")
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            node apps/desktop/scripts/verify-update-package.mjs $packagePath $publicPath
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Remove-Item Env:SHULIU_UPDATE_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+            Remove-Item Env:SHULIU_UPDATE_PUBLIC_KEY_OUTPUT -ErrorAction SilentlyContinue
+            if ($privateKeyPath -and (Test-Path -LiteralPath $privateKeyPath)) { Remove-Item -LiteralPath $privateKeyPath -Force }
+            if ($temporaryKeyDirectory) {
+              $temporaryPublicKey = Join-Path $temporaryKeyDirectory "public.pem"
+              if (Test-Path -LiteralPath $temporaryPublicKey) { Remove-Item -LiteralPath $temporaryPublicKey -Force }
+              if (Test-Path -LiteralPath $temporaryKeyDirectory) { Remove-Item -LiteralPath $temporaryKeyDirectory -Force }
+            }
+          }
+      - name: Install and smoke-test the Windows package, Safe Mode, and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP "task26-installer-v2") -File -Filter "*.exe")
+          if ($installers.Count -ne 1) { throw "V2_INSTALLER_COUNT_INVALID" }
+          $evidence = Join-Path $env:RUNNER_TEMP "shuliu-task26-evidence\installer-smoke"
+          pwsh -NoProfile -File tests/e2e/windows/test_installer_smoke.ps1 -InstallerPath $installers[0].FullName -EvidenceDirectory $evidence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify upgrade, failed-runtime Safe Mode, rollback, and data preservation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $previous = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP "task26-installer-v1") -File -Filter "*.exe")
+          $next = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP "task26-installer-v2") -File -Filter "*.exe")
+          if ($previous.Count -ne 1 -or $next.Count -ne 1) { throw "INSTALLER_COUNT_INVALID" }
+          $evidence = Join-Path $env:RUNNER_TEMP "shuliu-task26-evidence\upgrade-rollback"
+          pwsh -NoProfile -File tests/e2e/windows/test_upgrade_rollback.ps1 -PreviousInstallerPath $previous[0].FullName -NextInstallerPath $next[0].FullName -EvidenceDirectory $evidence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload Task 26 installers, reports, logs, and signed update evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task26-windows-installers-and-evidence
+          path: |
+            ${{ runner.temp }}/task26-installer-v1/*.exe
+            ${{ runner.temp }}/task26-installer-v2/*.exe
+            ${{ runner.temp }}/task26-desktop-tests.xml
+            ${{ runner.temp }}/task26-pyinstaller.log
+            ${{ runner.temp }}/task26-package-v1.log
+            ${{ runner.temp }}/task26-package-v2.log
+            ${{ runner.temp }}/task26-sign-update.log
+            ${{ runner.temp }}/shuliu-task26-evidence/**
+          if-no-files-found: warn
       - name: Confirm Windows runner
         shell: pwsh
         run: |
           if ($env:RUNNER_OS -ne "Windows") { throw "Windows-only validation ran on the wrong runner" }
-          Write-Output "Windows toolchain verified; runtime, installer upgrade, and rollback smoke tests are added in Tasks 25-27."
+          Write-Output "Task 26 package, install, health, upgrade, Safe Mode, rollback, and uninstall gates ran on Windows."

@@ -1,0 +1,27 @@
+{
+  "appId": "com.shuliu.foundation",
+  "productName": "ShuLiu Agent",
+  "asar": true,
+  "files": ["dist/**/*", "package.json"],
+  "extraResources": [
+    {
+      "from": "../../runtimes/python-worker/dist",
+      "to": "python",
+      "filter": ["ShuLiuRuntime.exe"]
+    }
+  ],
+  "win": {
+    "target": [{ "target": "nsis", "arch": ["x64"] }],
+    "signAndEditExecutable": false,
+    "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "deleteAppDataOnUninstall": false,
+    "include": "installer/installer.nsi"
+  }
+}

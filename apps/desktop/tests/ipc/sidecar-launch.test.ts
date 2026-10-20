@@ -25,3 +25,22 @@ describe("Python Sidecar launch options", () => {
     expect(createSidecarLaunchOptions(repositoryRoot, {}, "darwin").command).toBe("python3");
   });
 });
+
+describe("packaged Python Sidecar launch options", () => {
+  it("starts the bundled runtime from resources and writes local state only under user data", () => {
+    const resourcesPath = resolve("/installed/resources");
+    const userDataPath = resolve("/profile/shuliu");
+    const launch = createSidecarLaunchOptions(
+      resolve("/installed/resources/app.asar"),
+      {},
+      "win32",
+      { packaged: true, resourcesPath, userDataPath },
+    );
+
+    expect(launch.command).toBe(resolve(resourcesPath, "python", "ShuLiuRuntime.exe"));
+    expect(launch.args).toEqual([]);
+    expect(launch.cwd).toBe(userDataPath);
+    expect(launch.env.SHULIU_DATA_DIR).toBe(userDataPath);
+    expect(launch.env.PYTHONPATH).toBeUndefined();
+  });
+});

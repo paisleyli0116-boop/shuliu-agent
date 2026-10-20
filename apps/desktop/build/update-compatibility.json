@@ -1,0 +1,11 @@
+{
+  "compatibility": {
+    "foundation": "^0.1.0",
+    "runtime": "^0.1.0",
+    "worker": "^0.1.0",
+    "skill_protocol": "^1.0.0",
+    "event_schema": "^1.0.0",
+    "database_schema": "^1.0.0",
+    "python_runtime": "^3.11.0"
+  }
+}

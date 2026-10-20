@@ -9,6 +9,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO
 
+from shuliu_runtime.ipc.bootstrap import RuntimeBootstrapError, bootstrap_runtime
+
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
@@ -29,8 +31,11 @@ class IpcRequestCancelled(Exception):
 
 
 def _validator() -> Draft202012Validator:
-    repository_root = Path(__file__).resolve().parents[4]
-    schema_root = repository_root / "packages" / "protocols" / "schemas"
+    if getattr(sys, "frozen", False):
+        schema_root = Path(getattr(sys, "_MEIPASS")) / "schemas"
+    else:
+        repository_root = Path(__file__).resolve().parents[4]
+        schema_root = repository_root / "packages" / "protocols" / "schemas"
     common = json.loads((schema_root / "common-v1.schema.json").read_text(encoding="utf-8"))
     runtime_ipc = json.loads((schema_root / "runtime-ipc-v1.schema.json").read_text(encoding="utf-8"))
     registry = Registry().with_resource(common["$id"], Resource.from_contents(common))
@@ -79,8 +84,10 @@ class IpcServer:
         handlers: Mapping[str, RequestHandler] | None = None,
         *,
         max_concurrent_requests: int = _MAX_CONCURRENT_REQUESTS,
+        health_state: Mapping[str, Any] | None = None,
     ) -> None:
         self._handlers = dict(handlers or {})
+        self._health_state = dict(health_state or {"status": "healthy"})
         self._handlers.setdefault("runtime.handshake", self._handshake)
         self._handlers.setdefault("runtime.health", self._health)
         self._max_concurrent_requests = max(1, min(max_concurrent_requests, 128))
@@ -89,9 +96,8 @@ class IpcServer:
     def _handshake(_: Mapping[str, Any], __: threading.Event) -> dict[str, Any]:
         return {"protocol_version": 1, "status": "ready"}
 
-    @staticmethod
-    def _health(_: Mapping[str, Any], __: threading.Event) -> dict[str, Any]:
-        return {"status": "healthy"}
+    def _health(self, _: Mapping[str, Any], __: threading.Event) -> dict[str, Any]:
+        return dict(self._health_state)
 
     def serve(
         self,
@@ -179,10 +185,36 @@ class IpcServer:
             executor.shutdown(wait=True, cancel_futures=False)
 
 
-def main() -> None:
+def _runtime_data_directory() -> Path:
+    configured = __import__("os").environ.get("SHULIU_DATA_DIR")
+    if configured:
+        return Path(configured)
+    local_app_data = __import__("os").environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "ShuLiu Agent" / "User Data"
+    return Path.home() / ".local" / "share" / "shuliu-agent"
+
+
+def main() -> int:
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
-    IpcServer().serve()
+    try:
+        bootstrap = bootstrap_runtime(_runtime_data_directory())
+    except RuntimeBootstrapError as error:
+        logger.error("event=runtime_bootstrap_failed code=%s", error.code)
+        return 1
+
+    health_state = {
+        "status": "healthy",
+        "components": {
+            "database": {
+                "status": "healthy",
+                "schema_version": bootstrap.database_schema,
+            },
+        },
+    }
+    IpcServer(health_state=health_state).serve()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

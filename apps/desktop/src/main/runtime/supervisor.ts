@@ -20,6 +20,7 @@ const safeLogLevel = new Set(["DEBUG", "INFO", "WARN", "ERROR"]);
 const SAFE_IDENTIFIER = /^[A-Z0-9_.:-]{1,96}$/;
 const SIDECAR_ENV_KEYS = new Set([
   "PATH", "Path", "SystemRoot", "WINDIR", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR",
+  "SHULIU_DATA_DIR",
   "LANG", "LC_ALL", "PYTHONPATH", "PYTHONUTF8", "PYTHONIOENCODING", "VIRTUAL_ENV",
 ]);
 
