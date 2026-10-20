@@ -59,11 +59,9 @@
 - 此轮未修改 Electron 产品代码；前述本机 Windows 安装、升级、回滚证据仍适用。本轮没有重跑安装包 smoke，因为变更仅涉及验证 workflow 和契约测试。
 
 ## 远端 Windows CI
-
-- Task 26 基线提交为 `d0c1e08c687e66b0cb07c9917818e5b3b298373c`，父提交 `d8a120f037fc04ebeec82068518a80b9459342c8`。该提交内的 workflow 触发器包括推送到 `main` 或 `feat/**`、Pull Request 和手动触发；`feat/foundation-v0.1` 符合 push 条件。
-- 未取得基线 SHA 对应的 Actions run URL、run ID、job 结论或报告。上次只读检查中 GitHub API 返回 404、浏览器未登录；Git CLI 在凭据获取阶段报 GCM 无可用凭据。本轮没有重复认证诊断，也不能据此断言没有运行。
-- 本轮工作流和契约改动不包含在基线 `d0c1e08…` 中，因此该 SHA 的旧运行不能验证这些改动。必须对包含本轮改动的确切新提交 SHA 核对 Windows Validation run 的 `head_sha` 与最终结论；没有该证据前不能关闭 Task 26。
-
+- Task 26 的原始实现提交为 `d0c1e08c687e66b0cb07c9917818e5b3b298373c`，父提交 `d8a120f037fc04ebeec82068518a80b9459342c8`。后续验收修订提交 `1a4f132c04aac0175eed8ea703c14abedd1a7371`（父提交为该实现 SHA）已推送到 `origin/feat/foundation-v0.1`。
+- 用户于 2026-10-20 确认：完整 SHA `1a4f132c04aac0175eed8ea703c14abedd1a7371` 对应的 GitHub Windows Validation 已通过。本记录依赖该用户确认；当前材料未包含 Actions run URL / run ID，因此不声称本次会话独立读取了运行详情。
+- 该 SHA 中的工作流在 `feat/**` 推送时触发 Windows Validation；该运行结果与本地测试分别记录。
 ## 安装包与发布范围
 
 - 本机 Windows 11 的实际安装 smoke 和 0.1.0 → 0.1.1 升级/回滚证据见上文；使用临时安装目录不等同于干净 VM。原计划要求 Windows runner 或真实 Windows 设备，没有要求全新 VM。
@@ -71,8 +69,7 @@
 - Linux/macOS 不属于当前 Windows-only 验收平台。
 
 ## 关闭状态与阻塞
-
-- **Task 26 尚未关闭**：本轮本地 workflow 变更尚无对应的远端 Windows Validation 结果；需提供与新提交完整 SHA 匹配且成功的 Actions 运行证据。
-- **正式自动更新发布阻塞**：正式公钥/私钥信任配置与桌面产品调用链尚未实现或配置。该项不是当前计划中独立编号的代码 Task，但在闭环前不得宣称产品具有用户可用的、可信的自动更新能力，也不得以临时 CI 密钥作为发布信任根。
-- **未列为当前 Task 26 硬性条件**：Authenticode 与全新 VM；两者仍需按正式分发策略决定是否纳入后续发布要求。
+- **Task 26 工程验收通过**：原始计划要求的 Windows 更新包签名 / checksum、兼容性、状态机失败路径、PyInstaller / NSIS、安装、升级、回滚与 Sidecar health 均有本地证据；用户确认上述完整新 SHA 的 Windows Validation 通过。此结论仅适用于 Task 26 工程验收，不代表 Foundation V0.1 Release Gate 全部通过。
+- **正式自动更新能力尚未交付**：产品没有桌面端 `applyUpdate` 调用链、下载 / 暂存适配器或正式受信公钥；CI-only `ci-ephemeral` 密钥不是发布信任根。不得声称用户可用的自动更新已实现。该差距作为正式发布事项保留，Task 26 工程验收不因此扩成 UI / IPC 实施任务。
+- **未列为 Task 26 硬性条件**：Authenticode 与全新 VM；是否要求 Authenticode 由正式分发策略决定。
 - 本轮仅修改 Task 26 证据文档、Windows Validation 工作流和其契约测试；未触碰 `docs/test-selection-map.md` 或 `scripts/` 等既有未跟踪工作。
