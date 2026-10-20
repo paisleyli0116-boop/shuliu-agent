@@ -31,18 +31,6 @@ jobs:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
       - run: uv sync --locked --all-packages
-      - name: Install separately locked browser-use driver
-        run: uv sync --locked --project runtimes/browser-driver --python 3.11
-      - name: Run Browser Runtime and real Chrome integration tests
-        env:
-          SHULIU_REQUIRE_REAL_BROWSER: "1"
-        run: uv run --locked --all-packages pytest runtimes/python-worker/tests/browser tests/integration/test_browser_tool_policy.py -q --junitxml=browser-tests.xml
-      - name: Save real browser test evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-tests-${{ matrix.os }}
-          path: browser-tests.xml
       - name: Run Cloud API identity unit tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/identity -q
       - name: Run Cloud API route and authorization tests
@@ -81,7 +69,10 @@ jobs:
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
       - run: pnpm test:contract
       - run: pnpm test:migration
-      - run: pnpm test:integration
+      - name: Run generic integration tests without the dedicated real-browser suite
+        run: |
+          pnpm exec vitest run tests/integration --passWithNoTests
+          uvx --from uv==0.12.20 uv run --locked --all-packages pytest -m "integration and not real_browser"
       - run: pnpm typecheck
 
   postgres-migration:

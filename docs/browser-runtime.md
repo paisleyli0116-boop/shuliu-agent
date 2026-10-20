@@ -41,6 +41,10 @@ Evidence sink 必须返回非空引用。副作用派发前先记录脱敏 BEFOR
 
 当前只支持单页受限动作，不提供任意 JS、任意 CSS、上传、下载、账号登录、弹窗操作或跨 session profile 复用。TTL 在访问时检查，host 退出时必须调用 `runtime.close()`。后续持久化恢复与应用生命周期整合按既有计划验收。
 
-## 证据
+## 当前平台验收策略
 
-执行记录见 [Task 24 ledger](evidence/task-24-progress.md)。Python 与 TypeScript FakeBrowser 共用结果 contract；只有 `test_real_browser.py` 标记的测试是真实 Chrome 集成证据。CI 对 Windows、Linux、macOS 强制执行真实浏览器测试并保存 JUnit artifact。当前本地验证不代替 CI、PostgreSQL 或安装包验收。
+Windows 是当前唯一的交付与验收平台。`Windows Validation` 在 Windows runner 上设置 `SHULIU_REQUIRE_REAL_BROWSER=1` 并运行 Browser Runtime 与 browser-policy 集成测试；真实 Chrome 缺失或测试失败会使该 job 失败。
+
+Linux / macOS 的真实浏览器测试保留在 `browser-runtime-cross-platform.yml`：先运行启动和导航 smoke，通过后运行完整 Browser Runtime 与 policy suite，并在失败时上传日志和 JUnit 报告。它们是补充验证，失败继续如实显示，但不阻塞当前 Windows 交付。Generic CI 在非 Windows runner 上排除 `real_browser` 标记；对应真实浏览器用例由专用工作流执行。
+
+执行记录见 [Task 24 ledger](evidence/task-24-progress.md)。Python 与 TypeScript FakeBrowser 共用结果 contract；只有 `test_real_browser.py` 标记的测试是真实 Chrome 集成证据。Windows 本地测试不能代替 Windows CI、PostgreSQL 或安装包验收；Linux / macOS 的运行结果也不能替代 Windows 验收。

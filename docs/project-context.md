@@ -22,6 +22,14 @@ Skill + Workflow + Tool + Connector + Knowledge + Permission
 
 Agent Core 只负责通用任务状态、运行编排和受控决策，不知道采购、仓库、直播、新媒体或 HR 的具体业务。岗位需求原则上应由上述组合实现；若必须改 Agent Core，先视为架构边界问题并回到正式文档审查。
 
+## 当前交付与验收平台（2026-10-20）
+
+Windows 是当前唯一的产品交付与验收平台。Foundation V0.1 主线以 Windows runner / 实机结果作为验收依据；Task 24 的真实 Chrome、Broker / Policy / Approval 流程和异常清理必须在 Windows 真实环境通过。
+
+Linux / macOS 测试继续保留并在独立工作流运行，失败状态和证据照实保留，但不阻塞当前 Windows 开发与验收。当前阶段不要求跨平台兼容性，也不把 Windows 通过描述为 Linux / macOS 通过。扩大平台支持范围需要另行调整交付目标和验收门禁。
+
+该交付范围调整不改变已接受 Architecture Spec、ADR 或现有安全边界；不把进程隔离描述为 OS sandbox。
+
 ## 当前架构重点
 
 - AgentRun 固定启动时使用的定义和版本。
@@ -35,7 +43,7 @@ Agent Core 只负责通用任务状态、运行编排和受控决策，不知道
 
 - `AGENTS.md`：每次新会话或开始工作时的项目入口与协作约束。
 - `docs/superpowers/specs/2026-10-17-shuliu-agent-foundation-v0.1-design.md`：架构事实源，明确范围、边界、协议和待决项。
-- `docs/superpowers/plans/2026-10-17-shuliu-agent-foundation-v0.1-implementation.md`：施工事实源。Implementation Plan 已获批准，现有 36 项逐文件 TDD 工程任务（含独立 Skill 安全扫描 Task 35、OS sandbox provider Task 36 和 Release Gate）；Task 21 Cloud API、Task 22 Electron ↔ Python IPC、Task 23 Desktop UI 已完成本地阶段验收和 GitHub CI。Task 23 的 Generic CI（Linux / macOS、PostgreSQL 17 / 18）与 Windows Validation 均通过；下一项为 Task 24 Browser Runtime。经验证的 OS sandbox provider 尚未就绪，因此 executable Skill 默认 fail closed。计划获批不代表所有能力或 Release Gate 已完成。
+- `docs/superpowers/plans/2026-10-17-shuliu-agent-foundation-v0.1-implementation.md`：施工事实源。Implementation Plan 已获批准，现有 36 项逐文件 TDD 工程任务（含独立 Skill 安全扫描 Task 35、OS sandbox provider Task 36 和 Release Gate）；Task 21 Cloud API、Task 22 Electron ↔ Python IPC、Task 23 Desktop UI 已完成本地阶段验收和 GitHub CI。Task 23 的 Generic CI（Linux / macOS、PostgreSQL 17 / 18）与 Windows Validation 均通过；当前正在按 Windows-only 交付策略完成 Task 24 Browser Runtime 验收。经验证的 OS sandbox provider 尚未就绪，因此 executable Skill 默认 fail closed。计划获批不代表所有能力或 Release Gate 已完成。
 - `docs/architecture-decisions.md`：按 Architecture Spec 汇总已确认与 Pending 的架构决策。
 - `docs/technical-baseline.md`：列出 Spec 已记录的技术基线及尚未归档到 Spec 的实现选型输入。
 - `docs/risk-register.md`：记录已知风险与需要验证的控制项；状态不表示功能已实现。
