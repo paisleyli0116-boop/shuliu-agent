@@ -112,33 +112,10 @@ class ToolBroker:
         *,
         idempotency_key: str | None,
     ) -> ToolResult:
-        try:
-            definition = self._registry.get(tool_id)
-        except ToolRegistryError as error:
-            raise ToolExecutionError(error.code, str(error)) from error
+        definition, principal, decision, _resource = self._authorize_request(
+            tool_id, args, actor, context
+        )
 
-        self._validate_request(definition, args, actor, context)
-        principal = self._resolve_identity(actor)
-        if principal.organization_id != context["organization_id"]:
-            raise ToolExecutionError(
-                "IDENTITY_SCOPE_MISMATCH", "Actor and request organization do not match"
-            )
-        resource = context.get("resource")
-        if isinstance(resource, Mapping):
-            resource_organization = resource.get("organization_id")
-            if (
-                resource_organization is not None
-                and resource_organization != principal.organization_id
-            ):
-                raise ToolExecutionError(
-                    "IDENTITY_SCOPE_MISMATCH", "Resource is outside actor organization"
-                )
-        if not set(definition.permissions).issubset(principal.permissions):
-            raise ToolExecutionError(
-                "IDENTITY_PERMISSION_DENIED", "Actor lacks a Tool permission"
-            )
-
-        decision = self._evaluate_policy(definition, principal, resource, context)
         if decision.decision is PolicyOutcome.DENY:
             self._emit_decision_event(
                 definition,
@@ -202,7 +179,8 @@ class ToolBroker:
             if claim.status is IdempotencyClaimStatus.COMPLETED:
                 if not isinstance(claim.result, ToolResult):
                     raise ToolExecutionError(
-                        "IDEMPOTENCY_RESULT_INVALID", "Stored Tool result is invalid"
+                        "IDEMPOTENCY_RESULT_INVALID",
+                        "Stored Tool result is invalid",
                     )
                 return claim.result
             if claim.status is IdempotencyClaimStatus.CONFLICT:
@@ -309,6 +287,101 @@ class ToolBroker:
             definition, principal, idempotency_key, request_digest, result
         )
         return result
+
+    def prepare_approval_context(
+        self,
+        tool_id: str,
+        args: Mapping[str, object],
+        actor: Mapping[str, object],
+        context: Mapping[str, object],
+    ) -> tuple[dict[str, object], PolicyDecision]:
+        """Return the exact policy-bound context an approval request must cover."""
+        definition, principal, decision, _resource = self._authorize_request(
+            tool_id, args, actor, context
+        )
+        if decision.decision is PolicyOutcome.DENY:
+            self._emit_decision_event(
+                definition,
+                principal,
+                context,
+                decision,
+                "TOOL_EXECUTION_DENIED",
+                "POLICY_DENIED",
+            )
+            raise ToolExecutionError("POLICY_DENIED", "Policy denied this Tool call")
+        if (
+            definition.risk_level is RiskLevel.CRITICAL
+            and decision.decision is not PolicyOutcome.REQUIRE_APPROVAL
+        ):
+            self._emit_decision_event(
+                definition,
+                principal,
+                context,
+                decision,
+                "TOOL_EXECUTION_DENIED",
+                "POLICY_APPROVAL_REQUIRED",
+            )
+            raise ToolExecutionError(
+                "POLICY_APPROVAL_REQUIRED", "Critical Tools require Approval"
+            )
+        if decision.decision is not PolicyOutcome.REQUIRE_APPROVAL:
+            raise ToolExecutionError(
+                "APPROVAL_NOT_REQUIRED", "Policy did not require Approval"
+            )
+        if self._approvals is None:
+            self._emit_decision_event(
+                definition,
+                principal,
+                context,
+                decision,
+                "TOOL_APPROVAL_REQUIRED",
+                "APPROVAL_UNAVAILABLE",
+            )
+            raise ToolExecutionError(
+                "APPROVAL_UNAVAILABLE", "Approval service is unavailable"
+            )
+        if definition.idempotency_required and self._idempotency_store is None:
+            raise ToolExecutionError(
+                "IDEMPOTENCY_UNAVAILABLE",
+                "A durable idempotency store is required for this Tool",
+            )
+        return _approval_context(definition, args, principal, context), decision
+
+    def _authorize_request(
+        self,
+        tool_id: str,
+        args: Mapping[str, object],
+        actor: Mapping[str, object],
+        context: Mapping[str, object],
+    ) -> tuple[ToolDefinition, IdentityPrincipal, PolicyDecision, object]:
+        try:
+            definition = self._registry.get(tool_id)
+        except ToolRegistryError as error:
+            raise ToolExecutionError(error.code, str(error)) from error
+
+        self._validate_request(definition, args, actor, context)
+        principal = self._resolve_identity(actor)
+        if principal.organization_id != context["organization_id"]:
+            raise ToolExecutionError(
+                "IDENTITY_SCOPE_MISMATCH", "Actor and request organization do not match"
+            )
+        resource = context.get("resource")
+        if isinstance(resource, Mapping):
+            resource_organization = resource.get("organization_id")
+            if (
+                resource_organization is not None
+                and resource_organization != principal.organization_id
+            ):
+                raise ToolExecutionError(
+                    "IDENTITY_SCOPE_MISMATCH", "Resource is outside actor organization"
+                )
+        if not set(definition.permissions).issubset(principal.permissions):
+            raise ToolExecutionError(
+                "IDENTITY_PERMISSION_DENIED", "Actor lacks a Tool permission"
+            )
+
+        decision = self._evaluate_policy(definition, principal, resource, context)
+        return definition, principal, decision, resource
 
     def _validate_request(
         self,

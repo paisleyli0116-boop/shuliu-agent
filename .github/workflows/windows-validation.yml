@@ -28,6 +28,16 @@ jobs:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
       - run: uv sync --locked --all-packages
+      - name: Run Windows Computer Runtime contract and interactive-session tests
+        env:
+          SHULIU_REQUIRE_INTERACTIVE_COMPUTER: "1"
+        run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/computer tests/e2e/windows -q -rs --junitxml=computer-tests.xml
+      - name: Save Windows Computer Runtime test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: computer-runtime-windows
+          path: computer-tests.xml
       - name: Install separately locked browser-use driver
         run: uv sync --locked --project runtimes/browser-driver --python 3.11
       - name: Run Browser Runtime and real Windows Chrome integration tests
