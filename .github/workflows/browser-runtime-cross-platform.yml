@@ -1,0 +1,58 @@
+name: Browser Runtime cross-platform diagnostics
+
+on:
+  push:
+    branches:
+      - feat/foundation-v0.1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-runtime-cross-platform-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  real-browser:
+    name: Real Browser Runtime (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      SHULIU_REQUIRE_REAL_BROWSER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version-file: pyproject.toml
+          enable-cache: true
+      - run: uv sync --locked --all-packages
+      - name: Install separately locked browser-use driver
+        run: uv sync --locked --project runtimes/browser-driver --python 3.11
+      - name: Run startup and local navigation diagnostic smoke
+        run: |
+          set -o pipefail
+          uv run --locked --all-packages pytest runtimes/python-worker/tests/browser/test_real_browser.py::test_real_browser_navigate_read_click_type_scroll_and_close -q --tb=short --junitxml=browser-smoke.xml 2>&1 | tee browser-smoke.log
+      - name: Run full real Browser Runtime and policy tests
+        if: success()
+        run: |
+          set -o pipefail
+          uv run --locked --all-packages pytest runtimes/python-worker/tests/browser tests/integration/test_browser_tool_policy.py -q --tb=short --junitxml=browser-tests.xml 2>&1 | tee browser-tests.log
+      - name: Save real browser test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-runtime-${{ matrix.os }}
+          path: |
+            browser-smoke.log
+            browser-smoke.xml
+            browser-tests.log
+            browser-tests.xml
+          if-no-files-found: warn

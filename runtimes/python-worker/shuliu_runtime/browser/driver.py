@@ -16,6 +16,7 @@ PROTOCOL = sys.stdout
 sys.stdout = sys.stderr
 logging.disable(logging.CRITICAL)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from shuliu_runtime.browser.diagnostics import failure_diagnostic
 from shuliu_runtime.browser.verification import BrowserError, check_url, safe_text
 
 
@@ -65,38 +66,45 @@ class Driver:
         self.stage = "idle"
         self.main_frame_id = None
         self.navigation_denied = False
+        self.request_id = None
+
+    def report_progress(self, stage):
+        self.stage = stage
+        if self.request_id is not None:
+            PROTOCOL.write(json.dumps({"id": self.request_id, "progress": {"stage": stage}}) + "\n")
+            PROTOCOL.flush()
 
     async def request(self, operation, payload):
         if operation == "start":
-            self.stage = "import_browser"
+            self.report_progress("import_browser")
             from browser_use import Browser
             self.allowed = frozenset(payload["allowed_origins"])
-            self.stage = "construct_browser"
+            self.report_progress("construct_browser")
             self.browser = Browser(headless=True, executable_path=payload["executable_path"],
                 user_data_dir=payload["profile"], downloads_path=str(Path(payload["profile"]) / "downloads"),
                 use_cloud=False, enable_default_extensions=False, accept_downloads=False,
                 chromium_sandbox=True, disable_security=False, keep_alive=False,
                 ignore_default_args=True, args=["--no-first-run", "--no-default-browser-check", "--disable-background-networking",
                     "--disable-extensions", "--disable-component-update", "--disable-sync", "--no-pings"])
-            self.stage = "start_browser"
+            self.report_progress("start_browser")
             await self.browser.start()
-            self.stage = "create_page"
+            self.report_progress("create_page")
             self.page = await self.browser.new_page()
             session_id = await self.page.session_id
             client = self.browser.cdp_client
             frame_tree = await client.send.Page.getFrameTree(session_id=session_id)
             self.main_frame_id = frame_tree["frameTree"]["frame"]["id"]
-            self.stage = "register_guards"
+            self.report_progress("register_guards")
             client.register.Fetch.requestPaused(self._intercept)
             client.register.Target.attachedToTarget(self._target_attached)
-            self.stage = "configure_targets"
+            self.report_progress("configure_targets")
             await client.send.Target.setAutoAttach({"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True})
-            self.stage = "configure_network_guard"
+            self.report_progress("configure_network_guard")
             await client.send.Fetch.enable({"patterns": [{"urlPattern": "*", "requestStage": "Request"}]}, session_id=session_id)
             await client.send.Network.setBypassServiceWorker({"bypass": True}, session_id=session_id)
-            self.stage = "disable_downloads"
+            self.report_progress("disable_downloads")
             await client.send.Browser.setDownloadBehavior({"behavior": "deny"})
-            self.stage = "read_browser_version"
+            self.report_progress("read_browser_version")
             version = await client.send.Browser.getVersion()
             return {"browser_version": version["product"], "process_id": os.getpid(),
                     "browser_pid": self.browser._local_browser_watchdog.browser_pid}
@@ -106,6 +114,7 @@ class Driver:
             check_url(payload["url"], self.allowed)
             self.navigation_denied = False
             try:
+                self.report_progress("navigate_goto")
                 await self.page.goto(payload["url"])
             except Exception:
                 if self.navigation_denied:
@@ -113,6 +122,7 @@ class Driver:
                 raise
             if self.navigation_denied:
                 raise BrowserError("BROWSER_TARGET_DENIED")
+            self.report_progress("navigate_wait_ready")
             await self.wait_ready(payload["url"])
         elif operation in ("click", "type"):
             element = await self.page.get_element(payload["node_id"])
@@ -223,6 +233,7 @@ class Driver:
         raise TimeoutError()
 
     async def observe(self):
+        self.report_progress("observe_dom_settle")
         # Give asynchronous DOM updates a bounded quiet window. A page that never
         # settles still yields a snapshot; its refs must be rechecked before act.
         await self.page.evaluate("""() => new Promise(resolve => {
@@ -231,6 +242,7 @@ class Driver:
           function reset(){clearTimeout(quiet);quiet=setTimeout(done,200)}
           const limit=setTimeout(done,1000);observer.observe(document,{childList:true,subtree:true,attributes:true});reset();
         })""")
+        self.report_progress("observe_snapshot")
         value = json.loads(await self.page.evaluate(PAGE))
         check_url(value["url"], self.allowed)
         value["text"] = safe_text(value["text"])
@@ -252,18 +264,22 @@ async def main():
         if not raw or len(raw) > 65536 or not raw.endswith(b"\n"):
             return
         frame = json.loads(raw)
+        driver.request_id = frame["id"]
         try:
             result = await driver.request(frame["operation"], frame["payload"])
             response = {"id": frame["id"], "result": result}
         except Exception as error:
             response = {"id": frame["id"], "error": error.code if isinstance(error, BrowserError) else
                        ("BROWSER_START_FAILED" if frame["operation"] == "start" else "BROWSER_CONNECTION_LOST")}
+            if not isinstance(error, BrowserError):
+                # Diagnostics contain only fixed stage, exception type and an
+                # allowlisted category; exception text and browser stderr stay private.
+                response["diagnostic"] = failure_diagnostic(driver.stage, error)
             if frame["operation"] == "start" and not isinstance(error, BrowserError):
-                # Only a fixed internal phase label crosses the protocol. Never
-                # emit exception text, paths, browser output, or page content.
                 response["stage"] = driver.stage
         PROTOCOL.write(json.dumps(response, ensure_ascii=True) + "\n")
         PROTOCOL.flush()
+        driver.request_id = None
 
 
 if __name__ == "__main__":

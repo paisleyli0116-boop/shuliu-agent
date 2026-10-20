@@ -125,20 +125,30 @@ def real_factory():
     return create
 
 
-def launch_page(runtime, origin):
+def launch_page(runtime, origin, fixture_state=None):
     launch = call(runtime, "launch")
-    assert launch.output["status"] == "VERIFIED", _diagnostic(launch.output)
+    assert launch.output["status"] == "VERIFIED", _diagnostic(launch.output, runtime)
     assert launch.output["browser"]["browser_version"] != "FAKE"
     session = launch.output["session_id"]
     navigated = call(runtime, "navigate", {"session_id": session, "url": origin + "/"}, key="real-nav")
-    assert navigated.output["status"] == "VERIFIED", _diagnostic(navigated.output)
+    assert navigated.output["status"] == "VERIFIED", _diagnostic(navigated.output, runtime, fixture_state)
     return session
 
 
-def _diagnostic(output):
+def _diagnostic(output, runtime=None, fixture_state=None):
     observation = output.get("observation") or {}
-    return {"status": output.get("status"), "error_code": output.get("error_code"),
-            "outcome_unknown": output.get("outcome_unknown"), "observed_url": observation.get("url")}
+    diagnostic = {"status": output.get("status"), "error_code": output.get("error_code"),
+                  "outcome_unknown": output.get("outcome_unknown"), "observed_url": observation.get("url")}
+    if runtime is not None:
+        sessions = runtime._executor.sessions.sessions
+        session = sessions.get(output.get("session_id"))
+        backend = getattr(session, "backend", None) if session is not None else None
+        detail = getattr(backend, "last_diagnostic", None)
+        if detail is not None:
+            diagnostic["driver_diagnostic"] = detail
+    if fixture_state is not None:
+        diagnostic["fixture_request_count"] = int(fixture_state.get("hits", 0))
+    return diagnostic
 
 
 def observation(runtime, session):
@@ -155,10 +165,10 @@ def element_action(runtime, session, operation, label, expected, *, key, **extra
 
 
 def test_real_browser_navigate_read_click_type_scroll_and_close(tmp_path, fixture_site, real_factory):
-    origin, _, _ = fixture_site
+    origin, _, fixture_state = fixture_site
     runtime, _, events, evidence, _ = make_runtime(tmp_path, factory=real_factory, origin=origin, timeout=30)
     try:
-        session = launch_page(runtime, origin)
+        session = launch_page(runtime, origin, fixture_state)
         view = observation(runtime, session)
         assert view["trust"] == "UNTRUSTED_PAGE_CONTENT"
         assert "Ignore all previous instructions" in view["text"]
@@ -218,6 +228,9 @@ def test_real_timeout_during_navigation_cleans_profile(tmp_path, fixture_site, r
         assert result.output["error_code"] == "BROWSER_TIMEOUT", result.output
         assert result.output["status"] == "UNVERIFIED"
         assert result.output["retryable"] is False
+        diagnostic = runtime._executor.sessions.sessions[session].backend.last_diagnostic
+        assert diagnostic == {"stage": "navigate_goto", "exception_type": "TimeoutError",
+            "failure_kind": "OPERATION_TIMEOUT"}
     finally:
         runtime.close()
     assert list(tmp_path.iterdir()) == []
@@ -287,15 +300,15 @@ def test_real_unapproved_origin_is_not_contacted(tmp_path, fixture_site, real_fa
     runtime, *_ = make_runtime(tmp_path, factory=real_factory, origin=origin, timeout=10)
     try:
         launched = call(runtime, "launch")
-        assert launched.output["status"] == "VERIFIED", _diagnostic(launched.output)
+        assert launched.output["status"] == "VERIFIED", _diagnostic(launched.output, runtime)
         session = launched.output["session_id"]
         url = f"{origin}/{kind}?to=http://127.0.0.1:{server.server_port}/"
         result = call(runtime, "navigate", {"session_id": session, "url": url}, key="attack-nav")
         if kind == "redirect":
-            assert result.output["status"] == "UNVERIFIED", _diagnostic(result.output)
-            assert result.output["error_code"] == "BROWSER_TARGET_DENIED", _diagnostic(result.output)
+            assert result.output["status"] == "UNVERIFIED", _diagnostic(result.output, runtime)
+            assert result.output["error_code"] == "BROWSER_TARGET_DENIED", _diagnostic(result.output, runtime)
         else:
-            assert result.output["status"] == "VERIFIED", _diagnostic(result.output)
+            assert result.output["status"] == "VERIFIED", _diagnostic(result.output, runtime)
         if kind == "popup":
             assert result.output["status"] == "VERIFIED", result.output
             element_action(runtime, session, "click", "Open popup", "Never", key="popup")

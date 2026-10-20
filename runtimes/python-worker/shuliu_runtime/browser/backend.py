@@ -13,6 +13,7 @@ from shuliu_runtime.skills.process_host import (
     _attach_windows_job, _drain_stderr, _minimal_environment, _read_stdout,
     _resume_windows_process, _spawn, _terminate_process_tree, _write_stdin,
 )
+from .diagnostics import failure_diagnostic, validate_driver_diagnostic, validate_progress
 from .verification import BrowserError
 
 
@@ -28,6 +29,8 @@ class BrowserUseBackend:
         self.writes = queue.Queue(maxsize=8)
         self.errors = queue.Queue(maxsize=1)
         self.threads = []
+        self.last_diagnostic = None
+        self.last_progress = None
 
     def _start(self, profile):
         if not self.python.is_file():
@@ -63,6 +66,8 @@ class BrowserUseBackend:
 
     def request(self, operation, payload, *, timeout, cancel_event=None):
         deadline = time.monotonic() + timeout
+        self.last_diagnostic = None
+        self.last_progress = None
         try:
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError()
@@ -96,7 +101,17 @@ class BrowserUseBackend:
                 message = json.loads(raw)
                 if message.get("id") != request_id:
                     raise BrowserError("BROWSER_PROTOCOL_INVALID")
+                if "progress" in message:
+                    stage = validate_progress(message["progress"])
+                    if stage is None:
+                        raise BrowserError("BROWSER_PROTOCOL_INVALID")
+                    self.last_progress = stage
+                    continue
                 if message.get("error"):
+                    diagnostic = validate_driver_diagnostic(message.get("diagnostic"))
+                    if "diagnostic" in message and diagnostic is None:
+                        raise BrowserError("BROWSER_PROTOCOL_INVALID")
+                    self.last_diagnostic = diagnostic
                     # Never propagate upstream exceptions, page text or driver stderr.
                     code = message["error"]
                     if code == "BROWSER_START_FAILED" and message.get("stage") in {
@@ -118,7 +133,9 @@ class BrowserUseBackend:
                 if operation == "start":
                     self.browser_pid = result["browser_pid"]
                 return result
-        except Exception:
+        except Exception as error:
+            if isinstance(error, TimeoutError):
+                self.last_diagnostic = failure_diagnostic(self.last_progress or "request", error)
             self.close()
             raise
 
