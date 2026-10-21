@@ -1,3 +1,5 @@
+import { sanitizeRuntimeDiagnostics } from "./runtime/diagnostics";
+
 export type ProbeRuntimeHealth = {
   status: "healthy" | "degraded" | "unhealthy" | "safe_mode";
   components?: {
@@ -7,6 +9,7 @@ export type ProbeRuntimeHealth = {
 
 export type HealthProbeDependencies = {
   startRuntime(): Promise<void>;
+  runtimeDiagnostics(): unknown;
   inspectRenderer(): Promise<{ preloadAvailable: boolean; health: ProbeRuntimeHealth }>;
   appVersion: string;
   electronVersion: string;
@@ -27,6 +30,14 @@ export async function runHealthProbe(dependencies: HealthProbeDependencies): Pro
     // The renderer reports the supervisor's Safe Mode state through the regular preload API.
   }
 
+  const readRuntimeDiagnostics = () => {
+    try {
+      return sanitizeRuntimeDiagnostics(dependencies.runtimeDiagnostics());
+    } catch {
+      return sanitizeRuntimeDiagnostics(undefined);
+    }
+  };
+
   try {
     const inspected = await dependencies.inspectRenderer();
     if (!inspected.preloadAvailable) {
@@ -35,6 +46,7 @@ export async function runHealthProbe(dependencies: HealthProbeDependencies): Pro
         ...versions,
         preload_available: false,
         code: "PRELOAD_UNAVAILABLE",
+        runtime_diagnostics: readRuntimeDiagnostics(),
       }));
       return 3;
     }
@@ -45,6 +57,7 @@ export async function runHealthProbe(dependencies: HealthProbeDependencies): Pro
         ...versions,
         preload_available: true,
         code: "RUNTIME_SAFE_MODE",
+        runtime_diagnostics: readRuntimeDiagnostics(),
       }));
       return 2;
     }
@@ -56,6 +69,7 @@ export async function runHealthProbe(dependencies: HealthProbeDependencies): Pro
         ...versions,
         preload_available: true,
         code: "RUNTIME_UNHEALTHY",
+        runtime_diagnostics: readRuntimeDiagnostics(),
       }));
       return 3;
     }
@@ -65,6 +79,7 @@ export async function runHealthProbe(dependencies: HealthProbeDependencies): Pro
         ...versions,
         preload_available: true,
         code: "DATABASE_SCHEMA_UNAVAILABLE",
+        runtime_diagnostics: readRuntimeDiagnostics(),
       }));
       return 3;
     }
@@ -74,6 +89,7 @@ export async function runHealthProbe(dependencies: HealthProbeDependencies): Pro
       ...versions,
       preload_available: true,
       database_schema: schemaVersion,
+      runtime_diagnostics: readRuntimeDiagnostics(),
     }));
     return 0;
   } catch {
@@ -82,6 +98,7 @@ export async function runHealthProbe(dependencies: HealthProbeDependencies): Pro
       ...versions,
       preload_available: false,
       code: "DESKTOP_HEALTH_PROBE_FAILED",
+      runtime_diagnostics: readRuntimeDiagnostics(),
     }));
     return 3;
   }

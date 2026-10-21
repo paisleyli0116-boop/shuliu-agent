@@ -73,6 +73,7 @@ function createMainWindow(showWindow = true): { window: BrowserWindow; loaded: P
 async function runInstalledHealthCheck(): Promise<void> {
   const exitCode = await runHealthProbe({
     startRuntime: () => supervisor.start(),
+    runtimeDiagnostics: () => supervisor.diagnostics,
     inspectRenderer: async () => {
       const instance = createMainWindow(false);
       await instance.loaded;

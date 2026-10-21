@@ -41,27 +41,29 @@ function Invoke-HealthProbe([string]$Executable, [string]$DataDirectory, [string
   $stderrTask = $process.StandardError.ReadToEndAsync()
   if (-not $process.WaitForExit(90000)) {
     $process.Kill($true)
-    Write-Host (Format-HealthProbeSummary -Name $Name -ExitCode $null -Report ([pscustomobject]@{ status = 'unhealthy'; code = 'HEALTH_PROBE_TIMEOUT' }))
+    $summary = Save-HealthProbeSummary -Directory $evidence -Name $Name -ExitCode $null -Report ([pscustomobject]@{ status = 'unhealthy'; code = 'HEALTH_PROBE_TIMEOUT' })
+    Write-Host $summary
     throw 'INSTALLED_APP_HEALTH_TIMEOUT'
   }
   $stdout = $stdoutTask.GetAwaiter().GetResult()
   $stderr = $stderrTask.GetAwaiter().GetResult()
-  [IO.File]::WriteAllText((Join-Path $evidence "$Name.stdout.log"), $stdout)
-  [IO.File]::WriteAllText((Join-Path $evidence "$Name.stderr.log"), $stderr)
   $line = ($stdout -split "`r?`n") | Where-Object { $_.TrimStart().StartsWith('{') } | Select-Object -Last 1
   if (-not $line) {
     $missingReport = [pscustomobject]@{ status = 'unhealthy'; code = 'HEALTH_REPORT_MISSING' }
-    Write-Host (Format-HealthProbeSummary -Name $Name -ExitCode $process.ExitCode -Report $missingReport)
+    $summary = Save-HealthProbeSummary -Directory $evidence -Name $Name -ExitCode $process.ExitCode -Report $missingReport
+    Write-Host $summary
     throw 'INSTALLED_APP_HEALTH_REPORT_MISSING'
   }
   try {
     $report = $line | ConvertFrom-Json
   } catch {
     $invalidReport = [pscustomobject]@{ status = 'unhealthy'; code = 'HEALTH_REPORT_INVALID' }
-    Write-Host (Format-HealthProbeSummary -Name $Name -ExitCode $process.ExitCode -Report $invalidReport)
+    $summary = Save-HealthProbeSummary -Directory $evidence -Name $Name -ExitCode $process.ExitCode -Report $invalidReport
+    Write-Host $summary
     throw 'INSTALLED_APP_HEALTH_REPORT_INVALID'
   }
-  Write-Host (Format-HealthProbeSummary -Name $Name -ExitCode $process.ExitCode -Report $report)
+  $summary = Save-HealthProbeSummary -Directory $evidence -Name $Name -ExitCode $process.ExitCode -Report $report
+  Write-Host $summary
   return [pscustomobject]@{ ExitCode = $process.ExitCode; Report = $report }
 }
 

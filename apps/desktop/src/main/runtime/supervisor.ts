@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { SpawnOptions } from "node:child_process";
+import { isSafeRuntimeErrorCode, readSafeSidecarLogLine, type RuntimeDiagnostics, type SafeRuntimeLog } from "./diagnostics";
 import { NdjsonChannel, RuntimeIpcError } from "./ndjson-channel";
 import { assertRuntimeHandshake } from "./handshake";
 
 export type RuntimeState = "stopped" | "starting" | "ready" | "restarting" | "safe_mode";
-export type SafeRuntimeLog = { level: "DEBUG" | "INFO" | "WARN" | "ERROR"; event: string; code: string };
 
 export type SidecarSupervisorOptions = {
   command: string;
@@ -16,13 +16,18 @@ export type SidecarSupervisorOptions = {
   onLog?: (entry: SafeRuntimeLog) => void;
 };
 
-const safeLogLevel = new Set(["DEBUG", "INFO", "WARN", "ERROR"]);
-const SAFE_IDENTIFIER = /^[A-Z0-9_.:-]{1,96}$/;
 const SIDECAR_ENV_KEYS = new Set([
   "PATH", "Path", "SystemRoot", "WINDIR", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR",
   "SHULIU_DATA_DIR", "SHULIU_MODEL_PROFILES_JSON", "SHULIU_ORGANIZATION_ID",
   "LANG", "LC_ALL", "PYTHONPATH", "PYTHONUTF8", "PYTHONIOENCODING", "VIRTUAL_ENV",
 ]);
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, milliseconds);
+    timer.unref?.();
+  });
+}
 
 function sidecarEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
@@ -32,25 +37,6 @@ function sidecarEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     PYTHONUTF8: "1",
     PYTHONIOENCODING: "utf-8",
   };
-}
-
-function readSafeStderrLine(line: string): SafeRuntimeLog | undefined {
-  try {
-    const value: unknown = JSON.parse(line);
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-    const record = value as Record<string, unknown>;
-    if (
-      typeof record.level !== "string" ||
-      !safeLogLevel.has(record.level) ||
-      typeof record.event !== "string" ||
-      !SAFE_IDENTIFIER.test(record.event) ||
-      typeof record.code !== "string" ||
-      !SAFE_IDENTIFIER.test(record.code)
-    ) return undefined;
-    return { level: record.level as SafeRuntimeLog["level"], event: record.event, code: record.code };
-  } catch {
-    return undefined;
-  }
 }
 
 export class SidecarSupervisor {
@@ -63,11 +49,32 @@ export class SidecarSupervisor {
   private intentionalStop = false;
   private readonly fatalChildren = new WeakSet<ChildProcess>();
   private stderrBuffer = "";
+  private startupStage: RuntimeDiagnostics["startupStage"] = "not_started";
+  private handshakeStatus: RuntimeDiagnostics["handshakeStatus"] = "not_started";
+  private failureStage: RuntimeDiagnostics["failureStage"] = "none";
+  private sidecarExitCode: number | null = null;
+  private sidecarSignal: string | null = null;
+  private safeErrorCode: string | null = null;
+  private lastSidecarLog?: SafeRuntimeLog;
 
   constructor(private readonly options: SidecarSupervisorOptions) {}
 
   get state(): RuntimeState {
     return this.stateValue;
+  }
+
+  get diagnostics(): RuntimeDiagnostics {
+    return {
+      runtimeState: this.stateValue,
+      startupStage: this.startupStage,
+      handshakeStatus: this.handshakeStatus,
+      failureStage: this.failureStage,
+      sidecarExitCode: this.sidecarExitCode,
+      sidecarSignal: this.sidecarSignal,
+      safeErrorCode: this.safeErrorCode,
+      sidecarLogEvent: this.lastSidecarLog?.event ?? null,
+      sidecarLogCode: this.lastSidecarLog?.code ?? null,
+    };
   }
 
   async start(): Promise<void> {
@@ -125,6 +132,8 @@ export class SidecarSupervisor {
 
   private async launch(): Promise<void> {
     this.stateValue = this.restartCount === 0 ? "starting" : "restarting";
+    this.startupStage = "sidecar_spawn";
+    this.handshakeStatus = "not_started";
     let child: ChildProcess;
     try {
       const spawnOptions: SpawnOptions = {
@@ -137,14 +146,23 @@ export class SidecarSupervisor {
       child = spawn(this.options.command, [...this.options.args], spawnOptions);
     } catch {
       this.stateValue = "safe_mode";
+      this.recordFailure("sidecar_spawn", "SIDECAR_SPAWN_FAILED");
       throw new RuntimeIpcError("SIDECAR_SPAWN_FAILED");
     }
     this.child = child;
+    let childClosed = false;
+    const childClosedPromise = new Promise<void>((resolve) => {
+      child.once("close", () => {
+        childClosed = true;
+        resolve();
+      });
+    });
     const stdin = child.stdin;
     const stdout = child.stdout;
     const stderr = child.stderr;
     if (!stdin || !stdout || !stderr) {
       this.stateValue = "safe_mode";
+      this.recordFailure("sidecar_spawn", "SIDECAR_SPAWN_FAILED");
       child.kill();
       throw new RuntimeIpcError("SIDECAR_SPAWN_FAILED");
     }
@@ -153,13 +171,14 @@ export class SidecarSupervisor {
     stderr.on("data", (chunk: Buffer | string) => this.onStderr(chunk));
     const channel = new NdjsonChannel(stdout, stdin, undefined, (error) => this.onChannelFailure(child, error));
     this.channel = channel;
-    child.once("error", () => this.onChildExit(child, new RuntimeIpcError("SIDECAR_SPAWN_FAILED")));
+    child.once("error", () => this.onChildExit(child, new RuntimeIpcError("SIDECAR_SPAWN_FAILED"), { kind: "spawn_error" }));
     child.once("exit", (code, signal) => {
-      const error = new RuntimeIpcError("SIDECAR_EXITED", `Python Sidecar exited (${signal ?? code ?? "unknown"})`);
-      this.onChildExit(child, error);
+      this.onChildExit(child, new RuntimeIpcError("SIDECAR_EXITED"), { kind: "exit", code, signal });
     });
 
     try {
+      this.startupStage = "ipc_handshake";
+      this.handshakeStatus = "pending";
       const timeoutMs = this.options.handshakeTimeoutMs ?? 5_000;
       const handshake = await channel.request("runtime.handshake", {}, { timeoutMs });
       assertRuntimeHandshake(handshake);
@@ -167,11 +186,19 @@ export class SidecarSupervisor {
         throw new RuntimeIpcError("SIDECAR_EXITED");
       }
       this.stateValue = "ready";
+      this.startupStage = "ready";
+      this.handshakeStatus = "succeeded";
     } catch (error) {
       this.fatalChildren.add(child);
       this.stateValue = "safe_mode";
+      this.handshakeStatus = "failed";
+      this.recordFailure("ipc_handshake", error instanceof RuntimeIpcError ? error.code : "IPC_HANDSHAKE_FAILED");
       channel.close(error instanceof RuntimeIpcError ? error : new RuntimeIpcError("IPC_HANDSHAKE_FAILED"));
-      if (child.exitCode === null && child.signalCode === null) child.kill();
+      if (error instanceof RuntimeIpcError && error.code === "SIDECAR_EXITED") {
+        await Promise.race([childClosedPromise, delay(100)]);
+      }
+      if (!childClosed && child.exitCode === null && child.signalCode === null) child.kill();
+      if (!childClosed) await Promise.race([childClosedPromise, delay(2_000)]);
       throw error instanceof RuntimeIpcError ? error : new RuntimeIpcError("IPC_HANDSHAKE_FAILED");
     }
   }
@@ -186,8 +213,11 @@ export class SidecarSupervisor {
     while (newline >= 0) {
       const line = this.stderrBuffer.slice(0, newline).replace(/\r$/, "");
       this.stderrBuffer = this.stderrBuffer.slice(newline + 1);
-      const safeEntry = readSafeStderrLine(line);
-      if (safeEntry) this.options.onLog?.(safeEntry);
+      const safeEntry = readSafeSidecarLogLine(line);
+      if (safeEntry) {
+        this.lastSidecarLog = safeEntry;
+        this.options.onLog?.(safeEntry);
+      }
       newline = this.stderrBuffer.indexOf("\n");
     }
     if (Buffer.byteLength(this.stderrBuffer, "utf8") > 64 * 1024) this.stderrBuffer = "";
@@ -195,6 +225,11 @@ export class SidecarSupervisor {
 
   private onChannelFailure(child: ChildProcess, error: RuntimeIpcError): void {
     if (this.child !== child || this.intentionalStop) return;
+    this.recordFailure(this.handshakeStatus === "pending" ? "ipc_handshake" : "sidecar_exit", error.code);
+    if (error.code === "SIDECAR_EXITED" && this.handshakeStatus === "pending") {
+      this.stateValue = "restarting";
+      return;
+    }
     if (["PROTOCOL_VERSION_UNSUPPORTED", "SCHEMA_VALIDATION_FAILED", "IPC_JSON_INVALID", "IPC_UTF8_INVALID", "IPC_FRAME_TOO_LARGE", "IPC_RESPONSE_UNMATCHED", "IPC_RESPONSE_TRACE_MISMATCH"].includes(error.code)) {
       this.fatalChildren.add(child);
       this.stateValue = "safe_mode";
@@ -207,8 +242,23 @@ export class SidecarSupervisor {
     }
   }
 
-  private onChildExit(child: ChildProcess, error: RuntimeIpcError): void {
+  private onChildExit(
+    child: ChildProcess,
+    error: RuntimeIpcError,
+    outcome?: { kind: "spawn_error" } | { kind: "exit"; code: number | null; signal: NodeJS.Signals | null },
+  ): void {
     if (this.child !== child) return;
+    if (outcome?.kind === "exit") {
+      this.sidecarExitCode = outcome.code;
+      this.sidecarSignal = outcome.signal;
+    }
+    const spawnFailed = outcome?.kind === "spawn_error" || error.code === "SIDECAR_SPAWN_FAILED" && this.startupStage === "sidecar_spawn";
+    const failureStage = spawnFailed
+      ? "sidecar_spawn"
+      : this.startupStage === "ipc_handshake" ? "ipc_handshake" : "sidecar_exit";
+    this.recordFailure(failureStage, error.code);
+    if (this.handshakeStatus === "pending") this.handshakeStatus = "failed";
+    if (!spawnFailed) this.startupStage = "sidecar_exit";
     this.channel?.close(error);
     this.channel = undefined;
     this.child = undefined;
@@ -251,5 +301,10 @@ export class SidecarSupervisor {
 
   private isReady(): boolean {
     return this.stateValue === "ready";
+  }
+
+  private recordFailure(stage: Exclude<RuntimeDiagnostics["failureStage"], "none" | "unknown">, code: string): void {
+    if (this.failureStage === "none") this.failureStage = stage;
+    if (this.safeErrorCode === null) this.safeErrorCode = isSafeRuntimeErrorCode(code) ? code : "UNKNOWN";
   }
 }
