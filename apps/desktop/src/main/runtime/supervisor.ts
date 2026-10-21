@@ -19,6 +19,7 @@ export type SidecarSupervisorOptions = {
 const SIDECAR_ENV_KEYS = new Set([
   "PATH", "Path", "SystemRoot", "WINDIR", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR",
   "SHULIU_DATA_DIR", "SHULIU_MODEL_PROFILES_JSON", "SHULIU_ORGANIZATION_ID",
+  "SHULIU_MODEL_CONNECTION_TEST",
   "LANG", "LC_ALL", "PYTHONPATH", "PYTHONUTF8", "PYTHONIOENCODING", "VIRTUAL_ENV",
 ]);
 
@@ -134,6 +135,12 @@ export class SidecarSupervisor {
     this.stateValue = this.restartCount === 0 ? "starting" : "restarting";
     this.startupStage = "sidecar_spawn";
     this.handshakeStatus = "not_started";
+    this.failureStage = "none";
+    this.sidecarExitCode = null;
+    this.sidecarSignal = null;
+    this.safeErrorCode = null;
+    this.lastSidecarLog = undefined;
+    this.stderrBuffer = "";
     let child: ChildProcess;
     try {
       const spawnOptions: SpawnOptions = {
@@ -167,8 +174,9 @@ export class SidecarSupervisor {
       throw new RuntimeIpcError("SIDECAR_SPAWN_FAILED");
     }
 
-    this.stderrBuffer = "";
-    stderr.on("data", (chunk: Buffer | string) => this.onStderr(chunk));
+    stderr.on("data", (chunk: Buffer | string) => {
+      if (this.child === child) this.onStderr(chunk);
+    });
     const channel = new NdjsonChannel(stdout, stdin, undefined, (error) => this.onChannelFailure(child, error));
     this.channel = channel;
     child.once("error", () => this.onChildExit(child, new RuntimeIpcError("SIDECAR_SPAWN_FAILED"), { kind: "spawn_error" }));
@@ -191,7 +199,8 @@ export class SidecarSupervisor {
     } catch (error) {
       this.fatalChildren.add(child);
       this.stateValue = "safe_mode";
-      this.handshakeStatus = "failed";
+      const spawnFailed = error instanceof RuntimeIpcError && error.code === "SIDECAR_SPAWN_FAILED";
+      if (!spawnFailed) this.handshakeStatus = "failed";
       this.recordFailure("ipc_handshake", error instanceof RuntimeIpcError ? error.code : "IPC_HANDSHAKE_FAILED");
       channel.close(error instanceof RuntimeIpcError ? error : new RuntimeIpcError("IPC_HANDSHAKE_FAILED"));
       if (error instanceof RuntimeIpcError && error.code === "SIDECAR_EXITED") {
@@ -257,8 +266,13 @@ export class SidecarSupervisor {
       ? "sidecar_spawn"
       : this.startupStage === "ipc_handshake" ? "ipc_handshake" : "sidecar_exit";
     this.recordFailure(failureStage, error.code);
-    if (this.handshakeStatus === "pending") this.handshakeStatus = "failed";
-    if (!spawnFailed) this.startupStage = "sidecar_exit";
+    if (spawnFailed) {
+      this.startupStage = "sidecar_spawn";
+      this.handshakeStatus = "not_started";
+    } else {
+      if (this.handshakeStatus === "pending") this.handshakeStatus = "failed";
+      this.startupStage = "sidecar_exit";
+    }
     this.channel?.close(error);
     this.channel = undefined;
     this.child = undefined;

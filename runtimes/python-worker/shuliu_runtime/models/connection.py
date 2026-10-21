@@ -80,6 +80,7 @@ class ProviderConnectionService:
         gateway: ModelGateway,
         context: ProviderConnectionContext,
         *,
+        canary_enabled: bool = False,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if not isinstance(profiles, tuple) or any(
@@ -93,9 +94,12 @@ class ProviderConnectionService:
             raise TypeError("a Model Gateway is required")
         if not isinstance(context, ProviderConnectionContext):
             raise TypeError("trusted connection authorization context is required")
+        if not isinstance(canary_enabled, bool):
+            raise TypeError("provider canary enablement must be explicit")
         self._profiles = {profile.provider_id: profile for profile in profiles}
         self._gateway = gateway
         self._context = context
+        self._canary_enabled = canary_enabled
         self._monotonic = monotonic
 
     def test_provider_connection(
@@ -108,6 +112,11 @@ class ProviderConnectionService:
         safe_capability = capability.value if isinstance(capability, ModelCapability) else (
             capability if isinstance(capability, str) and _SAFE_IDENTIFIER.fullmatch(capability) else "unknown"
         )
+        if not self._canary_enabled:
+            return self._result(
+                "blocked", safe_provider_id, "", safe_capability, trace_id,
+                "MODEL_CONNECTION_TEST_DISABLED", 0.0,
+            )
         profile = self._profiles.get(provider_id) if isinstance(provider_id, str) else None
         if profile is None:
             return self._result(
@@ -447,7 +456,12 @@ def create_provider_runtime_from_environment() -> ProviderRuntime:
         permissions=("foundation.model.connection_test",),
         budget_ref=f"budget://{organization_id}/model-connection-test",
     )
-    service = ProviderConnectionService(profiles, gateway, context)
+    service = ProviderConnectionService(
+        profiles,
+        gateway,
+        context,
+        canary_enabled=os.environ.get("SHULIU_MODEL_CONNECTION_TEST") == "1",
+    )
     return ProviderRuntime(profiles, secret_resolver, service)
 
 

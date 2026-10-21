@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import threading
 import pytest
 from dataclasses import asdict
 
 import shuliu_runtime.models as models
+import shuliu_runtime.models.connection as provider_connection
 from shuliu_runtime.models.gateway import ModelGateway
 from shuliu_runtime.policy.engine import PolicyEngine
 from shuliu_runtime.policy.rules import PolicyRule
@@ -41,7 +43,7 @@ def _profile():
     }]))[0]
 
 
-def _service(*, policy_allowed=True, budget_allowed=True, failure=None):
+def _service(*, policy_allowed=True, budget_allowed=True, failure=None, canary_enabled=True):
     profile = _profile()
     provider = profile.to_model_provider_config()
     adapter = FakeModel(failures={"provider-a": failure} if failure else {})
@@ -80,8 +82,68 @@ def _service(*, policy_allowed=True, budget_allowed=True, failure=None):
         permissions=("foundation.model.connection_test",),
         budget_ref="budget://org-a/provider-connection-test",
     )
-    service = _service_type()((profile,), gateway, context)
+    service = _service_type()((profile,), gateway, context, canary_enabled=canary_enabled)
     return service, adapter, budget
+
+
+def test_canary_gate_blocks_before_gateway_when_not_explicitly_enabled():
+    service, adapter, _ = _service(canary_enabled=False)
+
+    result = service.test_provider_connection("provider-a", "fast_chat")
+
+    assert result.status == "blocked"
+    assert result.safe_error_code == "MODEL_CONNECTION_TEST_DISABLED"
+    assert result.trace_id
+    assert adapter.calls == []
+
+
+def test_provider_ipc_cannot_bypass_the_disabled_canary_gate():
+    service, adapter, _ = _service(canary_enabled=False)
+    profile = _profile()
+    runtime_type = getattr(models, "ProviderRuntime", None)
+    handlers_factory = getattr(models, "create_provider_ipc_handlers", None)
+    assert callable(runtime_type)
+    assert callable(handlers_factory)
+    runtime = runtime_type(
+        (profile,),
+        SecretResolver({"os": _ConnectionSecrets()}),
+        service,
+    )
+
+    result = handlers_factory(runtime)["providers.test_connection"](
+        {"provider_id": "provider-a", "capability": "fast_chat"}, threading.Event()
+    )
+
+    assert result["status"] == "blocked"
+    assert result["safe_error_code"] == "MODEL_CONNECTION_TEST_DISABLED"
+    assert adapter.calls == []
+
+
+def test_runtime_factory_enables_canary_only_for_explicit_process_opt_in(monkeypatch):
+    from shuliu_runtime.models.gateway import ModelGatewayError
+
+    monkeypatch.delenv("SHULIU_MODEL_CONNECTION_TEST", raising=False)
+    monkeypatch.setattr(provider_connection, "load_provider_profiles", lambda: (_profile(),))
+    monkeypatch.setattr(provider_connection, "OSSecretStore", lambda: _ConnectionSecrets())
+    calls = []
+
+    def stop_before_provider(self, provider_id, request):
+        calls.append((provider_id, request))
+        raise ModelGatewayError("MODEL_CONNECTION_TEST_SENTINEL", "safe test sentinel")
+
+    monkeypatch.setattr(provider_connection.ModelGateway, "complete_for_provider", stop_before_provider)
+    disabled = provider_connection.create_provider_runtime_from_environment()
+    denied = disabled.test_connection("provider-a", "fast_chat")
+    assert denied["status"] == "blocked"
+    assert denied["safe_error_code"] == "MODEL_CONNECTION_TEST_DISABLED"
+    assert calls == []
+
+    monkeypatch.setenv("SHULIU_MODEL_CONNECTION_TEST", "1")
+    enabled = provider_connection.create_provider_runtime_from_environment()
+    result = enabled.test_connection("provider-a", "fast_chat")
+    assert result["status"] == "failed"
+    assert result["safe_error_code"] == "MODEL_PROVIDER_ERROR"
+    assert len(calls) == 1
 
 
 def test_connection_uses_gateway_policy_budget_and_returns_only_safe_result():

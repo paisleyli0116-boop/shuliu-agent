@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:shuliu:release:model-provider-evidence:1.0.0",
+  "title": "ShuLiu real model provider connection evidence",
+  "description": "Redacted evidence for a successful real-provider canary. Fake-provider results are not release evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_type",
+    "execution_mode",
+    "provider_id",
+    "model",
+    "capability",
+    "status",
+    "latency_ms",
+    "trace_id",
+    "safe_error_code",
+    "provider_response_received",
+    "tested_at_utc",
+    "license_review",
+    "data_processing_review",
+    "security_review"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "evidence_type": { "const": "real_model_provider_connection" },
+    "execution_mode": { "const": "real_provider" },
+    "provider_id": {
+      "type": "string",
+      "pattern": "^(?!.*[sS][kK]-[A-Za-z0-9_-]{8,})(?!.*[rR][kK]-[A-Za-z0-9_-]{8,})(?!.*[pP][kK]-[A-Za-z0-9_-]{8,})(?!.*glpat-[A-Za-z0-9_-]{12,})(?!.*AIza[A-Za-z0-9_-]{20,})(?!.*ya29\\.[A-Za-z0-9_-]{16,})(?!.*eyJ[A-Za-z0-9_-]{8,}(?:\\.[A-Za-z0-9_-]{8,}){2}$)(?!.*[A-Za-z0-9_-]{32,})(?!.*[aA][pP][iI][_-]?[kK][eE][yY][:_-])(?!.*[bB][eE][aA][rR][eE][rR][:_\\s])(?!.*[tT][oO][kK][eE][nN][:_-])[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$"
+    },
+    "model": {
+      "type": "string",
+      "pattern": "^(?!.*[sS][kK]-[A-Za-z0-9_-]{8,})(?!.*[rR][kK]-[A-Za-z0-9_-]{8,})(?!.*[pP][kK]-[A-Za-z0-9_-]{8,})(?!.*glpat-[A-Za-z0-9_-]{12,})(?!.*AIza[A-Za-z0-9_-]{20,})(?!.*(?:^|/)ya29\\.[A-Za-z0-9_-]{16,})(?!.*(?:^|/)eyJ[A-Za-z0-9_-]{8,}(?:\\.[A-Za-z0-9_-]{8,}){2}(?:/|$))(?!.*[A-Za-z0-9_-]{32,})(?!.*[aA][pP][iI][_-]?[kK][eE][yY][:_-])(?!.*[bB][eE][aA][rR][eE][rR][:_\\s])(?!.*[tT][oO][kK][eE][nN][:_-])(?!.*[sS][eE][cC][rR][eE][tT]://)(?!.*[hH][tT][tT][pP][sS]?://)[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+    },
+    "capability": { "enum": ["fast_chat", "reasoning_high", "vision", "embedding"] },
+    "status": { "const": "connected" },
+    "latency_ms": { "type": "number", "minimum": 0 },
+    "trace_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "safe_error_code": { "type": "null" },
+    "provider_response_received": { "const": true },
+    "tested_at_utc": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$"
+    },
+    "license_review": { "$ref": "#/$defs/review" },
+    "data_processing_review": { "$ref": "#/$defs/review" },
+    "security_review": { "$ref": "#/$defs/review" }
+  },
+  "$defs": {
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reference"],
+      "properties": {
+        "status": { "const": "pending" },
+        "reference": {
+          "description": "Current license, data-processing, and security reviews remain pending. This exact official privacy-policy URL may be listed for review context but does not indicate approval.",
+          "type": "string",
+          "maxLength": 256,
+          "oneOf": [
+            { "const": "" },
+            {
+              "enum": [
+                "https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

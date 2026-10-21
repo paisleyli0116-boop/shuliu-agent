@@ -100,7 +100,7 @@ def test_secret_resolver_supplies_plaintext_only_to_gateway_adapter_call():
         permissions=("foundation.model.connection_test",),
         budget_ref="budget://org-a/provider-connection-test",
     )
-    service = service_type((profile,), gateway, context)
+    service = service_type((profile,), gateway, context, canary_enabled=True)
 
     result = service.test_provider_connection("provider-a", "fast_chat")
 
