@@ -77,6 +77,8 @@ def test_completion_uses_official_base_only_for_deepseek(
     ("status_code", "provider_code", "expected"),
     [
         (401, None, "MODEL_CREDENTIAL_REJECTED"),
+        (403, None, "MODEL_PROVIDER_ERROR"),
+        (403, "invalid_api_key", "MODEL_CREDENTIAL_REJECTED"),
         (402, None, "MODEL_BALANCE_INSUFFICIENT"),
         (429, None, "MODEL_RATE_LIMITED"),
         (408, None, "MODEL_TIMEOUT"),

@@ -174,8 +174,10 @@ def _provider_error_code(error: Exception) -> str:
     status = _http_status(error)
     structured_code = _structured_provider_error_code(error)
 
-    if status in {401, 403}:
+    if status == 401:
         return "MODEL_CREDENTIAL_REJECTED"
+    if status == 403:
+        return structured_code or "MODEL_PROVIDER_ERROR"
     if status == 402:
         return "MODEL_BALANCE_INSUFFICIENT"
     if status == 429:
