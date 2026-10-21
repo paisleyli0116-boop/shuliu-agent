@@ -19,7 +19,7 @@ export type DesktopApprovalService = {
 };
 export type DesktopProviderService = {
   list(): Promise<ProviderCatalog>;
-  testConnection(input: { providerId: string; modelId: string }): Promise<ProviderTestResult>;
+  testConnection(input: { providerId: string; capability: string }): Promise<ProviderTestResult>;
   saveProfile(input: { providerId: string; modelId: string; apiKey: string }): Promise<ProviderCredentialResult>;
   replaceCredential(input: { profileId: string; apiKey: string }): Promise<ProviderCredentialResult>;
 };
@@ -35,6 +35,7 @@ export type DesktopIpcMainLike = {
 
 const validIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/;
 const validModelIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const validModelCapabilities = new Set(["fast_chat", "reasoning_high", "vision", "embedding"]);
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -97,12 +98,12 @@ export function registerDesktopIpc(
       return services.providers.list();
     }],
     [DESKTOP_IPC_CHANNELS.providersTestConnection, (args) => {
-      const payload = onePayload(args, ["providerId", "modelId"]);
+      const payload = onePayload(args, ["providerId", "capability"]);
       if (typeof payload.providerId !== "string" || !validIdentifier.test(payload.providerId) ||
-        typeof payload.modelId !== "string" || !validModelIdentifier.test(payload.modelId)) {
+        typeof payload.capability !== "string" || !validModelCapabilities.has(payload.capability)) {
         throw new DesktopIpcError("DESKTOP_REQUEST_INVALID");
       }
-      return services.providers.testConnection({ providerId: payload.providerId, modelId: payload.modelId });
+      return services.providers.testConnection({ providerId: payload.providerId, capability: payload.capability });
     }],
     [DESKTOP_IPC_CHANNELS.providersSaveProfile, (args) => {
       const payload = onePayload(args, ["providerId", "modelId", "apiKey"]);

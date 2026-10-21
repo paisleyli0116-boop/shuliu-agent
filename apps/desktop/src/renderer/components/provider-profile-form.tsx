@@ -3,7 +3,40 @@ import type { ProviderCatalog, RendererApi } from "../../preload/api";
 import { safeUiError } from "../api/client";
 import { createProviderSettingsClient } from "../api/providers";
 
-type Feedback = { kind: "success" | "error" | "simulated"; message: string } | null;
+type Feedback = { kind: "success" | "error"; message: string } | null;
+
+const connectionErrorMessages: Record<string, string> = {
+  MODEL_BALANCE_INSUFFICIENT: "DeepSeek 账户余额不足，请到服务商平台确认。",
+  MODEL_BUDGET_EXHAUSTED: "连接测试预算不足，请联系管理员确认。",
+  MODEL_BUDGET_SETTLEMENT_FAILED: "测试额度结算未完成，请凭 Trace ID 联系管理员。",
+  MODEL_BUDGET_UNAVAILABLE: "预算校验暂时不可用，连接测试已停止。",
+  MODEL_CAPABILITY_UNSUPPORTED: "当前模型不支持此连接测试。",
+  MODEL_CONNECTION_FAILED: "原因待确认",
+  MODEL_CONNECTION_TEST_DISABLED: "系统尚未启用真实 Provider 连接测试。",
+  MODEL_CREDENTIAL_REJECTED: "API Key 或凭据未通过验证，请检查密钥和服务权限。",
+  MODEL_CREDENTIAL_UNAVAILABLE: "没有找到已保存的 API Key，请先保存凭据。",
+  MODEL_INPUT_INVALID: "连接测试输入无效，请检查模型配置。",
+  MODEL_NETWORK_ERROR: "网络连接失败，请检查网络后重试。",
+  MODEL_NO_ELIGIBLE_PROVIDER: "当前安全策略下没有可用的模型服务商。",
+  MODEL_NOT_FOUND: "服务商未识别该模型，请确认模型 ID。",
+  MODEL_POLICY_DENIED: "当前安全策略不允许执行连接测试。",
+  MODEL_POLICY_UNAVAILABLE: "安全策略校验暂时不可用，连接测试已停止。",
+  MODEL_PROVIDER_ERROR: "原因待确认",
+  MODEL_PROVIDER_NOT_CONFIGURED: "尚未配置此服务商。",
+  MODEL_PROVIDER_RESPONSE_INVALID: "服务商返回了无法识别的结果。",
+  MODEL_PROVIDER_SERVER_ERROR: "服务商暂时异常，请稍后再试。",
+  MODEL_PROVIDER_UNAVAILABLE: "模型连接组件暂时不可用。",
+  MODEL_RATE_LIMITED: "请求过于频繁；本次没有自动重试。",
+  MODEL_REQUEST_INVALID: "连接测试请求无效，请检查配置。",
+  MODEL_REQUEST_REJECTED: "服务商拒绝了请求参数，请检查 Provider 和模型配置。",
+  MODEL_ROUTE_MISMATCH: "返回的模型路由与当前配置不一致。",
+  MODEL_TELEMETRY_UNAVAILABLE: "安全审计暂时不可用，连接测试已停止。",
+  MODEL_TIMEOUT: "连接超时；本次没有自动重试。",
+};
+
+function connectionFailureMessage(code: string | null): string {
+  return code ? connectionErrorMessages[code] ?? "原因待确认" : "原因待确认";
+}
 
 export function ProviderProfileForm({ api }: { api: RendererApi }) {
   const providers = useMemo(() => createProviderSettingsClient(api), [api]);
@@ -51,17 +84,29 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
 
   const testConnection = async () => {
     if (!selectedProvider || !selectedModel) return;
-    if (!apiKey.trim() && !selectedProvider.configured) {
-      setFeedback({ kind: "error", message: "请先输入 API Key；当前测试仅为模拟流程。" });
+    const capability = selectedModel.capabilities[0];
+    if (!capability) {
+      setFeedback({ kind: "error", message: "当前模型没有可测试的能力。" });
       return;
     }
     setBusy(true);
     setFeedback(null);
     try {
-      const result = await providers.testConnection({ providerId, modelId: selectedModel.id });
-      setFeedback({ kind: "simulated", message: result.message });
+      const result = await providers.testConnection({ providerId, capability });
+      if (result.status === "connected") {
+        setFeedback({
+          kind: "success",
+          message: "真实 Provider 连接成功（" + result.latency_ms + " ms；Trace " + result.trace_id + "）。",
+        });
+      } else {
+        setFeedback({
+          kind: "error",
+          message: "连接测试未通过：" + connectionFailureMessage(result.safe_error_code) +
+            "（Trace ID: " + result.trace_id + "）。",
+        });
+      }
     } catch {
-      setFeedback({ kind: "error", message: "模拟连接测试未完成，请稍后重试。" });
+      setFeedback({ kind: "error", message: "连接测试未完成；请检查运行时状态后重试。" });
     } finally {
       setApiKey("");
       setBusy(false);
@@ -84,7 +129,7 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
       }
       setApiKey("");
       setReplaceMode(false);
-      setFeedback({ kind: "success", message: "凭据已安全保存；Provider 尚未连接，真实连接验证将在 Task 28 接入。" });
+      setFeedback({ kind: "success", message: "凭据已写入系统安全存储。连接状态需通过手动 canary 测试确认。" });
       await loadCatalog();
     } catch (error) {
       setApiKey("");
@@ -102,7 +147,19 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
       </section>
     );
   }
-  if (!catalog || !selectedProvider || !selectedModel) {
+  if (!catalog) {
+    return <section className="panel loading-state" aria-live="polite">正在读取可用模型配置…</section>;
+  }
+  if (catalog.providers.length === 0) {
+    return (
+      <section className="panel empty-state" aria-live="polite">
+        <h3>尚未配置可用模型</h3>
+        <p>请先配置 Provider 和模型。配置完成后，可在此保存密钥并手动测试连接。</p>
+        <button className="button button--secondary" onClick={() => void loadCatalog()}>重新加载</button>
+      </section>
+    );
+  }
+  if (!selectedProvider || !selectedModel) {
     return <section className="panel loading-state" aria-live="polite">正在读取可用模型配置…</section>;
   }
 
@@ -115,7 +172,7 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
             <span className="eyebrow">MODEL GATEWAY</span>
             <h2>连接配置</h2>
           </div>
-          <span className="simulation-tag">演示配置</span>
+
         </div>
 
         <label className="field">
@@ -157,12 +214,12 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
               spellCheck={false}
               disabled={busy}
             />
-            <small>保存时通过受控 IPC 交给主进程，并由系统安全存储加密。</small>
+            <small>密钥通过受控 IPC 写入系统安全存储；页面不会读取或回显已保存密钥。</small>
           </label>
         )}
 
         <div className="button-row">
-          <button className="button button--secondary" onClick={() => void testConnection()} disabled={busy || (!apiKey.trim() && !selectedProvider.configured)}>
+          <button className="button button--secondary" onClick={() => void testConnection()} disabled={busy || selectedModel.capabilities.length === 0}>
             {busy ? "处理中…" : "测试连接"}
           </button>
           {showCredentialInput && (
@@ -179,8 +236,8 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
         <span className="notice-icon" aria-hidden="true">i</span>
         <div>
           <h3>连接状态说明</h3>
-          <p>页面操作会真实经过 Renderer → Preload → Main。Provider 目录与连接测试目前是演示实现；测试结果不会发起网络请求。</p>
-          <p>API Key 只送入主进程的 OS secure storage，不会返回 Renderer。真实 Provider、预算策略和 Model Gateway 请求由 Task 28 接入。</p>
+          <p>连接测试只会在用户手动触发时发送固定的公开 canary，不会使用任务内容。请求通过 Model Gateway 的 Policy、预算、健康检查与 SecretResolver。</p>
+          <p>API Key 不会进入普通配置、日志或页面持久状态；连接结果只返回安全状态码、Trace ID 与延迟。</p>
         </div>
       </aside>
     </div>

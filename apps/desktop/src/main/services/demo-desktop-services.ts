@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { ApprovalSummary, TaskSummary } from "../../preload/api";
-import type { ProviderCredentialStore } from "./provider-settings";
-import { ProviderSettingsService } from "./provider-settings";
+import type { DesktopProviderService } from "../ipc/desktop-ipc";
 
 const DEMO_APPROVAL_ID = "approval-demo-1";
 
-export function createDemoDesktopServices(credentialStore: ProviderCredentialStore) {
+export function createDemoDesktopServices(providers: DesktopProviderService) {
   const tasks: TaskSummary[] = [];
   const approvals: ApprovalSummary[] = [
     {
@@ -46,6 +45,6 @@ export function createDemoDesktopServices(credentialStore: ProviderCredentialSto
         return { ...approval };
       },
     },
-    providers: new ProviderSettingsService(credentialStore),
+    providers,
   };
 }

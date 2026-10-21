@@ -71,3 +71,32 @@ describe("desktop IPC allowlist", () => {
     expect(handlers.size).toBe(0);
   });
 });
+it("accepts a capability-scoped provider canary request", async () => {
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  const providers = {
+    list: vi.fn(),
+    testConnection: vi.fn().mockResolvedValue({ status: "connected" }),
+    saveProfile: vi.fn(),
+    replaceCredential: vi.fn(),
+  };
+  const services = {
+    tasks: { list: vi.fn(), get: vi.fn(), create: vi.fn() },
+    approvals: { list: vi.fn(), decide: vi.fn() },
+    providers,
+  };
+  registerDesktopIpc(
+    { handle: vi.fn((channel, listener) => handlers.set(channel, listener)) },
+    services,
+    () => true,
+  );
+
+  await handlers.get("shuliu:providers:test-connection")?.("trusted", {
+    providerId: "openai-compatible",
+    capability: "fast_chat",
+  });
+
+  expect(providers.testConnection).toHaveBeenCalledWith({
+    providerId: "openai-compatible",
+    capability: "fast_chat",
+  });
+});

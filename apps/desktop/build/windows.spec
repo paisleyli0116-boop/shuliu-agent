@@ -17,6 +17,7 @@ analysis = Analysis(
     hiddenimports=[
         *collect_submodules("jsonschema", filter=exclude_test_modules),
         *collect_submodules("referencing", filter=exclude_test_modules),
+        "keyring.backends.Windows",
     ],
     hookspath=[],
     hooksconfig={},

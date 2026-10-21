@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runHealthProbe } from "./health-probe.js";
@@ -6,7 +6,7 @@ import type { RuntimeHealth } from "../preload/api.js";
 import { registerRuntimeIpc } from "./runtime/ipc.js";
 import { SidecarSupervisor } from "./runtime/supervisor.js";
 import { createSidecarLaunchOptions } from "./runtime/launch-options.js";
-import { LocalSecureStorage } from "./security/secure-storage.js";
+import { RuntimeProviderService } from "./ipc/providers.js";
 import { createDemoDesktopServices } from "./services/demo-desktop-services.js";
 import { registerDesktopIpc } from "./ipc/desktop-ipc.js";
 import { createSecureWindowWebPreferences, isTrustedRendererRequest } from "./window-security.js";
@@ -29,12 +29,8 @@ const supervisor = new SidecarSupervisor({
   maxRestarts: 1,
 });
 
-const secureStorage = new LocalSecureStorage({
-  safeStorage,
-  platform: process.platform === "darwin" ? "darwin" : process.platform === "win32" ? "win32" : "linux",
-  userDataPath: app.getPath("userData"),
-});
-const services = createDemoDesktopServices(secureStorage);
+const providers = new RuntimeProviderService((method, params, options) => supervisor.request(method, params, options));
+const services = createDemoDesktopServices(providers);
 let mainWindow: BrowserWindow | undefined;
 let removeRuntimeHandlers: (() => void) | undefined;
 let removeDesktopHandlers: (() => void) | undefined;

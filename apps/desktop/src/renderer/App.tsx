@@ -17,7 +17,7 @@ const pageTitles: Record<Page, { title: string; description: string }> = {
   tasks: { title: "任务工作台", description: "创建和跟踪通用 Agent 任务。" },
   approvals: { title: "人工审批", description: "查看需要人工判断的操作请求。" },
   runtime: { title: "运行状态", description: "检查 Desktop 与 Python Runtime 的连接状态。" },
-  providers: { title: "模型与连接", description: "管理模型能力与凭据。Provider 请求目前处于模拟模式。" },
+  providers: { title: "模型与连接", description: "管理可用模型的安全凭据，并手动验证 Provider 连接。" },
 };
 
 export function App({ api: providedApi }: { api?: RendererApi }) {
@@ -100,7 +100,7 @@ export function App({ api: providedApi }: { api?: RendererApi }) {
             <div><span className="eyebrow">SHULIU FOUNDATION · V0.1</span><h1>{activePage.title}</h1><p>{activePage.description}</p></div>
             <div className="page-heading__status"><RuntimeHealthCard health={health} compact /></div>
           </div>
-          <div className="demo-banner"><span className="demo-banner__icon" aria-hidden="true">i</span><span><strong>演示工作区</strong>　任务与审批数据为当前进程内的演示数据；真实 Provider 连接尚未接入。API Key 保存时会交由主进程的系统安全存储处理。</span></div>
+          <div className="demo-banner"><span className="demo-banner__icon" aria-hidden="true">i</span><span><strong>演示工作区</strong>　任务与审批数据为当前进程内的演示数据；Provider 连接测试通过 Python Sidecar 的 Model Gateway 执行。API Key 仅通过受控 IPC 写入系统安全存储。</span></div>
 
           {page === "tasks" && <TasksRoute api={api} safeMode={safeMode} />}
           {page === "approvals" && <ApprovalsRoute api={api} safeMode={safeMode} onPendingCountChange={setPendingApprovalCount} />}

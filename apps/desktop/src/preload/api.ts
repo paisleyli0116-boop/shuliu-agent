@@ -36,19 +36,23 @@ export type ProviderOption = {
   id: string;
   name: string;
   models: ProviderModel[];
-  configured: boolean;
+  configured?: boolean;
   selected_model_id?: string;
 };
 export type ProviderCatalog = { providers: ProviderOption[] };
 export type ProviderTestResult = {
-  simulated: true;
-  outcome: "success" | "unavailable";
-  message: string;
+  status: "connected" | "blocked" | "failed";
+  provider_id: string;
+  model: string;
+  capability: string;
+  latency_ms: number;
+  trace_id: string;
+  safe_error_code: string | null;
 };
 export type ProviderCredentialResult = {
   profile_id: string;
   configured: true;
-  storage: "OS_SECURE_STORAGE";
+  storage: "OS_SECURE_STORAGE" | "CLOUD_SECRET_MANAGER";
 };
 
 export type RendererApi = {
@@ -64,7 +68,7 @@ export type RendererApi = {
   };
   providers: {
     list(): Promise<ProviderCatalog>;
-    testConnection(input: { providerId: string; modelId: string }): Promise<ProviderTestResult>;
+    testConnection(input: { providerId: string; capability: string }): Promise<ProviderTestResult>;
     saveProfile(input: { providerId: string; modelId: string; apiKey: string }): Promise<ProviderCredentialResult>;
     replaceCredential(input: { profileId: string; apiKey: string }): Promise<ProviderCredentialResult>;
   };
@@ -95,7 +99,7 @@ export function createRendererApi(invoke: IpcRendererPort["invoke"]): RendererAp
     }),
     providers: Object.freeze({
       list: () => call<ProviderCatalog>(DESKTOP_IPC_CHANNELS.providersList),
-      testConnection: (input: { providerId: string; modelId: string }) =>
+      testConnection: (input: { providerId: string; capability: string }) =>
         call<ProviderTestResult>(DESKTOP_IPC_CHANNELS.providersTestConnection, input),
       saveProfile: (input: { providerId: string; modelId: string; apiKey: string }) =>
         call<ProviderCredentialResult>(DESKTOP_IPC_CHANNELS.providersSaveProfile, input),

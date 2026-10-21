@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from importlib import import_module
+import sys
 from types import ModuleType
 
 from .secret_ref import SecretRef
@@ -42,8 +43,14 @@ class _KeyringBackend:
 
 def _load_approved_backend(keyring_module: ModuleType | object | None = None) -> object:
     try:
-        module = keyring_module or import_module("keyring")
-        backend = module.get_keyring()
+        if keyring_module is None and sys.platform == "win32":
+            # Frozen Sidecars do not reliably retain package entry-point metadata.
+            # Select the approved native backend explicitly on the only delivery platform.
+            module = import_module("keyring.backends.Windows")
+            backend = module.WinVaultKeyring()
+        else:
+            module = keyring_module or import_module("keyring")
+            backend = module.get_keyring()
     except Exception:
         raise SecretStoreUnavailableError("OS secure storage is unavailable") from None
 

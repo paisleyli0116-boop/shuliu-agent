@@ -1,4 +1,5 @@
 from importlib import import_module
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -111,6 +112,27 @@ def test_os_secret_store_fails_closed_for_an_unapproved_keyring_backend():
     keyring_module = SimpleNamespace(get_keyring=lambda: PlaintextBackend())
     with pytest.raises(module.SecretStoreUnavailableError):
         module.OSSecretStore(keyring_module=keyring_module)
+
+
+def test_windows_selects_the_approved_vault_backend_without_entry_point_discovery(monkeypatch):
+    secure_store = import_module("shuliu_runtime.security.os_secret_store")
+    vault_backend = type(
+        "WinVaultKeyring",
+        (),
+        {"__module__": "keyring.backends.Windows"},
+    )
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(
+        secure_store,
+        "import_module",
+        lambda name: SimpleNamespace(WinVaultKeyring=vault_backend)
+        if name == "keyring.backends.Windows"
+        else pytest.fail("Windows must not use plugin entry-point discovery"),
+    )
+
+    backend = secure_store._load_approved_backend()
+
+    assert isinstance(backend, vault_backend)
 
 
 def test_unknown_secret_reference_is_not_resolved_implicitly():

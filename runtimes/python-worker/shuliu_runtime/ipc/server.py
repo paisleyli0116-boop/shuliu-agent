@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO
 
 from shuliu_runtime.ipc.bootstrap import RuntimeBootstrapError, bootstrap_runtime
+from shuliu_runtime.models.config import ProviderConfigurationError
+from shuliu_runtime.models.connection import create_provider_ipc_handlers, create_provider_runtime_from_environment
 
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
@@ -212,7 +214,16 @@ def main() -> int:
             },
         },
     }
-    IpcServer(health_state=health_state).serve()
+    try:
+        provider_runtime = create_provider_runtime_from_environment()
+    except ProviderConfigurationError:
+        logger.error("event=provider_configuration_failed code=MODEL_PROVIDER_CONFIGURATION_INVALID")
+        return 1
+
+    IpcServer(
+        handlers=create_provider_ipc_handlers(provider_runtime),
+        health_state=health_state,
+    ).serve()
     return 0
 
 

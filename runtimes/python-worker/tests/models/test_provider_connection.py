@@ -1,0 +1,327 @@
+from __future__ import annotations
+
+import json
+import pytest
+from dataclasses import asdict
+
+import shuliu_runtime.models as models
+from shuliu_runtime.models.gateway import ModelGateway
+from shuliu_runtime.policy.engine import PolicyEngine
+from shuliu_runtime.policy.rules import PolicyRule
+from shuliu_runtime.security.secret_store import SecretResolver
+
+class _ConnectionSecrets:
+    def get(self, reference):
+        return "sk-connection-test-marker"
+
+    def put(self, reference, value):
+        raise AssertionError("connection test must not write credentials")
+
+    def delete(self, reference):
+        raise AssertionError("connection test must not delete credentials")
+from tests.fakes.fake_model import FakeModel, MemoryBudget, MemoryHealth, MemoryModelCalls
+
+
+def _service_type():
+    service_type = getattr(models, "ProviderConnectionService", None)
+    assert callable(service_type), "Task 28 must provide a Gateway-backed connection test service"
+    return service_type
+
+
+def _profile():
+    loader = getattr(models, "load_provider_profiles", None)
+    assert callable(loader), "Task 28 must expose validated provider profiles"
+    return loader(json.dumps([{
+        "provider_id": "provider-a",
+        "model": "openai/gpt-4.1-mini",
+        "capabilities": ["fast_chat"],
+        "priority": 1,
+        "is_local": False,
+        "secret_ref": "secret://os/providers/provider-a/key",
+    }]))[0]
+
+
+def _service(*, policy_allowed=True, budget_allowed=True, failure=None):
+    profile = _profile()
+    provider = profile.to_model_provider_config()
+    adapter = FakeModel(failures={"provider-a": failure} if failure else {})
+    policy = PolicyEngine(
+        [
+            PolicyRule(
+                rule_id="allow-provider-connection-test",
+                action="model.invoke.fast_chat.provider-a",
+                risk="LOW",
+                decision="ALLOW",
+                organization_id="org-a",
+                permission="foundation.model.connection_test",
+                resource_type="model_provider",
+                classification="PUBLIC",
+                privacy="PUBLIC",
+            )
+        ] if policy_allowed else [],
+        policy_version="test-policy-v1",
+    )
+    budget = MemoryBudget(allowed=budget_allowed)
+    gateway = ModelGateway(
+        providers=(provider,),
+        adapter=adapter,
+        policy=policy,
+        budget=budget,
+        health=MemoryHealth(("provider-a",)),
+        model_calls=MemoryModelCalls(),
+        secret_resolver=SecretResolver({"os": _ConnectionSecrets()}),
+        fallback_enabled=True,
+    )
+    context_type = getattr(models, "ProviderConnectionContext", None)
+    assert callable(context_type), "connection test must receive trusted authorization context"
+    context = context_type(
+        organization_id="org-a",
+        subject_id="user-a",
+        permissions=("foundation.model.connection_test",),
+        budget_ref="budget://org-a/provider-connection-test",
+    )
+    service = _service_type()((profile,), gateway, context)
+    return service, adapter, budget
+
+
+def test_connection_uses_gateway_policy_budget_and_returns_only_safe_result():
+    service, adapter, budget = _service()
+
+    result = service.test_provider_connection("provider-a", "fast_chat")
+
+    assert result.status == "connected", result
+    assert result.provider_id == "provider-a"
+    assert result.model == "openai/gpt-4.1-mini"
+    assert result.capability == "fast_chat"
+    assert result.trace_id
+    assert result.safe_error_code is None
+    assert adapter.calls == [type(adapter.calls[0])("provider-a", "openai/gpt-4.1-mini")]
+    assert budget.settlements
+    assert "output" not in asdict(result)
+    assert "api_key" not in asdict(result)
+
+
+def test_policy_denial_and_exhausted_budget_block_before_provider_call():
+    denied, denied_adapter, _ = _service(policy_allowed=False)
+    over_budget, budget_adapter, _ = _service(budget_allowed=False)
+
+    denied_result = denied.test_provider_connection("provider-a", "fast_chat")
+    budget_result = over_budget.test_provider_connection("provider-a", "fast_chat")
+
+    assert denied_result.status == "blocked"
+    assert denied_result.safe_error_code == "MODEL_POLICY_DENIED"
+    assert budget_result.status == "blocked"
+    assert budget_result.safe_error_code == "MODEL_BUDGET_EXHAUSTED"
+    assert denied_adapter.calls == []
+    assert budget_adapter.calls == []
+
+
+def test_provider_failure_never_returns_provider_exception_text():
+    service, adapter, _ = _service(failure=RuntimeError("sk-connection-secret"))
+
+    result = service.test_provider_connection("provider-a", "fast_chat")
+
+    assert result.status == "failed"
+    assert result.safe_error_code == "MODEL_PROVIDER_ERROR"
+    assert "sk-connection-secret" not in repr(result)
+    assert len(adapter.calls) == 1
+
+
+def test_connection_test_cannot_fallback_to_a_different_provider():
+    assert hasattr(ModelGateway, "complete_for_provider"), (
+        "Task 28 must let the gateway constrain a connection probe to its selected provider"
+    )
+
+def test_gateway_provider_scoped_call_does_not_fallback_after_failure():
+    from shuliu_runtime.models.capability import ModelProviderConfig
+    from shuliu_runtime.models.gateway import ModelGatewayError, ModelRequest
+    from shuliu_runtime.policy.engine import PolicyEngine
+    from shuliu_runtime.policy.rules import PolicyRule
+    from tests.fakes.fake_model import FakeModel, MemoryBudget, MemoryHealth, MemoryModelCalls
+    import pytest
+
+    providers = (
+        ModelProviderConfig("provider-a", "local/a", frozenset({"fast_chat"}), 1, True),
+        ModelProviderConfig("provider-b", "local/b", frozenset({"fast_chat"}), 2, True),
+    )
+    adapter = FakeModel(failures={"provider-a": RuntimeError("provider-a failed")})
+    policy = PolicyEngine(
+        [
+            PolicyRule(
+                rule_id=f"allow-{provider.provider_id}",
+                action=f"model.invoke.fast_chat.{provider.provider_id}",
+                risk="LOW",
+                decision="ALLOW",
+                organization_id="org-a",
+                permission="foundation.model.connection_test",
+                resource_type="model_provider",
+                classification="PUBLIC",
+                privacy="PUBLIC",
+            )
+            for provider in providers
+        ],
+        policy_version="test-policy-v1",
+    )
+    gateway = ModelGateway(
+        providers=providers,
+        adapter=adapter,
+        policy=policy,
+        budget=MemoryBudget(),
+        health=MemoryHealth(("provider-a", "provider-b")),
+        model_calls=MemoryModelCalls(),
+        secret_resolver=SecretResolver({"os": _ConnectionSecrets()}),
+        fallback_enabled=True,
+    )
+    request = ModelRequest(
+        capability="fast_chat",
+        privacy="PUBLIC",
+        budget_ref="budget://org-a/provider-connection-test",
+        input="Reply with only OK.",
+        trace_id="trace-connection-test",
+        organization_id="org-a",
+        subject_id="user-a",
+        permissions=("foundation.model.connection_test",),
+    )
+
+    with pytest.raises(ModelGatewayError) as error:
+        gateway.complete_for_provider("provider-a", request)
+
+    assert error.value.code == "MODEL_PROVIDER_ERROR"
+    assert [call.provider_id for call in adapter.calls] == ["provider-a"]
+
+def test_provider_runtime_writes_credentials_only_through_secret_resolver_and_lists_metadata():
+    runtime_type = getattr(models, "ProviderRuntime", None)
+    assert callable(runtime_type), "Task 28 must connect provider settings to the Python SecretResolver"
+
+    class RecordingResolver:
+        def __init__(self):
+            self.writes = []
+            self.values = {}
+            self.reads = []
+
+        def get(self, reference):
+            reference = str(reference)
+            self.reads.append(reference)
+            return self.values.get(reference)
+
+        def put(self, reference, value):
+            reference = str(reference)
+            self.writes.append((reference, value))
+            self.values[reference] = value
+
+        def delete(self, reference):
+            raise AssertionError("replacing a credential must not delete unrelated secrets")
+
+    profile = _profile()
+    resolver = RecordingResolver()
+    service, _, _ = _service()
+    runtime = runtime_type((profile,), resolver, service)
+
+    catalog = runtime.list_profiles()
+    result = runtime.save_profile("provider-a", "openai/gpt-4.1-mini", "sk-save-marker")
+
+    assert catalog == {
+        "providers": [{
+            "id": "provider-a",
+            "name": "provider-a",
+            "models": [{
+                "id": "openai/gpt-4.1-mini",
+                "name": "openai/gpt-4.1-mini",
+                "capabilities": ["fast_chat"],
+            }],
+            "selected_model_id": "openai/gpt-4.1-mini",
+            "configured": False,
+        }]
+    }
+    reloaded_runtime = runtime_type((profile,), resolver, service)
+    saved_catalog = reloaded_runtime.list_profiles()
+    assert saved_catalog["providers"][0]["configured"] is True
+    assert not any(reference == profile.secret_ref for reference in resolver.reads)
+    assert resolver.writes[0] == (profile.secret_ref, "sk-save-marker")
+    assert resolver.writes[-1][1] == "provider-configured-v1"
+    assert "sk-save-marker" not in repr(catalog)
+    assert "sk-save-marker" not in repr(result)
+    assert result["configured"] is True
+
+
+def test_provider_runtime_exposes_only_fixed_ipc_methods():
+    from threading import Event
+    from shuliu_runtime.models import connection
+
+    create_handlers = getattr(connection, "create_provider_ipc_handlers", None)
+    assert callable(create_handlers), "Task 28 must register fixed provider methods on Python IPC"
+    profile = _profile()
+    service, _, _ = _service()
+    runtime_type = getattr(models, "ProviderRuntime", None)
+    assert callable(runtime_type), "Task 28 must connect provider settings to the Python runtime"
+    runtime = runtime_type((profile,), _ConnectionSecrets(), service)
+    handlers = create_handlers(runtime)
+
+    assert set(handlers) == {
+        "providers.list",
+        "providers.save_profile",
+        "providers.replace_credential",
+        "providers.test_connection",
+    }
+    assert handlers["providers.list"]({}, Event()) == runtime.list_profiles()
+    with pytest.raises(ValueError):
+        handlers["providers.list"]({"extra": "not-allowed"}, Event())
+
+
+def test_empty_environment_builds_provider_runtime_without_a_real_provider(monkeypatch):
+    from shuliu_runtime.models.connection import create_provider_runtime_from_environment
+
+    monkeypatch.delenv("SHULIU_MODEL_PROFILES_JSON", raising=False)
+    runtime = create_provider_runtime_from_environment()
+
+    assert runtime.list_profiles() == {"providers": []}
+
+
+def test_real_connection_cli_is_disabled_unless_explicitly_enabled(monkeypatch, capsys):
+    from shuliu_runtime.models.connection import connection_test_cli
+
+    monkeypatch.delenv("SHULIU_MODEL_CONNECTION_TEST", raising=False)
+
+    assert connection_test_cli(["--provider", "provider-a", "--capability", "fast_chat"]) == 2
+    assert json.loads(capsys.readouterr().out)["safe_error_code"] == "MODEL_CONNECTION_TEST_DISABLED"
+
+
+def test_connection_test_budget_limits_repeated_canaries_per_runtime_process():
+    from shuliu_runtime.models.connection import _ConnectionTestBudget
+
+    budget = _ConnectionTestBudget(max_probes=2)
+
+    assert budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-1")
+    assert not budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-concurrent")
+    budget.release("org-a", "budget-a", "provider-a", "trace-1")
+    assert budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-2")
+    budget.settle("org-a", "budget-a", {"total_tokens": 2}, 0.001)
+    assert not budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-3")
+
+
+def test_connection_canary_limits_completion_output_tokens():
+    from shuliu_runtime.models.providers.litellm_adapter import LiteLLMAdapter
+    from shuliu_runtime.models.gateway import ModelRequest
+
+    calls = []
+
+    def completion(**kwargs):
+        calls.append(kwargs)
+        return {"choices": [{"message": {"content": "OK"}}]}
+
+    profile = _profile()
+    adapter = LiteLLMAdapter(completion=completion, max_output_tokens=8)
+    request = ModelRequest(
+        capability="fast_chat",
+        privacy="PUBLIC",
+        budget_ref="budget://org-a/test",
+        input="Reply with only OK.",
+        trace_id="trace-limited-canary",
+        organization_id="org-a",
+        subject_id="user-a",
+        permissions=("foundation.model.connection_test",),
+    )
+
+    adapter.invoke(profile.to_model_provider_config(), request, api_key="sk-test-marker")
+
+    assert calls[0]["max_tokens"] == 8

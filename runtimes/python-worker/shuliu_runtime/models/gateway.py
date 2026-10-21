@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import isfinite
@@ -13,6 +12,37 @@ from shuliu_runtime.security.secret_store import SecretResolver
 
 from .capability import ModelCapability, ModelProviderConfig, parse_capability
 from .routing import LOCAL_ONLY, ModelBudget, ModelHealth, route_candidates
+
+_SAFE_MODEL_ERROR_CODES = frozenset(
+    {
+        "MODEL_BALANCE_INSUFFICIENT",
+        "MODEL_BUDGET_EXHAUSTED",
+        "MODEL_BUDGET_SETTLEMENT_FAILED",
+        "MODEL_BUDGET_UNAVAILABLE",
+        "MODEL_CAPABILITY_UNSUPPORTED",
+        "MODEL_CONNECTION_FAILED",
+        "MODEL_CONNECTION_TEST_DISABLED",
+        "MODEL_CREDENTIAL_REJECTED",
+        "MODEL_CREDENTIAL_UNAVAILABLE",
+        "MODEL_INPUT_INVALID",
+        "MODEL_NETWORK_ERROR",
+        "MODEL_NO_ELIGIBLE_PROVIDER",
+        "MODEL_NOT_FOUND",
+        "MODEL_POLICY_DENIED",
+        "MODEL_POLICY_UNAVAILABLE",
+        "MODEL_PROVIDER_ERROR",
+        "MODEL_PROVIDER_NOT_CONFIGURED",
+        "MODEL_PROVIDER_RESPONSE_INVALID",
+        "MODEL_PROVIDER_SERVER_ERROR",
+        "MODEL_PROVIDER_UNAVAILABLE",
+        "MODEL_RATE_LIMITED",
+        "MODEL_REQUEST_INVALID",
+        "MODEL_REQUEST_REJECTED",
+        "MODEL_ROUTE_MISMATCH",
+        "MODEL_TELEMETRY_UNAVAILABLE",
+        "MODEL_TIMEOUT",
+    }
+)
 
 
 class ModelGatewayError(RuntimeError):
@@ -181,17 +211,37 @@ class ModelGateway:
         self._monotonic = monotonic
 
     def complete(self, request: ModelRequest | Mapping[str, object]) -> ModelResult:
+        return self._complete(request)
+
+    def complete_for_provider(
+        self, provider_id: str, request: ModelRequest | Mapping[str, object]
+    ) -> ModelResult:
+        if not _non_empty(provider_id):
+            raise ModelGatewayError("MODEL_PROVIDER_NOT_CONFIGURED", "model provider is not configured")
+        if not any(provider.provider_id == provider_id for provider in self._providers):
+            raise ModelGatewayError("MODEL_PROVIDER_NOT_CONFIGURED", "model provider is not configured")
+        return self._complete(request, only_provider=provider_id)
+
+    def _complete(
+        self,
+        request: ModelRequest | Mapping[str, object],
+        *,
+        only_provider: str | None = None,
+    ) -> ModelResult:
         parsed = ModelRequest.parse(request)
         capability = parse_capability(parsed.capability)
         matching = tuple(
-            provider for provider in self._providers if capability.value in provider.capabilities
+            provider
+            for provider in self._providers
+            if capability.value in provider.capabilities
+            and (only_provider is None or provider.provider_id == only_provider)
         )
         if not matching:
             raise ModelGatewayError(
                 "MODEL_CAPABILITY_UNSUPPORTED", "no provider supports the requested capability"
             )
         candidates = route_candidates(
-            self._providers,
+            matching,
             capability=capability,
             privacy=parsed.privacy,
             health=self._health,
@@ -234,8 +284,7 @@ class ModelGateway:
             provider_result: ProviderResult | None = None
             error_code: str | None = None
             try:
-                api_key = self._resolve_key(provider)
-                provider_result = self._adapter.invoke(provider, parsed, api_key)
+                provider_result = self._invoke_with_resolved_key(provider, parsed)
                 provider_result = _validate_provider_result(provider_result)
             except Exception as error:
                 error_code = (
@@ -319,6 +368,15 @@ class ModelGateway:
             last_route_error or "MODEL_PROVIDER_UNAVAILABLE",
             "all permitted model providers failed",
         )
+
+    def _invoke_with_resolved_key(
+        self, provider: ModelProviderConfig, request: ModelRequest
+    ) -> ProviderResult:
+        api_key = self._resolve_key(provider)
+        try:
+            return self._adapter.invoke(provider, request, api_key)
+        finally:
+            api_key = None
 
     def _evaluate_policy(
         self,
@@ -439,6 +497,6 @@ def _non_empty(value: object) -> bool:
 
 
 def _safe_error_code(value: object) -> str:
-    if isinstance(value, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", value):
+    if isinstance(value, str) and value in _SAFE_MODEL_ERROR_CODES:
         return value
     return "MODEL_PROVIDER_ERROR"

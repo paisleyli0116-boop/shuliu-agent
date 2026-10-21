@@ -7,6 +7,21 @@ from typing import Any, Callable
 from ..capability import ModelCapability, ModelProviderConfig, parse_capability
 from ..gateway import ModelProviderError, ModelRequest, ProviderResult
 
+_DEEPSEEK_API_BASE = "https://api.deepseek.com"
+_STRUCTURED_PROVIDER_ERROR_CODES = {
+    "authentication_error": "MODEL_CREDENTIAL_REJECTED",
+    "invalid_api_key": "MODEL_CREDENTIAL_REJECTED",
+    "insufficient_balance": "MODEL_BALANCE_INSUFFICIENT",
+    "balance_insufficient": "MODEL_BALANCE_INSUFFICIENT",
+    "rate_limit_exceeded": "MODEL_RATE_LIMITED",
+    "rate_limit_reached": "MODEL_RATE_LIMITED",
+    "invalid_parameter": "MODEL_REQUEST_REJECTED",
+    "invalid_parameters": "MODEL_REQUEST_REJECTED",
+    "invalid_request_error": "MODEL_REQUEST_REJECTED",
+    "model_not_found": "MODEL_NOT_FOUND",
+    "model_not_exist": "MODEL_NOT_FOUND",
+}
+
 
 class LiteLLMAdapter:
     """Thin LiteLLM SDK adapter; it never performs provider selection or fallback."""
@@ -17,6 +32,7 @@ class LiteLLMAdapter:
         completion: Callable[..., object] | None = None,
         embedding: Callable[..., object] | None = None,
         timeout_seconds: float = 60.0,
+        max_output_tokens: int | None = None,
     ) -> None:
         if (
             isinstance(timeout_seconds, bool)
@@ -25,9 +41,16 @@ class LiteLLMAdapter:
             or timeout_seconds <= 0
         ):
             raise ValueError("model provider timeout must be positive")
+        if max_output_tokens is not None and (
+            isinstance(max_output_tokens, bool)
+            or not isinstance(max_output_tokens, int)
+            or max_output_tokens < 1
+        ):
+            raise ValueError("model provider output token limit must be positive")
         self._completion = completion
         self._embedding = embedding
         self._timeout_seconds = timeout_seconds
+        self._max_output_tokens = max_output_tokens
 
     def invoke(
         self,
@@ -49,13 +72,18 @@ class LiteLLMAdapter:
                 )
                 output = _embedding_output(response)
             else:
-                response = self._completion_call()(
-                    model=provider.model,
-                    messages=_messages(request.input),
-                    api_key=api_key,
-                    timeout=self._timeout_seconds,
-                    num_retries=0,
-                )
+                completion_options: dict[str, object] = {
+                    "model": provider.model,
+                    "messages": _messages(request.input),
+                    "api_key": api_key,
+                    "timeout": self._timeout_seconds,
+                    "num_retries": 0,
+                }
+                if self._max_output_tokens is not None:
+                    completion_options["max_tokens"] = self._max_output_tokens
+                if provider.provider_id.casefold() == "deepseek":
+                    completion_options["api_base"] = _DEEPSEEK_API_BASE
+                response = self._completion_call()(**completion_options)
                 output = _completion_output(response)
         except ModelProviderError:
             raise
@@ -143,14 +171,79 @@ def _response_cost(response: object) -> float | None:
 
 
 def _provider_error_code(error: Exception) -> str:
-    name = type(error).__name__.lower()
-    if "ratelimit" in name:
-        return "MODEL_RATE_LIMITED"
-    if "timeout" in name:
-        return "MODEL_TIMEOUT"
-    if "auth" in name or "credential" in name:
+    status = _http_status(error)
+    structured_code = _structured_provider_error_code(error)
+
+    if status in {401, 403}:
         return "MODEL_CREDENTIAL_REJECTED"
+    if status == 402:
+        return "MODEL_BALANCE_INSUFFICIENT"
+    if status == 429:
+        return "MODEL_RATE_LIMITED"
+    if status in {408, 504}:
+        return "MODEL_TIMEOUT"
+    if status in {400, 422}:
+        return "MODEL_REQUEST_REJECTED"
+    if status == 404:
+        return structured_code or "MODEL_PROVIDER_ERROR"
+    if status is not None and 500 <= status <= 599:
+        return "MODEL_PROVIDER_SERVER_ERROR"
+    if structured_code is not None:
+        return structured_code
+
+    error_types = {base.__name__ for base in type(error).__mro__}
+    if error_types.intersection({"AuthenticationError", "UnauthorizedError"}):
+        return "MODEL_CREDENTIAL_REJECTED"
+    if error_types.intersection({
+        "APITimeoutError", "ConnectTimeout", "PoolTimeout", "ReadTimeout",
+        "Timeout", "TimeoutError", "TimeoutException", "WriteTimeout",
+    }):
+        return "MODEL_TIMEOUT"
+    if error_types.intersection({
+        "APIConnectionError", "ConnectError", "ConnectionError", "ConnectionRefusedError",
+        "ConnectionResetError", "NetworkError", "ProtocolError", "ProxyError",
+        "RemoteProtocolError", "SSLError", "gaierror",
+    }):
+        return "MODEL_NETWORK_ERROR"
+    if "RateLimitError" in error_types:
+        return "MODEL_RATE_LIMITED"
+    if error_types.intersection({"BadRequestError", "InvalidRequestError", "UnprocessableEntityError"}):
+        return "MODEL_REQUEST_REJECTED"
+    if error_types.intersection({"InternalServerError", "ServiceUnavailableError"}):
+        return "MODEL_PROVIDER_SERVER_ERROR"
     return "MODEL_PROVIDER_ERROR"
+
+
+def _http_status(error: Exception) -> int | None:
+    response = _safe_attribute(error, "response")
+    for source in (error, response):
+        status = _safe_attribute(source, "status_code")
+        if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599:
+            return status
+    return None
+
+
+def _structured_provider_error_code(error: Exception) -> str | None:
+    candidates = [_safe_attribute(error, "code")]
+    body = _safe_attribute(error, "body")
+    if isinstance(body, Mapping):
+        candidates.append(body.get("code"))
+        details = body.get("error")
+        if isinstance(details, Mapping):
+            candidates.extend((details.get("code"), details.get("type")))
+    for candidate in candidates:
+        if isinstance(candidate, str):
+            mapped = _STRUCTURED_PROVIDER_ERROR_CODES.get(candidate.strip().casefold())
+            if mapped is not None:
+                return mapped
+    return None
+
+
+def _safe_attribute(value: object, name: str) -> object | None:
+    try:
+        return getattr(value, name, None)
+    except Exception:
+        return None
 
 
 def _get(value: object, key: str) -> Any:

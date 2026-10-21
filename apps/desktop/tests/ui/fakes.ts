@@ -44,12 +44,16 @@ export function createFakeApi(overrides: Partial<RendererApi> = {}): RendererApi
         ],
       }),
       testConnection: vi.fn().mockResolvedValue({
-        simulated: true,
-        outcome: "success",
-        message: "模拟连接测试已通过；未向真实 Provider 发请求。",
+        status: "connected",
+        provider_id: "openai-compatible",
+        model: "openai/gpt-4.1-mini",
+        capability: "fast_chat",
+        latency_ms: 42,
+        trace_id: "trace-test",
+        safe_error_code: null,
       }),
-      saveProfile: vi.fn().mockResolvedValue({ configured: true, simulated: true }),
-      replaceCredential: vi.fn().mockResolvedValue({ configured: true, simulated: true }),
+      saveProfile: vi.fn().mockResolvedValue({ profile_id: "openai-compatible", configured: true, storage: "OS_SECURE_STORAGE" }),
+      replaceCredential: vi.fn().mockResolvedValue({ profile_id: "openai-compatible", configured: true, storage: "OS_SECURE_STORAGE" }),
     },
   } as unknown as RendererApi;
 

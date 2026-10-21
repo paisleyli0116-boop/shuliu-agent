@@ -37,11 +37,7 @@ export class ProviderSettingsService {
 
   async testConnection(input: { providerId: string; modelId: string }): Promise<ProviderTestResult> {
     this.assertModel(input.providerId, input.modelId);
-    return {
-      simulated: true,
-      outcome: "success",
-      message: "模拟测试已完成；没有发起真实 Provider 请求。真实连接验证将在 Task 28 接入。",
-    };
+    throw new Error("PROVIDER_RUNTIME_REQUIRED");
   }
 
   async saveProfile(input: { providerId: string; modelId: string; apiKey: string }): Promise<ProviderCredentialResult> {
