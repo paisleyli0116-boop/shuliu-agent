@@ -685,8 +685,16 @@ def _drain_stderr(stream) -> None:
 
 def _terminate_process_tree(process: subprocess.Popen[bytes], job_handle: Any) -> None:
     if os.name == "nt":
+        cleanup_error: Exception | None = None
         if job_handle is not None:
-            _close_windows_handle(job_handle)
+            try:
+                _terminate_windows_job(job_handle)
+            except Exception as error:  # noqa: BLE001 - job termination must fail closed
+                cleanup_error = error
+            try:
+                _close_windows_handle(job_handle)
+            except Exception as error:  # noqa: BLE001 - still close/kill what we can
+                cleanup_error = cleanup_error or error
         if process.poll() is None:
             try:
                 process.kill()
@@ -709,6 +717,189 @@ def _terminate_process_tree(process: subprocess.Popen[bytes], job_handle: Any) -
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=1)
+    if os.name == "nt" and cleanup_error is not None:
+        raise cleanup_error
+
+
+def _terminate_windows_job(job_handle: Any) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    process_handles = _open_windows_job_process_handles(kernel32, job_handle)
+    try:
+        if not kernel32.TerminateJobObject(job_handle, 1):
+            error = ctypes.get_last_error()
+            # A failed termination is harmless only if the Job is already
+            # signaled (there are no live members). Never block indefinitely
+            # waiting for a Job whose termination request failed.
+            if _wait_windows_process_handle(kernel32, job_handle, 0) != 0:
+                raise ctypes.WinError(error)
+        for process_handle in process_handles:
+            _wait_windows_process_handle(kernel32, process_handle, 0xFFFFFFFF)
+        if _wait_windows_process_handle(kernel32, job_handle, 0xFFFFFFFF) != 0:
+            raise RuntimeError("Windows Job did not signal after termination")
+    finally:
+        _close_windows_process_handles(kernel32, process_handles)
+
+
+def _query_windows_job_active_process_count(kernel32: Any, job_handle: Any) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicAccountingInformation(ctypes.Structure):
+        _fields_ = [
+            ("TotalUserTime", ctypes.c_longlong),
+            ("TotalKernelTime", ctypes.c_longlong),
+            ("ThisPeriodTotalUserTime", ctypes.c_longlong),
+            ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+            ("TotalPageFaultCount", wintypes.DWORD),
+            ("TotalProcesses", wintypes.DWORD),
+            ("ActiveProcesses", wintypes.DWORD),
+            ("TotalTerminatedProcesses", wintypes.DWORD),
+        ]
+
+    kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+    information = BasicAccountingInformation()
+    returned = wintypes.DWORD()
+    if not kernel32.QueryInformationJobObject(
+        job_handle,
+        1,  # JobObjectBasicAccountingInformation
+        ctypes.byref(information),
+        ctypes.sizeof(information),
+        ctypes.byref(returned),
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return int(information.ActiveProcesses)
+
+
+def _query_windows_job_process_ids(kernel32: Any, job_handle: Any) -> list[int]:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+    capacity = 64
+    while capacity <= 65536:
+        class BasicProcessIdList(ctypes.Structure):
+            _fields_ = [
+                ("NumberOfAssignedProcesses", wintypes.DWORD),
+                ("NumberOfProcessIdsInList", wintypes.DWORD),
+                ("ProcessIdList", ctypes.c_size_t * capacity),
+            ]
+
+        information = BasicProcessIdList()
+        returned = wintypes.DWORD()
+        success = kernel32.QueryInformationJobObject(
+            job_handle,
+            3,  # JobObjectBasicProcessIdList
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+            ctypes.byref(returned),
+        )
+        error = 0 if success else ctypes.get_last_error()
+        count = min(
+            information.NumberOfProcessIdsInList,
+            len(information.ProcessIdList),
+        )
+        process_ids = [int(pid) for pid in information.ProcessIdList[:count]]
+        if success and information.NumberOfAssignedProcesses <= count:
+            return process_ids
+        if not success and error not in {234, 122}:  # ERROR_MORE_DATA / INSUFFICIENT_BUFFER
+            raise ctypes.WinError(error)
+        capacity = max(capacity * 2, information.NumberOfAssignedProcesses)
+    raise RuntimeError("Windows Job process list exceeded the safe inspection limit")
+
+
+def _open_windows_job_process_handles(kernel32: Any, job_handle: Any) -> list[Any]:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.IsProcessInJob.argtypes = [
+        wintypes.HANDLE,
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    kernel32.IsProcessInJob.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    process_handles: list[Any] = []
+    inspected_process_ids: set[int] = set()
+    try:
+        for _ in range(32):
+            for process_id in _query_windows_job_process_ids(kernel32, job_handle):
+                if process_id in inspected_process_ids:
+                    continue
+                process_handle = kernel32.OpenProcess(
+                    0x00101001,  # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE
+                    False,
+                    process_id,
+                )
+                if not process_handle:
+                    error = ctypes.get_last_error()
+                    if error == 87:  # ERROR_INVALID_PARAMETER: process exited before handle acquisition
+                        inspected_process_ids.add(process_id)
+                        continue
+                    raise ctypes.WinError(error)
+                process_handles.append(process_handle)
+                inspected_process_ids.add(process_id)
+                in_job = wintypes.BOOL()
+                if not kernel32.IsProcessInJob(
+                    process_handle, job_handle, ctypes.byref(in_job)
+                ):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if not in_job.value:
+                    _close_windows_process_handles(kernel32, [process_handle])
+                    process_handles.pop()
+            current_process_ids = set(
+                _query_windows_job_process_ids(kernel32, job_handle)
+            )
+            if current_process_ids.issubset(inspected_process_ids):
+                return process_handles
+        raise RuntimeError("Windows Job process membership did not stabilize for cleanup")
+    except Exception:
+        _close_windows_process_handles(kernel32, process_handles)
+        raise
+
+
+def _close_windows_process_handles(kernel32: Any, handles: list[Any]) -> None:
+    import ctypes
+
+    first_error: OSError | None = None
+    for handle in handles:
+        if not kernel32.CloseHandle(handle) and first_error is None:
+            first_error = ctypes.WinError(ctypes.get_last_error())
+    if first_error is not None:
+        raise first_error
+
+
+def _wait_windows_process_handle(kernel32: Any, process_handle: Any, timeout: int) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    result = int(kernel32.WaitForSingleObject(process_handle, timeout))
+    if result == 0xFFFFFFFF:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return result
 
 
 def _is_crash(return_code: int) -> bool:
