@@ -31,6 +31,7 @@ _MAX_PENDING_TOOL_CALLS = 8
 _SANDBOX_LAUNCH_TOKEN = object()
 _TOOL_DISPATCH_SLOTS = threading.BoundedSemaphore(_MAX_PENDING_TOOL_CALLS)
 _WINDOWS_CREATE_SUSPENDED = 0x00000004
+_WINDOWS_JOB_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
 class SkillProcessError(RuntimeError):
@@ -728,21 +729,85 @@ def _terminate_windows_job(job_handle: Any) -> None:
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
     kernel32.TerminateJobObject.restype = wintypes.BOOL
-    process_handles = _open_windows_job_process_handles(kernel32, job_handle)
-    try:
-        if not kernel32.TerminateJobObject(job_handle, 1):
-            error = ctypes.get_last_error()
-            # A failed termination is harmless only if the Job is already
-            # signaled (there are no live members). Never block indefinitely
-            # waiting for a Job whose termination request failed.
-            if _wait_windows_process_handle(kernel32, job_handle, 0) != 0:
-                raise ctypes.WinError(error)
-        for process_handle in process_handles:
-            _wait_windows_process_handle(kernel32, process_handle, 0xFFFFFFFF)
-        if _wait_windows_process_handle(kernel32, job_handle, 0xFFFFFFFF) != 0:
-            raise RuntimeError("Windows Job did not signal after termination")
-    finally:
-        _close_windows_process_handles(kernel32, process_handles)
+    deadline = time.monotonic() + _WINDOWS_JOB_CLEANUP_TIMEOUT_SECONDS
+    completion_signal_required = False
+
+    while True:
+        process_handles = _open_windows_job_process_handles(kernel32, job_handle)
+        try:
+            process_ids = _query_windows_job_process_ids(kernel32, job_handle)
+            if (
+                not process_ids
+                and not process_handles
+                and not completion_signal_required
+            ):
+                # An empty Job need not become signaled when members exit
+                # naturally, so do not wait on the Job handle in this state.
+                return
+
+            if process_ids:
+                if not kernel32.TerminateJobObject(job_handle, 1):
+                    error = ctypes.get_last_error()
+                    if _query_windows_job_process_ids(kernel32, job_handle):
+                        raise ctypes.WinError(error)
+                completion_signal_required = True
+
+            for process_handle in process_handles:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        "Windows Job members did not terminate before the cleanup deadline"
+                    )
+                timeout_ms = min(0xFFFFFFFE, max(1, int(remaining * 1000)))
+                wait_result = _wait_windows_process_handle(
+                    kernel32, process_handle, timeout_ms
+                )
+                if wait_result == 258:  # WAIT_TIMEOUT
+                    raise TimeoutError(
+                        "Windows Job member remained alive after termination"
+                    )
+                if wait_result != 0:  # WAIT_OBJECT_0
+                    raise RuntimeError(
+                        "Windows Job member returned an unexpected wait status"
+                    )
+
+            if completion_signal_required:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        "Windows Job termination completion was not signaled before the cleanup deadline"
+                    )
+                timeout_ms = min(50, max(1, int(remaining * 1000)))
+                wait_result = _wait_windows_process_handle(
+                    kernel32, job_handle, timeout_ms
+                )
+                if wait_result == 0:  # WAIT_OBJECT_0: Job termination completed.
+                    if not _query_windows_job_process_ids(kernel32, job_handle):
+                        return
+                elif wait_result == 258:  # WAIT_TIMEOUT: inspect for late members.
+                    if deadline - time.monotonic() <= 0:
+                        raise TimeoutError(
+                            "Windows Job termination completion was not signaled before the cleanup deadline"
+                        )
+                else:
+                    raise RuntimeError(
+                        "Windows Job returned an unexpected completion wait status"
+                    )
+                continue
+
+            # TerminateJobObject only acts on members present while the kernel
+            # processes that request. A descendant may have joined after the
+            # first PID snapshot, so re-enumerate until every captured process
+            # is signaled and the Job has no active members.
+            if not _query_windows_job_process_ids(kernel32, job_handle):
+                return
+        finally:
+            _close_windows_process_handles(kernel32, process_handles)
+
+        if deadline - time.monotonic() <= 0:
+            raise TimeoutError(
+                "Windows Job members kept appearing until the cleanup deadline"
+            )
 
 
 def _query_windows_job_active_process_count(kernel32: Any, job_handle: Any) -> int:
