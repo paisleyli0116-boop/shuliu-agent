@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'health-probe-diagnostics.ps1')
 $installer = (Resolve-Path -LiteralPath $InstallerPath).Path
 if ([IO.Path]::GetExtension($installer) -ne '.exe') { throw 'INSTALLER_FILE_TYPE_INVALID' }
 $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
@@ -40,6 +41,7 @@ function Invoke-HealthProbe([string]$Executable, [string]$DataDirectory, [string
   $stderrTask = $process.StandardError.ReadToEndAsync()
   if (-not $process.WaitForExit(90000)) {
     $process.Kill($true)
+    Write-Host (Format-HealthProbeSummary -Name $Name -ExitCode $null -Report ([pscustomobject]@{ status = 'unhealthy'; code = 'HEALTH_PROBE_TIMEOUT' }))
     throw 'INSTALLED_APP_HEALTH_TIMEOUT'
   }
   $stdout = $stdoutTask.GetAwaiter().GetResult()
@@ -47,8 +49,20 @@ function Invoke-HealthProbe([string]$Executable, [string]$DataDirectory, [string
   [IO.File]::WriteAllText((Join-Path $evidence "$Name.stdout.log"), $stdout)
   [IO.File]::WriteAllText((Join-Path $evidence "$Name.stderr.log"), $stderr)
   $line = ($stdout -split "`r?`n") | Where-Object { $_.TrimStart().StartsWith('{') } | Select-Object -Last 1
-  if (-not $line) { throw 'INSTALLED_APP_HEALTH_REPORT_MISSING' }
-  return [pscustomobject]@{ ExitCode = $process.ExitCode; Report = ($line | ConvertFrom-Json) }
+  if (-not $line) {
+    $missingReport = [pscustomobject]@{ status = 'unhealthy'; code = 'HEALTH_REPORT_MISSING' }
+    Write-Host (Format-HealthProbeSummary -Name $Name -ExitCode $process.ExitCode -Report $missingReport)
+    throw 'INSTALLED_APP_HEALTH_REPORT_MISSING'
+  }
+  try {
+    $report = $line | ConvertFrom-Json
+  } catch {
+    $invalidReport = [pscustomobject]@{ status = 'unhealthy'; code = 'HEALTH_REPORT_INVALID' }
+    Write-Host (Format-HealthProbeSummary -Name $Name -ExitCode $process.ExitCode -Report $invalidReport)
+    throw 'INSTALLED_APP_HEALTH_REPORT_INVALID'
+  }
+  Write-Host (Format-HealthProbeSummary -Name $Name -ExitCode $process.ExitCode -Report $report)
+  return [pscustomobject]@{ ExitCode = $process.ExitCode; Report = $report }
 }
 
 try {

@@ -12,6 +12,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify installed-health diagnostic sanitization
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/e2e/windows/test_health_probe_diagnostics.ps1
       - uses: pnpm/action-setup@v4
         with:
           run_install: false
