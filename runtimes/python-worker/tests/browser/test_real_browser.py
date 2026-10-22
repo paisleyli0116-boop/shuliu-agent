@@ -10,6 +10,7 @@ import time
 from urllib.parse import urlsplit, parse_qs
 
 import pytest
+from shuliu_runtime.browser.diagnostics import validate_driver_diagnostic
 from .support import call, make_runtime
 
 pytestmark = [pytest.mark.integration, pytest.mark.real_browser]
@@ -136,19 +137,60 @@ def launch_page(runtime, origin, fixture_state=None):
 
 
 def _diagnostic(output, runtime=None, fixture_state=None):
-    observation = output.get("observation") or {}
-    diagnostic = {"status": output.get("status"), "error_code": output.get("error_code"),
-                  "outcome_unknown": output.get("outcome_unknown"), "observed_url": observation.get("url")}
+    status = output.get("status")
+    code = output.get("error_code")
+    diagnostic = {
+        "status": status if isinstance(status, str) and status in {"VERIFIED", "FAILED", "UNVERIFIED"} else "UNKNOWN",
+        "error_code": code if isinstance(code, str) and code.startswith("BROWSER_")
+        and code.isascii() and code.replace("_", "").isalnum() and len(code) <= 64 else "UNKNOWN",
+        "outcome_unknown": output.get("outcome_unknown") if isinstance(output.get("outcome_unknown"), bool) else None,
+    }
     if runtime is not None:
         sessions = runtime._executor.sessions.sessions
         session = sessions.get(output.get("session_id"))
         backend = getattr(session, "backend", None) if session is not None else None
-        detail = getattr(backend, "last_diagnostic", None)
+        detail = validate_driver_diagnostic(getattr(backend, "last_diagnostic", None))
         if detail is not None:
-            diagnostic["driver_diagnostic"] = detail
+            diagnostic["driver"] = detail
     if fixture_state is not None:
-        diagnostic["fixture_request_count"] = int(fixture_state.get("hits", 0))
-    return diagnostic
+        hits = fixture_state.get("hits", 0)
+        diagnostic["fixture_request_count"] = hits if isinstance(hits, int) and not isinstance(hits, bool) and hits >= 0 else None
+    return json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
+
+
+def test_failure_diagnostic_keeps_browser_stage_without_sensitive_details():
+    class Backend:
+        last_diagnostic = {
+            "stage": "start_browser",
+            "exception_type": "TimeoutError",
+            "failure_kind": "OPERATION_TIMEOUT",
+        }
+
+    class Session:
+        backend = Backend()
+
+    class Runtime:
+        class Executor:
+            class Sessions:
+                sessions = {"fixture-session": Session()}
+            sessions = Sessions()
+        _executor = Executor()
+
+    output = {
+        "status": "FAILED",
+        "error_code": "BROWSER_TIMEOUT",
+        "outcome_unknown": False,
+        "session_id": "fixture-session",
+        "observation": {"url": "https://private.example/path?token=must-not-appear"},
+    }
+    diagnostic = _diagnostic(output, Runtime())
+
+    assert isinstance(diagnostic, str)
+    assert "start_browser" in diagnostic
+    assert "OPERATION_TIMEOUT" in diagnostic
+    assert "private.example" not in diagnostic
+    assert "must-not-appear" not in diagnostic
+    assert len(diagnostic) < 400
 
 
 def observation(runtime, session):
