@@ -111,10 +111,16 @@ HEAD 保持 b2efed6e0f225b832e5d0eacb64f9768253d563f；本轮未提交、未推�
 ### 外部服务和交付状态
 
 - 飞书：本机尚无机器人凭据；只验证了 Mock 通知/去重/脱敏，没有发送真实消息。要完成真实端到端通知，用户需在本机安全入口配置飞书群机器人的 Webhook 与签名密钥，并另行明确授权发送一条测试消息；密钥不得发到聊天或终端。
-- GitHub：本轮尚未提交、推送或核对对应 SHA 的 Windows Validation；完成限定范围提交后才能取得新的远端证据。
+- GitHub：Autopilot 修改已提交到本地功能分支，提交为 `3892feef1612d8a3c595ef77041ad03abb3f6949`（完整 SHA 见下方交付回执）。本轮一次只读 `ls-remote` 因 Windows Credential Manager 无法保存凭据、无法取得密码而退出 1；已授权 GitHub 只读连接对私有仓库分支返回 404。未重复认证，也未推送；匹配 SHA 的 Windows Validation 尚无远端证据。
 - Windows 任务计划程序：未安装、未启用。由于真实修复与飞书端到端验收未通过，不满足开启条件。
 - Task 28：继续 BLOCKED（Provider 实际响应、合规审查和匹配提交 SHA 的 Windows Validation 等原始门禁仍未满足）。Task 29 未开始。
 
 ### 当前 Git 保护范围
 
-本轮 Autopilot 文件在 `tools/shuliu-dev-autopilot/`；进度记录位于本文件；README 仅更新 Autopilot 测试数量和最新限制说明。其他会话的四个已修改 Desktop 文件、`docs/test-selection-map.md`、`scripts/` 均未纳入本轮。HEAD 未变化；本节写入后应重新核对状态，并只将 Autopilot 工具、README 与本进度文件纳入拟提交范围。
+本轮 Autopilot 文件在 `tools/shuliu-dev-autopilot/`；进度记录位于本文件；README 仅更新 Autopilot 测试数量和最新限制说明。其他会话的四个已修改 Desktop 文件、`docs/test-selection-map.md`、`scripts/` 均未纳入本轮。本节写入时 HEAD 未变化且尚未提交；随后交付回执记录了限定范围的本地提交。
+
+### 本轮交付回执
+
+- Autopilot 代码与说明已在 `feat/foundation-v0.1` 本地提交：`3892feef1612d8a3c595ef77041ad03abb3f6949`（提交内容仅为 `tools/shuliu-dev-autopilot/` 与 `docs/evidence/autopilot-progress.md`）。
+- 推送被现有凭据状态阻塞：一次只读 Git 请求返回 `wincredman` 无法保存凭据及 `unable to get password`；GitHub 连接器读取私有分支返回 404。未再次登录、未向远端写入、没有对应新 SHA 的 CI 运行结果。
+- 其他会话的四个已修改 Desktop 文件、`docs/test-selection-map.md` 和 `scripts/` 未提交；Git main 未修改。
