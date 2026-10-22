@@ -156,3 +156,88 @@ class CodexEngineRecoveryTests(unittest.TestCase):
                 error_category="codex_cli_failed"))
             self.assertEqual(autopilot.load_state(root/"state.json")["status"],"VERIFYING")
             self.assertEqual(orchestration.ApprovalLedger(root/"approvals.json").pending(),[])
+
+class NotificationApprovalRecoveryIntegrationTests(unittest.TestCase):
+    def test_blocker_notice_single_approval_and_scoped_recovery_with_fake_transport(self):
+        import json
+        import sys
+        from unittest.mock import patch
+        import notifications
+        import scheduler
+        from approvals import ApprovalLedger, approve_pending_interactive
+
+        class FakeCredentialStore:
+            def read(self):
+                return {
+                    "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/test-only-id",
+                    "signing_secret": "synthetic-signing-secret-for-tests",
+                }
+
+        class Response:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self, size=-1):
+                return b'{"code":0,"msg":"ok"}'
+
+        sent_requests = []
+
+        def fake_transport(request, timeout):
+            sent_requests.append((request, timeout))
+            return Response()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = autopilot.new_state("a" * 40)
+            state["repair_count"] = 3
+            state["max_repair_rounds"] = 3
+            autopilot.transition(state, "RUNNING")
+            autopilot.save_state(root / "state.json", state)
+            scope = "One safe local verification after three repair rounds; suite=autopilot self-tests"
+            suite = ("autopilot self-tests", [sys.executable, "-c", "print('passed')"])
+            completed = {"exit_code": 0, "output": "passed", "timed_out": False, "terminated": True}
+
+            with patch("notifications.WindowsCredentialStore", FakeCredentialStore), \
+                 patch("notifications.urllib.request.urlopen", side_effect=fake_transport), \
+                 patch("autopilot.safe_test_commands", return_value=[suite]), \
+                 patch("autopilot.run_bounded_process", return_value=completed):
+                request = orchestration.queue_approval(
+                    root, task="Task 28", action="repair_resume", scope=scope,
+                    resume_kind="safe_local_verification")
+                repeated = orchestration.queue_approval(
+                    root, task="Task 28", action="repair_resume", scope=scope,
+                    resume_kind="safe_local_verification")
+
+                self.assertEqual(request["request_id"], repeated["request_id"])
+                self.assertEqual(autopilot.load_state(root / "state.json")["status"], "WAITING_APPROVAL")
+                self.assertEqual(len(sent_requests), 1, "duplicate blocker must not send a second notice")
+                payload = json.loads(sent_requests[0][0].data.decode("utf-8"))
+                self.assertIn("Task 28", payload["content"]["text"])
+                self.assertIn("唯一需要做的事", payload["content"]["text"])
+                self.assertNotIn("synthetic-signing-secret-for-tests", json.dumps(payload))
+                self.assertEqual(sent_requests[0][1], 8)
+
+                approved = approve_pending_interactive(
+                    ApprovalLedger(root / "approvals.json"),
+                    request_ids=[request["request_id"]],
+                    is_tty=True,
+                    input_fn=lambda _prompt: request["confirmation"],
+                    output_fn=lambda _line: None,
+                )
+                self.assertEqual(approved, 1)
+                result = scheduler.tick(root)
+
+            self.assertTrue(result["ran"])
+            self.assertTrue(result["verification_succeeded"])
+            self.assertEqual(result["status"], "BLOCKED", "local verification cannot close Task 28 gates")
+            saved = autopilot.load_state(root / "state.json")
+            self.assertEqual(saved["local_verification"], "PASSED")
+            self.assertEqual([item["name"] for item in saved["test_results"]], ["autopilot self-tests"])
+            record = ApprovalLedger(root / "approvals.json").get(request["request_id"])
+            self.assertEqual(record["status"], "SUCCEEDED")
+            self.assertEqual(record["uses"], 1)

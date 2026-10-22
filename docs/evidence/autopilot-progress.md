@@ -124,3 +124,12 @@ HEAD 保持 b2efed6e0f225b832e5d0eacb64f9768253d563f；本轮未提交、未推�
 - Autopilot 代码与说明已在 `feat/foundation-v0.1` 本地提交：`3892feef1612d8a3c595ef77041ad03abb3f6949`（提交内容仅为 `tools/shuliu-dev-autopilot/` 与 `docs/evidence/autopilot-progress.md`）。
 - 推送被现有凭据状态阻塞：一次只读 Git 请求返回 `wincredman` 无法保存凭据及 `unable to get password`；GitHub 连接器读取私有分支返回 404。未再次登录、未向远端写入、没有对应新 SHA 的 CI 运行结果。
 - 其他会话的四个已修改 Desktop 文件、`docs/test-selection-map.md` 和 `scripts/` 未提交；Git main 未修改。
+
+## 2026-10-22：飞书通知与授权恢复组合验收准备
+
+- 新增 `NotificationApprovalRecoveryIntegrationTests.test_blocker_notice_single_approval_and_scoped_recovery_with_fake_transport`。它从 `orchestration.queue_approval` 真实入口走到运行时通知格式化、签名请求构造和通知去重；HTTP 传输被拦截，凭据为合成值。随后在模拟本地交互控制台中批准唯一请求，并通过 `scheduler.tick` 仅执行批准的白名单本地复测。
+- 结果：定向测试 **1/1 通过**（0.166 秒）。重复阻塞只构造一次发送；审批消费次数为 1；恢复测试集仅为 `autopilot self-tests`；恢复结果有效，但任务状态仍为 **BLOCKED**，没有改变产品任务门禁。
+- 随后完整 Autopilot Windows 套件 **118/118 通过**（1.631 秒）；Python AST **16/16 通过**。
+- 此为 Mock/拦截式传输验收，不是飞书真实投递。真实机器人凭据仍未配置，没有发送飞书消息，也没有调用 DeepSeek。
+- GitHub 状态未改变：功能分支仍有 4 个领先提交，远端只读读取仍因 GCM 无法保存凭据/无法取得密码而失败；未推送，因此没有新 SHA 对应的 Windows Validation。未重复启动浏览器授权。
+- 本地新增测试和文档尚需在恢复 GitHub 授权后按限定路径提交并推送；其他会话文件仍保持未暂存、未纳入。
