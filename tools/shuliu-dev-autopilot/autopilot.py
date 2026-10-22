@@ -519,6 +519,40 @@ def _repair_context_paths(label,allowed):
  return list(allowed)
 
 
+def _assert_opened_source_matches_path(source, expected_path):
+ if os.name!="nt":return
+ try:
+  import ctypes
+  from ctypes import wintypes
+  if msvcrt is None:raise OSError("Windows file handle adapter unavailable")
+  kernel32=ctypes.WinDLL("kernel32",use_last_error=True)
+  get_final_path=kernel32.GetFinalPathNameByHandleW
+  get_final_path.argtypes=(wintypes.HANDLE,wintypes.LPWSTR,wintypes.DWORD,wintypes.DWORD)
+  get_final_path.restype=wintypes.DWORD
+  handle=msvcrt.get_osfhandle(source.fileno())
+  capacity=512
+  while capacity<=32768:
+   buffer=ctypes.create_unicode_buffer(capacity)
+   length=get_final_path(handle,buffer,capacity,0)
+   if not length:raise OSError(ctypes.get_last_error(),"final path lookup failed")
+   if length<capacity:
+    actual=buffer.value
+    if actual.startswith("\\\\?\\UNC\\"):
+     actual="\\\\"+actual[8:]
+    elif actual.startswith("\\\\?\\"):
+     actual=actual[4:]
+    normalized_actual=os.path.normcase(os.path.normpath(actual))
+    normalized_expected=os.path.normcase(os.path.normpath(str(expected_path)))
+    if normalized_actual!=normalized_expected:
+     raise UnsafePatch("repair context opened path changed or crossed a reparse point")
+    return
+   capacity=length+1
+ except UnsafePatch:raise
+ except (AttributeError,OSError,ValueError) as exc:
+  raise UnsafePatch("repair context opened path could not be verified") from exc
+ raise UnsafePatch("repair context opened path exceeds the verification limit")
+
+
 def _read_allowed_source_context(allowed):
  root=REPO_ROOT.resolve();sources={};total=0
  for raw in allowed:
@@ -536,11 +570,13 @@ def _read_allowed_source_context(allowed):
   except ValueError as exc:raise UnsafePatch("repair context symlink is outside the repository") from exc
   try:
    with path.open("r",encoding="utf-8") as source:
+    _assert_opened_source_matches_path(source,path)
     opened=os.fstat(source.fileno())
     if getattr(opened,"st_nlink",1)>1:
      raise UnsafePatch("repair context hard link is not allowed")
     content=source.read()
     after_read=os.fstat(source.fileno())
+    _assert_opened_source_matches_path(source,path)
    named=path.lstat()
   except UnsafePatch:raise
   except (OSError,UnicodeError) as exc:raise UnsafePatch("allowlisted repair context could not be read safely") from exc

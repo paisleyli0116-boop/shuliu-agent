@@ -655,6 +655,44 @@ class StateMachineTests(unittest.TestCase):
                 with self.assertRaises(autopilot.UnsafePatch):
                     autopilot._read_allowed_source_context(["allowed.py"])
 
+    def test_repair_context_rejects_real_junction_race_to_outside_source(self):
+        import os
+        import subprocess
+        from unittest.mock import patch
+        if os.name != "nt":
+            self.skipTest("real Windows junction behavior is verified on Windows")
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);repo=root/"repo";allowed_dir=repo/"src"
+            moved_dir=root/"src-original";outside=root/"outside"
+            allowed_dir.mkdir(parents=True);outside.mkdir()
+            allowed_file=allowed_dir/"module.py"
+            allowed_file.write_text("SAFE_SOURCE = True\n",encoding="utf-8")
+            (outside/"module.py").write_text("SYNTHETIC_OUTSIDE_SENTINEL\n",encoding="utf-8")
+            junction_created=False;original_open=Path.open
+
+            def race_before_open(path,*args,**kwargs):
+                nonlocal junction_created
+                if path.name=="module.py" and path.parent.name=="src" and not junction_created:
+                    allowed_dir.rename(moved_dir)
+                    command=f'mklink /J "{allowed_dir}" "{outside}"'
+                    result=subprocess.run(command,shell=True,capture_output=True,text=True)
+                    self.assertEqual(result.returncode,0,"ordinary Windows user must be able to create the junction fixture")
+                    junction_created=True
+                return original_open(path,*args,**kwargs)
+
+            try:
+                with patch.object(autopilot,"REPO_ROOT",repo),patch.object(Path,"open",new=race_before_open):
+                    with self.assertRaisesRegex(
+                        autopilot.UnsafePatch,"opened path changed or crossed a reparse point"
+                    ) as error:
+                        autopilot._read_allowed_source_context(["src/module.py"])
+                self.assertNotIn("SYNTHETIC_OUTSIDE_SENTINEL",str(error.exception))
+                self.assertTrue(junction_created,"the test must exercise a real junction swap")
+            finally:
+                if junction_created:
+                    try:os.rmdir(allowed_dir)
+                    except OSError:pass
+
     def test_rejected_private_key_patch_is_never_written_to_disk(self):
         from unittest.mock import patch
         marker="AUTOPILOT_PRIVATE_KEY_MARKER"

@@ -131,5 +131,20 @@ HEAD 保持 b2efed6e0f225b832e5d0eacb64f9768253d563f；本轮未提交、未推�
 - 结果：定向测试 **1/1 通过**（0.166 秒）。重复阻塞只构造一次发送；审批消费次数为 1；恢复测试集仅为 `autopilot self-tests`；恢复结果有效，但任务状态仍为 **BLOCKED**，没有改变产品任务门禁。
 - 随后完整 Autopilot Windows 套件 **118/118 通过**（1.631 秒）；Python AST **16/16 通过**。
 - 此为 Mock/拦截式传输验收，不是飞书真实投递。真实机器人凭据仍未配置，没有发送飞书消息，也没有调用 DeepSeek。
-- GitHub 状态未改变：功能分支仍有 4 个领先提交，远端只读读取仍因 GCM 无法保存凭据/无法取得密码而失败；未推送，因此没有新 SHA 对应的 Windows Validation。未重复启动浏览器授权。
-- 本地新增测试和文档尚需在恢复 GitHub 授权后按限定路径提交并推送；其他会话文件仍保持未暂存、未纳入。
+- GitHub：当前最新本地提交为 `9122cc7bc71a84c578be6c80662f2560e871ae29`，功能分支相对本地跟踪引用 `02b99c200e5168c6c3658f1b651a84293893fdb7` 领先 5 个提交。凭据确认仍失败于 GCM `wincredman` 无法保存凭据/无法取得密码；未推送，没有该 SHA 的 Windows Validation。未重复启动浏览器授权。
+- 飞书组合模拟测试、README 和本进度记录已包含在本地 Autopilot 提交 `9122cc7bc71a84c578be6c80662f2560e871ae29`。四个其他会话 Desktop 修改、`docs/test-selection-map.md` 和 `scripts/` 仍未暂存、未纳入。
+
+- `python -B autopilot.py status` 只读检查显示持久 Task 28 状态仍为 BLOCKED、`repair_count=1/3`、本地验证字段 `NOT_RUN`，状态记录的最后运行提交为 `b2efed6e0f225b832e5d0eacb64f9768253d563f`。该状态文件未被本轮改写；这是此前 Task 28 执行检查点，不代表 `9122cc7` 上重新运行过 Task 28。
+
+## 2026-10-22：Autopilot 源码路径同用户 Junction 竞态
+
+- 检查时真实仓库为 `feat/foundation-v0.1`，HEAD `9122cc7bc71a84c578be6c80662f2560e871ae29`，本地跟踪引用 `origin/feat/foundation-v0.1` 为 `02b99c200e5168c6c3658f1b651a84293893fdb7`，本地领先 5 个提交。领先提交为 `9d55a5b`、`b2efed6`、`3892fee`、`0fbd323`、`9122cc7`；工作区另有四个 Desktop 文件、`docs/test-selection-map.md`、`scripts/dev-env.ps1`，均属于既有其他会话工作，本轮未改、未暂存。
+- Task 28 Autopilot 检查点初始记录 `last_commit_sha=b2efed6e0f225b832e5d0eacb64f9768253d563f`、状态与验收状态均为 `BLOCKED`、`repair_count=1/3`、`local_verification=NOT_RUN`。随后通过现有单实例锁和 `save_state` 仅将提交元数据更新为 `9122cc7bc71a84c578be6c80662f2560e871ae29`（状态版本 1），并写入一条脱敏事件；复核显示 `BLOCKED`、`repair_count=1/3`、`local_verification=NOT_RUN` 均保留。未运行 Task 28 全套；该元数据核对不代表在 `9122cc7` 或未提交工作区上完成 Task 28 验收。
+- 真实根因：`_read_allowed_source_context` 在解析 allowlist 路径后，使用路径字符串打开文件；同一 Windows 用户可在路径检查与 `open` 之间将父目录替换为指向仓库外的真实 junction。修复前的隔离复现确实从仓库外读取到合成哨兵内容；这属于已确认的同用户路径越界缺陷，不是单纯的测试竞争。
+- TDD RED：新增 `test_repair_context_rejects_real_junction_race_to_outside_source` 后，在 Windows 临时目录中先完成 `mklink /J` fixture，再运行定向用例。修复前真实失败为 `UnsafePatch not raised`。初次测试选择器和 junction 命令调用曾分别在装载/fixture 阶段失败；修正后得到上述有效 RED 证据。
+- 最小修复：`autopilot.py` 在打开文件句柄后、读取前及读取后调用 `GetFinalPathNameByHandleW`，将句柄实际最终路径与预先解析的 allowlist 路径做 Windows 大小写不敏感比较；查询失败、超长路径或不一致时 fail closed。未改变其它平台分支或操作系统权限。
+- GREEN：真实 junction 回归 **1 项通过**；该回归另连续重复 **10/10 通过**。相关路径边界、读取期间文件身份变化、硬链接拒绝 **4/4 通过**；允许文件读取及脱敏上下文 **3/3 通过**；Python AST **2/2 通过**；`git diff --check` 通过。未重跑此前已通过的 118 项 Autopilot 全套或 Skill 进程回归。
+- 独立只读安全审查完成：审查未发现该句柄最终路径校验存在明显绕过，确认 Windows 大小写与 UNC 前缀处理后会拒绝不匹配路径，且查询失败时 fail closed。审查建议进一步断言具体安全错误并确认错误文本不含外部内容；已将这两项加入真实 Junction 测试，并在 Windows 上复测 **1/1 通过**。本轮另运行 Python AST **2/2 通过**及 `git diff --check` 通过。当前本轮改动限于 `tools/shuliu-dev-autopilot/autopilot.py`、`tools/shuliu-dev-autopilot/test_autopilot.py` 以及本证据文档；尚未提交。
+- Skill Job Object 启动/清理代码本轮未改。此前已有本地回归记录为 55 passed、2 skipped，但本进度文件未保存两项跳过用例名称；CI #51 曾报告 `descendant-survived`，其修复后的当前 HEAD 仍无对应 Windows Validation。真实 Skill 隔离、退出清理和 CI 结果因此尚不能整体标为已验收。
+- 对远端仅进行一次无提示只读 `ls-remote`：退出码 **128**，停在 `wincredman` 无法取得凭据（`unable to get password from user`），未到仓库权限阶段；未尝试第二次认证、未推送。需用户在正常 Windows 登录桌面运行 `git credential-manager github login --browser` 并完成浏览器登录，不要复制 Token。
+- Task 28 仍为 **BLOCKED**；没有真实 DeepSeek 请求。必需未完成项仍包括匹配提交完整 SHA 的 Windows Validation、真实 Provider 成功响应及 Provider 许可/数据处理/安全审查。Task 29 未开始，后台计划任务保持关闭。
