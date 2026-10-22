@@ -11,6 +11,7 @@ export type SidecarLaunchOptions = {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  handshakeTimeoutMs?: number;
 };
 
 export function createSidecarLaunchOptions(
@@ -31,6 +32,9 @@ export function createSidecarLaunchOptions(
       args: [],
       cwd: paths.userDataPath,
       env,
+      // The frozen Windows one-file Sidecar must extract and initialize before answering IPC.
+      // Keep startup bounded; runtime health still must pass within the existing 90-second probe.
+      handshakeTimeoutMs: 15_000,
     };
   }
 
