@@ -81,3 +81,56 @@ The worktree was snapshotted before this review to `%TEMP%\shuliu-task29-workspa
 - Direct Task 29 PostgreSQL integration test rerun: **2 skipped** locally, still awaiting PG17/18 CI.
 - No repository commit or push has been made for Task 29 at this checkpoint; Task 30 remains unstarted.
 - The separate Task 28 evidence correction was committed locally as `7d7debc` after verifying that remote `feat/foundation-v0.1` still pointed to `2a905aeda52eba4f3246c3949a480d56d7076ae4`; Task 29 changes are staged separately.
+
+## 2026-10-25 — Exact-SHA remote CI tracking
+
+- Task 29 implementation commit: `04922fa6a09bf3b9269d8b1d98beafe0d4e7f2bf` (`feat/models: persist model usage and budget accounting`). At the last successful post-push remote read, `origin/feat/foundation-v0.1` matched this full SHA. The current local HEAD and local remote-tracking ref also match it; a fresh live remote read could not be completed in this checkpoint.
+- An exact-SHA workflow lookup previously returned three runs for this commit, each initially `in_progress`: Generic CI `40167416068` (https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/40167416068), Windows Validation `40167416038` (https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/40167416038), and Browser Runtime diagnostics `40167416053` (https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/40167416053). These are initial observed states, not final conclusions.
+- Subsequent read-only job-detail requests returned GitHub HTTP 404 for all three runs. `gh auth status` now reports that the saved GitHub account is not authenticated; repository metadata returns HTTP 401. The browser session opened to the exact run URL displayed “Page not found”. HTTPS `git ls-remote` could not obtain credentials. A one-time SSH-over-443 read was also stopped by host-key verification because the configured `known_hosts` file could not be read; host-key checks were not bypassed.
+- No workflow was re-run or newly triggered. Final run conclusions, job names/results, and PostgreSQL 17/18 integration results remain **NOT VERIFIED**. No skipped local PostgreSQL test is counted as passed.
+- Local branch: `feat/foundation-v0.1`; local HEAD: `04922fa6a09bf3b9269d8b1d98beafe0d4e7f2bf`; local `origin/feat/foundation-v0.1` tracking ref: same SHA. Worktree at this check had only the pre-existing untracked `scripts/dev-env.ps1`, preserved and excluded from commits.
+- Task 29 remains **IN_PROGRESS / not accepted**. Required next step is restore authorized GitHub read access (normal GitHub/GCM sign-in; no token sharing), then inspect the already-created runs by exact SHA, including the PG17 and PG18 integration jobs. Do not start Task 30 before the plan’s acceptance evidence is complete.
+
+## 2026-10-25 — Exact-SHA remote CI verification (read-only, gh CLI, auth restored)
+
+`gh auth status`: logged in as `paisleyli0116-boop` (keyring), scopes `gist, read:org, repo, workflow` — sufficient for Actions reads. No token output.
+
+### Runs for commit `04922fa6a09bf3b9269d8b1d98beafe0d4e7f2bf` (all completed)
+
+| Run ID | Workflow | Conclusion | Link |
+|---|---|---|---|
+| `40167416038` | Windows Validation | **success** | https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/40167416038 |
+| `40167416068` | Generic CI | **failure** | https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/40167416068 |
+| `40167416053` | Browser Runtime cross-platform diagnostics | **failure** | https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/40167416053 |
+
+### Windows Validation `40167416038` — PASSED (34/34 steps success)
+
+Full chain executed for real, including Electron↔Python IPC with real subprocesses, PyInstaller Sidecar build, NSIS packaging, signature verify, install smoke, upgrade/failed-runtime Safe Mode/rollback/data preservation.
+
+### Generic CI `40167416068` — FAILED; **PG17/PG18 integration tests did NOT execute**
+
+- **PostgreSQL migration (PG 17) and (PG 18)**: pytest aborted during **collection**, before running any test: `collected 598 items / 1 error / 580 deselected / 18 selected` → `ModuleNotFoundError: No module named 'win32gui'` while collecting `tests/e2e/windows/test_interactive_session.py` on Linux runners → `Interrupted: 1 error during collection`. **0 of the 18 selected tests ran — neither passed nor skipped.** The Task 29 PostgreSQL 17/18 evidence is therefore still NOT obtained.
+- **Root cause of the collection error is pre-existing, not Task 29**: `tests/e2e/windows/test_interactive_session.py` was added on 10-22 by `9f73b5f` ("test(windows): diagnose interactive fixture startup", another session) and imports Windows-only `win32gui` without a platform guard; Generic CI runs it on `ubuntu-latest`/`macos-latest`. `04922fa..7d7debc` contains only Task 29 implementation + Task 28 evidence docs.
+- **Generic tests (ubuntu-latest) and (macos-latest)**: `7 failed, 42 passed, 8 skipped` — all 7 failures are `tests/skills/platform/test_windows_sandbox.py` Windows-only tests (ctypes has no `WinDLL` on Linux/macOS), again a missing platform guard, pre-existing pattern.
+
+### Browser Runtime `40167416053` — FAILED (environment, pre-existing pattern)
+
+- `ubuntu-latest`: `BROWSER_START_START_BROWSER_FAILED` (stage `start_browser`, upstream error). `macos-latest`: `BROWSER_TIMEOUT` (stage `navigate_goto`, 69s) plus the known artifact-quota error on evidence upload. Both jobs failed identically on the 10-22 baseline `f9675f8` (before Task 29); the same browser suite **passed** on the real Windows Chrome runner inside Windows Validation `40167416038`.
+
+### Verdict for Task 29 acceptance
+
+- **Passed (verified)**: Windows Validation on exact SHA `04922fa` — all gates green.
+- **Passed (local, per prior checkpoints)**: Model Gateway/Provider 108; persistent subset 9; migration 17 passed / 1 skipped.
+- **Not obtained**: real PostgreSQL 17 and 18 execution of `tests/integration/test_model_usage_persistence.py` and migration `0008_model_usage_budget` — blocked by the pre-existing Linux collection error in PG jobs, **not** by Task 29 code.
+- **Unverifiable here / pre-existing**: Linux/macOS browser smoke and Windows-only sandbox tests running on non-Windows runners.
+- **Still outstanding before Task 29 acceptance**: make the PG17/18 CI jobs actually run the Task 29 PostgreSQL integration tests (guard `tests/e2e/windows/*` collection to Windows, or fix `pnpm test:migration` selection), then re-verify by exact SHA. No re-run was triggered in this verification pass; no files committed, pushed, or cleaned; `scripts/dev-env.ps1` untouched.
+
+## 2026-10-25 — CI failure fixes applied (platform guards + browser launch options)
+
+Fixes for every failure class found in the exact-SHA verification, none of which were Task 29 regressions:
+
+1. **PG17/18 collection crash (blocker for Task 29 evidence)**: `tests/e2e/windows/test_interactive_session.py` now calls `pytest.skip(..., allow_module_level=True)` *before* importing `win32gui`/`win32process`, so non-Windows runners skip the module instead of aborting the whole pytest collection. Windows collection unchanged.
+2. **Windows-only sandbox tests on Linux/macOS**: the seven `tests/skills/platform/test_windows_sandbox.py` tests that fake `ctypes.WinDLL` (Windows Job Object semantics) got the same `@pytest.mark.skipif(sys.platform != "win32", reason="Windows runner only")` guard the file already used elsewhere. Local Windows run: 14 passed.
+3. **Browser startup/hang on hosted runners**: `driver.py` gained `launch_options()` — Chromium sandbox stays ON by default; setting `SHULIU_BROWSER_ALLOW_NO_SANDBOX=1` (explicit per-environment opt-in) disables it and adds `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage` for runners without the SUID helper. `backend.py` forwards the flag through the whitelisted driver environment only when the host set it. The browser workflow sets it for the hosted-runner matrix and its evidence upload is now `continue-on-error` (artifact quota). TDD: 3 focused tests (RED→GREEN) in `tests/browser/test_driver_launch_options.py`; full local browser suite 64 passed on Windows (sandboxed path unchanged).
+
+Local verification: skills 55 passed/2 skipped; repository-layout contract 35 passed; browser 64 passed.
