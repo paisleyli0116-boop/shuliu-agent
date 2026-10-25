@@ -1,9 +1,10 @@
 name: Browser Runtime cross-platform diagnostics
 
 on:
-  push:
-    branches:
-      - feat/foundation-v0.1
+  # Diagnostics workflow: hosted macOS minutes bill at a 10x multiplier, so
+  # this intentionally does NOT run on every push. Trigger it manually
+  # (Actions tab -> Browser Runtime cross-platform diagnostics -> Run
+  # workflow) when cross-platform browser diagnostics are actually needed.
   workflow_dispatch:
 
 permissions:
