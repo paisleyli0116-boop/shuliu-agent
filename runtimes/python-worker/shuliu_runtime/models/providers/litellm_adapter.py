@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from math import isfinite
 from typing import Any, Callable
 
-from ..capability import ModelCapability, ModelProviderConfig, parse_capability
-from ..gateway import ModelProviderError, ModelRequest, ProviderResult
+# litellm's LevelRoutingStreamHandler routes every log record below WARNING to
+# sys.stdout. The sidecar's stdout is the NDJSON IPC channel, so a single INFO
+# line corrupts the protocol and forces the Desktop supervisor into Safe Mode.
+# LITELLM_LOG is read by litellm at import time; the adapter module is imported
+# (and this default applied) before litellm is ever imported.
+os.environ.setdefault("LITELLM_LOG", "ERROR")
+
+from ..capability import ModelCapability, ModelProviderConfig, parse_capability  # noqa: E402
+from ..gateway import ModelProviderError, ModelRequest, ProviderResult  # noqa: E402
 
 _DEEPSEEK_API_BASE = "https://api.deepseek.com"
 _STRUCTURED_PROVIDER_ERROR_CODES = {
@@ -60,7 +68,9 @@ class LiteLLMAdapter:
     ) -> ProviderResult:
         capability = parse_capability(request.capability)
         if not provider.is_local and not api_key:
-            raise ModelProviderError("MODEL_CREDENTIAL_UNAVAILABLE")
+            raise ModelProviderError(
+                "MODEL_CREDENTIAL_UNAVAILABLE", request_status="not_sent", failure_stage="secret_resolution",
+            )
         try:
             if capability is ModelCapability.EMBEDDING:
                 response = self._embedding_call()(
@@ -88,7 +98,13 @@ class LiteLLMAdapter:
         except ModelProviderError:
             raise
         except Exception as error:
-            raise ModelProviderError(_provider_error_code(error)) from None
+            status = _http_status(error)
+            raise ModelProviderError(
+                _provider_error_code(error),
+                request_status="http_response_received" if status is not None else "unknown",
+                failure_stage="provider_http" if status is not None else "provider_transport",
+                http_status=status,
+            ) from None
         return ProviderResult(
             output=output,
             usage=_usage(response),
@@ -102,7 +118,9 @@ class LiteLLMAdapter:
         try:
             from litellm import completion
         except ImportError:
-            raise ModelProviderError("MODEL_PROVIDER_UNAVAILABLE") from None
+            raise ModelProviderError(
+                "MODEL_PROVIDER_UNAVAILABLE", request_status="not_sent", failure_stage="provider_setup",
+            ) from None
         return completion
 
     def _embedding_call(self) -> Callable[..., object]:
@@ -111,7 +129,9 @@ class LiteLLMAdapter:
         try:
             from litellm import embedding
         except ImportError:
-            raise ModelProviderError("MODEL_PROVIDER_UNAVAILABLE") from None
+            raise ModelProviderError(
+                "MODEL_PROVIDER_UNAVAILABLE", request_status="not_sent", failure_stage="provider_setup",
+            ) from None
         return embedding
 
 
@@ -122,31 +142,31 @@ def _messages(value: object) -> list[dict[str, object]]:
         messages: list[dict[str, object]] = []
         for item in value:
             if not isinstance(item, Mapping) or not _text(item.get("role")):
-                raise ModelProviderError("MODEL_INPUT_INVALID")
+                raise ModelProviderError("MODEL_INPUT_INVALID", request_status="not_sent", failure_stage="preflight")
             messages.append(dict(item))
         if messages:
             return messages
-    raise ModelProviderError("MODEL_INPUT_INVALID")
+    raise ModelProviderError("MODEL_INPUT_INVALID", request_status="not_sent", failure_stage="preflight")
 
 
 def _completion_output(response: object) -> object:
     choices = _get(response, "choices")
     if not isinstance(choices, Sequence) or not choices:
-        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID")
+        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
     message = _get(choices[0], "message")
     content = _get(message, "content")
     if content is None:
-        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID")
+        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
     return content
 
 
 def _embedding_output(response: object) -> list[object]:
     data = _get(response, "data")
     if not isinstance(data, Sequence):
-        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID")
+        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
     embeddings = [_get(item, "embedding") for item in data]
     if not embeddings or any(value is None for value in embeddings):
-        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID")
+        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
     return embeddings
 
 

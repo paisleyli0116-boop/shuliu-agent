@@ -30,6 +30,11 @@ describe("Windows installer package contract", () => {
     expect(spec).toContain("ShuLiuRuntime");
   });
 
+  it("freezes the approved Windows keyring backend into the Sidecar", () => {
+    const spec = readFileSync(resolve(desktopRoot, "build/windows.spec"), "utf8");
+    expect(spec).toContain("keyring.backends.Windows");
+  });
+
   it("stages the executable without an .exe suffix and restores its runtime name during install", () => {
     const buildScript = readFileSync(resolve(desktopRoot, "scripts/package-windows.mjs"), "utf8");
     const installerScript = readFileSync(resolve(desktopRoot, "installer/installer.nsi"), "utf8");

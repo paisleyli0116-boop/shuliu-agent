@@ -19,7 +19,7 @@ export type DesktopApprovalService = {
 };
 export type DesktopProviderService = {
   list(): Promise<ProviderCatalog>;
-  testConnection(input: { providerId: string; capability: string }): Promise<ProviderTestResult>;
+  testConnection(input: { providerId: string; capability: string; traceId?: string }): Promise<ProviderTestResult>;
   saveProfile(input: { providerId: string; modelId: string; apiKey: string }): Promise<ProviderCredentialResult>;
   replaceCredential(input: { profileId: string; apiKey: string }): Promise<ProviderCredentialResult>;
 };
@@ -35,6 +35,7 @@ export type DesktopIpcMainLike = {
 
 const validIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/;
 const validModelIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const validTraceId = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const validModelCapabilities = new Set(["fast_chat", "reasoning_high", "vision", "embedding"]);
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -98,12 +99,21 @@ export function registerDesktopIpc(
       return services.providers.list();
     }],
     [DESKTOP_IPC_CHANNELS.providersTestConnection, (args) => {
-      const payload = onePayload(args, ["providerId", "capability"]);
-      if (typeof payload.providerId !== "string" || !validIdentifier.test(payload.providerId) ||
-        typeof payload.capability !== "string" || !validModelCapabilities.has(payload.capability)) {
+      if (args.length !== 1 || !record(args[0])) throw new DesktopIpcError("DESKTOP_REQUEST_INVALID");
+      const payload = args[0];
+      const allowedShape = exactKeys(payload, ["providerId", "capability"]) ||
+        exactKeys(payload, ["providerId", "capability", "traceId"]);
+      if (!allowedShape ||
+        typeof payload.providerId !== "string" || !validIdentifier.test(payload.providerId) ||
+        typeof payload.capability !== "string" || !validModelCapabilities.has(payload.capability) ||
+        (payload.traceId !== undefined && (typeof payload.traceId !== "string" || !validTraceId.test(payload.traceId)))) {
         throw new DesktopIpcError("DESKTOP_REQUEST_INVALID");
       }
-      return services.providers.testConnection({ providerId: payload.providerId, capability: payload.capability });
+      return services.providers.testConnection({
+        providerId: payload.providerId,
+        capability: payload.capability,
+        ...(typeof payload.traceId === "string" ? { traceId: payload.traceId } : {}),
+      });
     }],
     [DESKTOP_IPC_CHANNELS.providersSaveProfile, (args) => {
       const payload = onePayload(args, ["providerId", "modelId", "apiKey"]);

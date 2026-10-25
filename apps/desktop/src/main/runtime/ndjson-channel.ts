@@ -1,22 +1,42 @@
 import { randomUUID } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
 import { TextDecoder } from "node:util";
+import { isSafeRuntimeErrorCode } from "./diagnostics";
 
 const MAX_FRAME_BYTES = 1_048_576;
 const MAX_TOMBSTONES = 1024;
+const TRACE_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const ERROR_CATEGORIES = new Set([
   "VALIDATION", "AUTH", "PERMISSION", "POLICY", "APPROVAL", "MODEL", "TOOL", "BROWSER",
   "COMPUTER", "NETWORK", "WORKER", "WORKFLOW", "STORAGE", "SYSTEM",
 ]);
 
+export type RuntimeRequestStatus = "not_sent" | "http_response_received" | "unknown";
+export type RuntimeFailureStage =
+  | "preflight" | "canary_gate" | "provider_profile" | "secret_resolution" | "gateway" | "policy" | "budget"
+  | "provider_setup" | "provider_transport" | "provider_http" | "provider_response" | "sidecar_ipc" | "unknown";
+
+type RuntimeIpcErrorContext = {
+  traceId?: string;
+  requestStatus?: RuntimeRequestStatus;
+  failureStage?: RuntimeFailureStage;
+  httpStatus?: number | null;
+};
+
 export class RuntimeIpcError extends Error {
   constructor(
     readonly code: string,
     message = `Runtime IPC failed (${code})`,
+    private readonly context: RuntimeIpcErrorContext = {},
   ) {
     super(message);
     this.name = "RuntimeIpcError";
   }
+
+  get traceId(): string | undefined { return this.context.traceId; }
+  get requestStatus(): RuntimeRequestStatus | undefined { return this.context.requestStatus; }
+  get failureStage(): RuntimeFailureStage | undefined { return this.context.failureStage; }
+  get httpStatus(): number | null | undefined { return this.context.httpStatus; }
 }
 
 type RuntimeResponse = {
@@ -33,6 +53,7 @@ type PendingRequest = {
   resolve: (value: Record<string, unknown>) => void;
   reject: (reason: RuntimeIpcError) => void;
   traceId: string;
+  writeAttempted: boolean;
   timer: NodeJS.Timeout;
   signal?: AbortSignal;
   abortListener?: () => void;
@@ -107,16 +128,22 @@ export class NdjsonChannel {
   request(
     method: string,
     params: Record<string, unknown>,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal; traceId?: string } = {},
   ): Promise<Record<string, unknown>> {
-    if (this.closed) return Promise.reject(new RuntimeIpcError("IPC_CHANNEL_CLOSED"));
-    if (!/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/.test(method) || !isRecord(params)) {
-      return Promise.reject(new RuntimeIpcError("IPC_REQUEST_INVALID"));
+    const traceId = options.traceId ?? randomUUID();
+    if (!TRACE_ID.test(traceId)) {
+      return Promise.reject(new RuntimeIpcError("IPC_REQUEST_INVALID", undefined, {
+        requestStatus: "not_sent",
+        failureStage: "preflight",
+      }));
     }
-    if (options.signal?.aborted) return Promise.reject(new RuntimeIpcError("IPC_REQUEST_CANCELLED"));
+    if (this.closed) return Promise.reject(this.requestError("IPC_CHANNEL_CLOSED", traceId, "not_sent"));
+    if (!/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/.test(method) || !isRecord(params)) {
+      return Promise.reject(this.requestError("IPC_REQUEST_INVALID", traceId, "not_sent", "preflight"));
+    }
+    if (options.signal?.aborted) return Promise.reject(this.requestError("IPC_REQUEST_CANCELLED", traceId, "not_sent"));
 
     const requestId = randomUUID();
-    const traceId = randomUUID();
     const timeoutMs = Math.max(1, Math.min(options.timeoutMs ?? 10_000, 300_000));
 
     return new Promise((resolve, reject) => {
@@ -124,9 +151,10 @@ export class NdjsonChannel {
         resolve,
         reject,
         traceId,
+        writeAttempted: false,
         timer: setTimeout(() => {
           this.sendCancel(requestId, traceId);
-          this.rejectPending(requestId, new RuntimeIpcError("IPC_REQUEST_TIMEOUT"), true);
+          this.rejectPending(requestId, this.requestError("IPC_REQUEST_TIMEOUT", traceId, "unknown"), true);
         }, timeoutMs),
         signal: options.signal,
       };
@@ -134,11 +162,12 @@ export class NdjsonChannel {
       if (options.signal) {
         pending.abortListener = () => {
           this.sendCancel(requestId, traceId);
-          this.rejectPending(requestId, new RuntimeIpcError("IPC_REQUEST_CANCELLED"), true);
+          this.rejectPending(requestId, this.requestError("IPC_REQUEST_CANCELLED", traceId, "unknown"), true);
         };
         options.signal.addEventListener("abort", pending.abortListener, { once: true });
       }
       this.pending.set(requestId, pending);
+      pending.writeAttempted = true;
       this.write({
         protocol_name: "runtime-ipc",
         protocol_version: 1,
@@ -224,8 +253,9 @@ export class NdjsonChannel {
     if (pending.traceId !== response.trace_id) throw new RuntimeIpcError("IPC_RESPONSE_TRACE_MISMATCH");
     this.clearPending(response.request_id, pending);
     if (response.payload.error) {
-      const code = String(response.payload.error.code);
-      pending.reject(new RuntimeIpcError(code));
+      const receivedCode = String(response.payload.error.code);
+      const code = isSafeRuntimeErrorCode(receivedCode) ? receivedCode : "IPC_REQUEST_FAILED";
+      pending.reject(this.requestError(code, pending.traceId, "unknown"));
     } else {
       pending.resolve(response.payload.result ?? {});
     }
@@ -262,7 +292,9 @@ export class NdjsonChannel {
         this.cancelledIds.delete(this.cancelledIds.values().next().value as string);
       }
     }
-    pending.reject(error);
+    const status = error.requestStatus ?? (pending.writeAttempted ? "unknown" : "not_sent");
+    const safeCode = isSafeRuntimeErrorCode(error.code) ? error.code : "IPC_REQUEST_FAILED";
+    pending.reject(this.requestError(safeCode, pending.traceId, status, error.failureStage ?? "sidecar_ipc"));
   }
 
   private clearPending(requestId: string, pending: PendingRequest): void {
@@ -277,5 +309,20 @@ export class NdjsonChannel {
     const wasOpen = !this.closed;
     this.close(error);
     if (wasOpen) this.onFatal?.(error);
+  }
+
+  private requestError(
+    code: string,
+    traceId: string,
+    requestStatus: RuntimeRequestStatus,
+    failureStage: RuntimeFailureStage = "sidecar_ipc",
+  ): RuntimeIpcError {
+    const safeCode = isSafeRuntimeErrorCode(code) ? code : "IPC_REQUEST_FAILED";
+    return new RuntimeIpcError(safeCode, undefined, {
+      traceId,
+      requestStatus,
+      failureStage,
+      httpStatus: null,
+    });
   }
 }

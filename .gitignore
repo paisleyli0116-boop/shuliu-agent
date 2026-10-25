@@ -12,3 +12,6 @@ __pycache__/
 .superpowers/
 
 runtimes/python-worker/build/
+
+# Desktop packaging output
+apps/desktop/release/

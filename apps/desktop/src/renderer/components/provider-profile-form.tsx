@@ -32,10 +32,56 @@ const connectionErrorMessages: Record<string, string> = {
   MODEL_ROUTE_MISMATCH: "返回的模型路由与当前配置不一致。",
   MODEL_TELEMETRY_UNAVAILABLE: "安全审计暂时不可用，连接测试已停止。",
   MODEL_TIMEOUT: "连接超时；本次没有自动重试。",
+  IPC_CHANNEL_CLOSED: "Sidecar 通道已关闭。",
+  IPC_JSON_INVALID: "Sidecar 返回了无效协议数据，已进入安全停止状态。",
+  IPC_REQUEST_CANCELLED: "连接测试已取消。",
+  IPC_REQUEST_FAILED: "Sidecar 未能返回安全结果。",
+  IPC_REQUEST_TIMEOUT: "等待 Sidecar 响应超时。",
+  IPC_WRITE_FAILED: "连接请求写入 Sidecar 失败。",
+  RUNTIME_SAFE_MODE: "运行时处于安全停止状态。",
+  SIDECAR_EXITED: "Python Sidecar 意外退出。",
+  SIDECAR_IO_FAILED: "Python Sidecar 通信中断。",
+  SIDECAR_SPAWN_FAILED: "Python Sidecar 未能启动。",
+};
+
+const requestStatusMessages = {
+  not_sent: "请求未发出",
+  http_response_received: "已收到 HTTP 响应",
+  unknown: "请求状态未知，无法确认服务端是否收到",
+} as const;
+
+const failureStageMessages: Record<string, string> = {
+  none: "完成",
+  preflight: "请求预检",
+  canary_gate: "连接测试门禁",
+  provider_profile: "Provider 配置",
+  secret_resolution: "安全凭据读取",
+  gateway: "Model Gateway",
+  policy: "Policy 安全策略",
+  budget: "预算检查",
+  provider_setup: "Provider 初始化",
+  provider_transport: "网络传输",
+  provider_http: "Provider HTTP 响应",
+  provider_response: "响应解析",
+  sidecar_ipc: "Sidecar 通信",
+  unknown: "原因待确认",
 };
 
 function connectionFailureMessage(code: string | null): string {
   return code ? connectionErrorMessages[code] ?? "原因待确认" : "原因待确认";
+}
+
+function connectionStatusDetails(result: {
+  safe_error_code: string | null,
+  request_status: "not_sent" | "http_response_received" | "unknown";
+  failure_stage: string;
+  http_status: number | null;
+  trace_id: string;
+}): string {
+  const safeCode = result.safe_error_code && Object.prototype.hasOwnProperty.call(connectionErrorMessages, result.safe_error_code)
+    ? `错误码：${result.safe_error_code}；` : "";
+  const http = result.http_status === null ? "" : `；HTTP ${result.http_status}`;
+  return `（${safeCode}${requestStatusMessages[result.request_status]}；阶段：${failureStageMessages[result.failure_stage] ?? "原因待确认"}${http}；Trace ID: ${result.trace_id}）`;
 }
 
 export function ProviderProfileForm({ api }: { api: RendererApi }) {
@@ -89,10 +135,11 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
       setFeedback({ kind: "error", message: "当前模型没有可测试的能力。" });
       return;
     }
+    const traceId = globalThis.crypto.randomUUID();
     setBusy(true);
     setFeedback(null);
     try {
-      const result = await providers.testConnection({ providerId, capability });
+      const result = await providers.testConnection({ providerId, capability, traceId });
       if (result.status === "connected") {
         setFeedback({
           kind: "success",
@@ -102,11 +149,11 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
         setFeedback({
           kind: "error",
           message: "连接测试未通过：" + connectionFailureMessage(result.safe_error_code) +
-            "（Trace ID: " + result.trace_id + "）。",
+            connectionStatusDetails(result) + "。",
         });
       }
     } catch {
-      setFeedback({ kind: "error", message: "连接测试未完成；请检查运行时状态后重试。" });
+      setFeedback({ kind: "error", message: "连接结果未返回：请求状态未知，无法确认服务端是否收到。（Trace ID: " + traceId + "）请勿盲目重复测试。" });
     } finally {
       setApiKey("");
       setBusy(false);

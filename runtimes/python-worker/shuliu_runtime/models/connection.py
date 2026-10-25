@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from .capability import ModelCapability, parse_capability
 from .config import ProviderConfigurationError, ProviderProfile, load_provider_profiles
@@ -36,7 +36,8 @@ _BLOCKED_CODES = frozenset(
         "MODEL_PROVIDER_NOT_CONFIGURED",
     }
 )
-_CANARY_INPUT = "Reply with only OK."
+_CANARY_INPUT = "Reply with exactly OK."
+_SAFE_TRACE_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,12 @@ class ProviderConnectionResult:
     latency_ms: float
     trace_id: str
     safe_error_code: str | None = None
+    request_status: Literal["not_sent", "http_response_received", "unknown"] = "unknown"
+    failure_stage: Literal[
+        "none", "preflight", "canary_gate", "provider_profile", "secret_resolution", "gateway", "policy",
+        "budget", "provider_setup", "provider_transport", "provider_http", "provider_response", "sidecar_ipc", "unknown",
+    ] = "unknown"
+    http_status: int | None = None
 
 
 class ProviderConnectionService:
@@ -101,32 +108,52 @@ class ProviderConnectionService:
         self._context = context
         self._canary_enabled = canary_enabled
         self._monotonic = monotonic
+        self._canary_lock = threading.Lock()
+        self._canary_consumed = False
 
     def test_provider_connection(
-        self, provider_id: str, capability: ModelCapability | str
+        self, provider_id: str, capability: ModelCapability | str, trace_id: str | None = None
     ) -> ProviderConnectionResult:
-        trace_id = str(uuid4())
+        if trace_id is None:
+            trace_id = str(uuid4())
+        elif not isinstance(trace_id, str) or not _SAFE_TRACE_ID.fullmatch(trace_id):
+            trace_id = str(uuid4())
+            return self._result(
+                "blocked", provider_id if isinstance(provider_id, str) and _SAFE_IDENTIFIER.fullmatch(provider_id) else "unknown", "",
+                capability if isinstance(capability, str) and _SAFE_IDENTIFIER.fullmatch(capability) else "unknown",
+                trace_id, "MODEL_REQUEST_INVALID", 0.0,
+                request_status="not_sent", failure_stage="preflight",
+            )
+        else:
+            trace_id = str(UUID(trace_id))
         safe_provider_id = (
             provider_id if isinstance(provider_id, str) and _SAFE_IDENTIFIER.fullmatch(provider_id) else "unknown"
         )
         safe_capability = capability.value if isinstance(capability, ModelCapability) else (
             capability if isinstance(capability, str) and _SAFE_IDENTIFIER.fullmatch(capability) else "unknown"
         )
-        if not self._canary_enabled:
+        with self._canary_lock:
+            canary_authorized = self._canary_enabled and not self._canary_consumed
+            if canary_authorized:
+                self._canary_consumed = True
+        if not canary_authorized:
             return self._result(
                 "blocked", safe_provider_id, "", safe_capability, trace_id,
                 "MODEL_CONNECTION_TEST_DISABLED", 0.0,
+                request_status="not_sent", failure_stage="canary_gate",
             )
         profile = self._profiles.get(provider_id) if isinstance(provider_id, str) else None
         if profile is None:
             return self._result(
                 "blocked", safe_provider_id, "", safe_capability, trace_id,
                 "MODEL_PROVIDER_NOT_CONFIGURED", 0.0,
+                request_status="not_sent", failure_stage="provider_profile",
             )
         if not profile.enabled:
             return self._result(
                 "blocked", profile.provider_id, profile.model, safe_capability, trace_id,
                 "MODEL_PROVIDER_NOT_CONFIGURED", 0.0,
+                request_status="not_sent", failure_stage="provider_profile",
             )
         try:
             parsed_capability = parse_capability(capability)
@@ -134,16 +161,19 @@ class ProviderConnectionService:
             return self._result(
                 "blocked", profile.provider_id, profile.model, "unknown", trace_id,
                 "MODEL_CAPABILITY_UNSUPPORTED", 0.0,
+                request_status="not_sent", failure_stage="preflight",
             )
         if parsed_capability.value not in profile.capabilities:
             return self._result(
                 "blocked", profile.provider_id, profile.model, parsed_capability.value, trace_id,
                 "MODEL_CAPABILITY_UNSUPPORTED", 0.0,
+                request_status="not_sent", failure_stage="preflight",
             )
         if not profile.is_local and not profile.secret_ref:
             return self._result(
                 "blocked", profile.provider_id, profile.model, parsed_capability.value, trace_id,
                 "MODEL_CREDENTIAL_UNAVAILABLE", 0.0,
+                request_status="not_sent", failure_stage="secret_resolution",
             )
 
         request = ModelRequest(
@@ -165,11 +195,15 @@ class ProviderConnectionService:
             return self._result(
                 status, profile.provider_id, profile.model, parsed_capability.value,
                 trace_id, code, _elapsed_ms(started, self._monotonic()),
+                request_status=error.request_status,
+                failure_stage=error.failure_stage,
+                http_status=error.http_status,
             )
         except Exception:
             return self._result(
                 "failed", profile.provider_id, profile.model, parsed_capability.value,
                 trace_id, "MODEL_CONNECTION_FAILED", _elapsed_ms(started, self._monotonic()),
+                request_status="unknown", failure_stage="unknown",
             )
 
         if (
@@ -180,10 +214,12 @@ class ProviderConnectionService:
             return self._result(
                 "failed", profile.provider_id, profile.model, parsed_capability.value,
                 trace_id, "MODEL_ROUTE_MISMATCH", _elapsed_ms(started, self._monotonic()),
+                request_status="http_response_received", failure_stage="provider_response",
             )
         return self._result(
             "connected", profile.provider_id, profile.model, parsed_capability.value,
             trace_id, None, result.latency_ms,
+            request_status="http_response_received", failure_stage="none",
         )
 
     @staticmethod
@@ -195,6 +231,10 @@ class ProviderConnectionService:
         trace_id: str,
         safe_error_code: str | None,
         latency_ms: float,
+        *,
+        request_status: Literal["not_sent", "http_response_received", "unknown"] = "not_sent",
+        failure_stage: str = "preflight",
+        http_status: int | None = None,
     ) -> ProviderConnectionResult:
         return ProviderConnectionResult(
             status=status,
@@ -203,7 +243,13 @@ class ProviderConnectionService:
             capability=capability,
             latency_ms=latency_ms,
             trace_id=trace_id,
-            safe_error_code=safe_error_code,
+            safe_error_code=_safe_error_code(safe_error_code) if safe_error_code is not None else None,
+            request_status=request_status if request_status in {"not_sent", "http_response_received", "unknown"} else "unknown",
+            failure_stage=failure_stage if failure_stage in {
+                "none", "preflight", "canary_gate", "provider_profile", "secret_resolution", "gateway", "policy",
+                "budget", "provider_setup", "provider_transport", "provider_http", "provider_response", "sidecar_ipc", "unknown",
+            } else "unknown",
+            http_status=http_status if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599 else None,
         )
 
 
@@ -271,8 +317,8 @@ class ProviderRuntime:
         self._store_credential(profile, api_key)
         return self._credential_result(profile)
 
-    def test_connection(self, provider_id: str, capability: str) -> dict[str, object]:
-        return asdict(self._connection_service.test_provider_connection(provider_id, capability))
+    def test_connection(self, provider_id: str, capability: str, trace_id: str | None = None) -> dict[str, object]:
+        return asdict(self._connection_service.test_provider_connection(provider_id, capability, trace_id))
 
     def _profile_for_credential(self, provider_id: str, model_id: str | None) -> ProviderProfile:
         profile = self._profiles.get(provider_id) if isinstance(provider_id, str) else None
@@ -337,8 +383,11 @@ def create_provider_ipc_handlers(runtime: ProviderRuntime):
 
     def test_connection(params, cancellation):
         check_cancelled(cancellation)
-        values = require_payload(params, ("provider_id", "capability"))
-        result = runtime.test_connection(values["provider_id"], values["capability"])
+        if not isinstance(params, dict) or set(params) not in (
+            {"provider_id", "capability"}, {"provider_id", "capability", "trace_id"},
+        ):
+            raise ValueError("provider request is invalid")
+        result = runtime.test_connection(params["provider_id"], params["capability"], params.get("trace_id"))
         check_cancelled(cancellation)
         return result
 

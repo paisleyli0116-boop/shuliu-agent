@@ -32,6 +32,7 @@ describe("provider settings", () => {
     expect(api.providers.testConnection).toHaveBeenCalledWith({
       providerId: "openai-compatible",
       capability: "fast_chat",
+      traceId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
     });
     expect(localStorage.length).toBe(0);
   });
@@ -58,6 +59,9 @@ describe("provider settings", () => {
           latency_ms: 15,
           trace_id: "trace-safe-diagnostic",
           safe_error_code: safeErrorCode,
+          request_status: "http_response_received",
+          failure_stage: "provider_http",
+          http_status: 401,
         }),
       } as never,
     });
@@ -69,7 +73,95 @@ describe("provider settings", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain(expectedMessage);
     expect(alert.textContent).toContain("trace-safe-diagnostic");
-    expect(alert.textContent).not.toContain(safeErrorCode);
+    if (safeErrorCode === "UNRECOGNIZED_INTERNAL_CODE") {
+      expect(alert.textContent).not.toContain(safeErrorCode);
+    } else {
+      expect(alert.textContent).toContain("错误码：" + safeErrorCode);
+    }
+  });
+
+
+
+  it("shows the safe IPC_JSON_INVALID code, unknown request state, and trace ID", async () => {
+    const user = userEvent.setup();
+    const api = createFakeApi({
+      providers: {
+        testConnection: vi.fn().mockResolvedValue({
+          status: "failed",
+          provider_id: "deepseek",
+          model: "",
+          capability: "fast_chat",
+          latency_ms: 0,
+          trace_id: "trace-invalid-sidecar-json",
+          safe_error_code: "IPC_JSON_INVALID",
+          request_status: "unknown",
+          failure_stage: "sidecar_ipc",
+          http_status: null,
+        }),
+      } as never,
+    });
+    render(<App api={api} />);
+
+    await user.click(screen.getByRole("button", { name: "模型与连接" }));
+    await user.click(screen.getByRole("button", { name: "测试连接" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Sidecar 返回了无效协议数据");
+    expect(alert.textContent).toContain("IPC_JSON_INVALID");
+    expect(alert.textContent).toContain("请求状态未知");
+    expect(alert.textContent).toContain("trace-invalid-sidecar-json");
+  });
+  it("shows the local Trace ID and unknown status if the Desktop IPC reply is lost", async () => {
+    const user = userEvent.setup();
+    const api = createFakeApi({
+      providers: {
+        testConnection: vi.fn().mockRejectedValue(new Error("raw private exception must not appear")),
+      } as never,
+    });
+    render(<App api={api} />);
+
+    await user.click(screen.getByRole("button", { name: "模型与连接" }));
+    await user.click(screen.getByRole("button", { name: "测试连接" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("请求状态未知");
+    expect(alert.textContent).toMatch(/Trace ID: [0-9a-f-]{36}/i);
+    expect(alert.textContent).not.toContain("raw private exception");
+  });
+
+  it.each([
+    ["MODEL_CREDENTIAL_REJECTED", "http_response_received", "provider_http", 401, "已收到 HTTP 响应"],
+    ["MODEL_BALANCE_INSUFFICIENT", "http_response_received", "provider_http", 402, "HTTP 402"],
+    ["MODEL_RATE_LIMITED", "http_response_received", "provider_http", 429, "HTTP 429"],
+    ["MODEL_PROVIDER_SERVER_ERROR", "http_response_received", "provider_http", 503, "HTTP 503"],
+    ["MODEL_NETWORK_ERROR", "unknown", "provider_transport", null, "请求状态未知"],
+    ["MODEL_TIMEOUT", "unknown", "provider_transport", null, "请求状态未知"],
+  ] as const)("shows safe Provider status for %s", async (safeErrorCode, requestStatus, failureStage, httpStatus, expected) => {
+    const user = userEvent.setup();
+    const api = createFakeApi({
+      providers: {
+        testConnection: vi.fn().mockResolvedValue({
+          status: "failed",
+          provider_id: "deepseek",
+          model: "deepseek/deepseek-flash",
+          capability: "fast_chat",
+          latency_ms: 10,
+          trace_id: "11111111-2222-4333-8444-555555555555",
+          safe_error_code: safeErrorCode,
+          request_status: requestStatus,
+          failure_stage: failureStage,
+          http_status: httpStatus,
+        }),
+      } as never,
+    });
+    render(<App api={api} />);
+
+    await user.click(screen.getByRole("button", { name: "模型与连接" }));
+    await user.click(screen.getByRole("button", { name: "测试连接" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(expected);
+    expect(alert.textContent).toContain("11111111-2222-4333-8444-555555555555");
   });
 
   it("sends a new credential only through the controlled save API and displays masked status", async () => {
@@ -146,3 +238,31 @@ describe("provider settings", () => {
     expect(document.body.textContent).not.toContain("sk-sensitive-error");
   });
 });
+
+  it("shows the safe request status and trace when Sidecar exits during a connection test", async () => {
+    const user = userEvent.setup();
+    const api = createFakeApi({
+      providers: {
+        testConnection: vi.fn().mockResolvedValue({
+          status: "failed",
+          provider_id: "deepseek",
+          model: "deepseek/deepseek-flash",
+          capability: "fast_chat",
+          latency_ms: 0,
+          trace_id: "trace-sidecar-exit",
+          safe_error_code: "SIDECAR_EXITED",
+          request_status: "unknown",
+          failure_stage: "sidecar_ipc",
+          http_status: null,
+        }),
+      } as never,
+    });
+    render(<App api={api} />);
+
+    await user.click(screen.getByRole("button", { name: "模型与连接" }));
+    await user.click(screen.getByRole("button", { name: "测试连接" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("请求状态未知");
+    expect(alert.textContent).toContain("trace-sidecar-exit");
+  });

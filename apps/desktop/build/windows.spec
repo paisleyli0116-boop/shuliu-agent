@@ -1,5 +1,5 @@
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 repo_root = Path(SPECPATH).resolve().parents[2]
 worker_root = repo_root / "runtimes" / "python-worker"
@@ -13,15 +13,23 @@ analysis = Analysis(
     datas=[
         (str(schema_root / "common-v1.schema.json"), "schemas"),
         (str(schema_root / "runtime-ipc-v1.schema.json"), "schemas"),
+        # litellm loads package data (e.g. model_prices_and_context_window_backup.json)
+        # at import time; without these files the frozen sidecar raises FileNotFoundError
+        # inside every completion call.
+        *collect_data_files("litellm"),
+        # tiktoken BPE encodings for offline token counting (loaded via TIKTOKEN_CACHE_DIR).
+        (str(repo_root / "apps" / "desktop" / "build" / "tiktoken_cache"), "tiktoken_cache"),
     ],
     hiddenimports=[
         *collect_submodules("jsonschema", filter=exclude_test_modules),
         *collect_submodules("referencing", filter=exclude_test_modules),
+        *collect_submodules("litellm", filter=exclude_test_modules),
+        *collect_submodules("tiktoken_ext"),
         "keyring.backends.Windows",
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(repo_root / "apps" / "desktop" / "build" / "runtime-tiktoken-cache.py")],
     excludes=[],
     noarchive=False,
     optimize=1,

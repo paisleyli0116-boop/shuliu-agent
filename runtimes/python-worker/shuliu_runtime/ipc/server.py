@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import threading
 import uuid
@@ -197,6 +198,20 @@ def _runtime_data_directory() -> Path:
     return Path.home() / ".local" / "share" / "shuliu-agent"
 
 
+def _isolate_protocol_output() -> TextIO:
+    """Reserve the process stdout channel for protocol frames only.
+
+    Third-party libraries (e.g. litellm) can print log lines to sys.stdout at
+    any time; one stray line corrupts the NDJSON channel and forces the Desktop
+    supervisor into Safe Mode (IPC_JSON_INVALID). The protocol writer therefore
+    gets a private duplicate of file descriptor 1, and sys.stdout is redirected
+    to sys.stderr so stray prints are captured by the safe sidecar log path.
+    """
+    protocol_stream = os.fdopen(os.dup(1), "w", encoding="utf-8", buffering=1)
+    sys.stdout = sys.stderr
+    return protocol_stream
+
+
 def main() -> int:
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
     try:
@@ -207,6 +222,7 @@ def main() -> int:
 
     health_state = {
         "status": "healthy",
+        "provider_connection_test_enabled": os.environ.get("SHULIU_MODEL_CONNECTION_TEST") == "1",
         "components": {
             "database": {
                 "status": "healthy",
@@ -220,10 +236,16 @@ def main() -> int:
         logger.error("event=provider_configuration_failed code=MODEL_PROVIDER_CONFIGURATION_INVALID")
         return 1
 
-    IpcServer(
-        handlers=create_provider_ipc_handlers(provider_runtime),
-        health_state=health_state,
-    ).serve()
+    try:
+        IpcServer(
+            handlers=create_provider_ipc_handlers(provider_runtime),
+            health_state=health_state,
+        ).serve(output_stream=_isolate_protocol_output())
+    except Exception:
+        # Preserve a safe crash marker for the Desktop supervisor. Never emit
+        # exception text, tracebacks, request data, or credential material.
+        logger.error("event=runtime_unhandled_exception code=RUNTIME_UNHANDLED_EXCEPTION")
+        return 1
     return 0
 
 

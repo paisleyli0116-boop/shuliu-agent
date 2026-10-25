@@ -1,12 +1,14 @@
 export type RuntimeStartupStage = "not_started" | "sidecar_spawn" | "ipc_handshake" | "ready" | "sidecar_exit";
 export type RuntimeHandshakeStatus = "not_started" | "pending" | "succeeded" | "failed";
 export type RuntimeFailureStage = "none" | "sidecar_spawn" | "ipc_handshake" | "sidecar_exit" | "unknown";
+export type RuntimeExitKind = "none" | "controlled" | "normal_exit" | "unhandled_exception" | "process_crash" | "unexpected_exit";
 
 export type RuntimeDiagnostics = {
   runtimeState: "stopped" | "starting" | "ready" | "restarting" | "safe_mode";
   startupStage: RuntimeStartupStage;
   handshakeStatus: RuntimeHandshakeStatus;
   failureStage: RuntimeFailureStage;
+  exitKind: RuntimeExitKind;
   sidecarExitCode: number | null;
   sidecarSignal: string | null;
   safeErrorCode: string | null;
@@ -19,6 +21,7 @@ export type SafeRuntimeDiagnostics = {
   startup_stage: RuntimeStartupStage | "unknown";
   ipc_handshake_status: RuntimeHandshakeStatus | "unknown";
   failure_stage: RuntimeFailureStage;
+  exit_kind: RuntimeExitKind | "unknown";
   sidecar_exit_code: number | null;
   sidecar_signal: string | null;
   safe_error_code: string | "UNKNOWN" | null;
@@ -30,6 +33,7 @@ const runtimeStates = new Set<RuntimeDiagnostics["runtimeState"]>(["stopped", "s
 const startupStages = new Set<RuntimeStartupStage>(["not_started", "sidecar_spawn", "ipc_handshake", "ready", "sidecar_exit"]);
 const handshakeStatuses = new Set<RuntimeHandshakeStatus>(["not_started", "pending", "succeeded", "failed"]);
 const failureStages = new Set<RuntimeFailureStage>(["none", "sidecar_spawn", "ipc_handshake", "sidecar_exit"]);
+const exitKinds = new Set<RuntimeExitKind>(["none", "controlled", "normal_exit", "unhandled_exception", "process_crash", "unexpected_exit"]);
 const processSignals = new Set([
   "SIGABRT", "SIGALRM", "SIGBUS", "SIGFPE", "SIGHUP", "SIGILL", "SIGINT", "SIGKILL", "SIGPIPE",
   "SIGQUIT", "SIGSEGV", "SIGTERM", "SIGTRAP", "SIGUSR1", "SIGUSR2",
@@ -55,6 +59,7 @@ const runtimeErrorCodes = new Set([
   "MODEL_PROVIDER_CONFIGURATION_INVALID",
   "PROTOCOL_VERSION_UNSUPPORTED",
   "RUNTIME_SAFE_MODE",
+  "RUNTIME_UNHANDLED_EXCEPTION",
   "SCHEMA_VALIDATION_FAILED",
   "SIDECAR_EXITED",
   "SIDECAR_IO_FAILED",
@@ -70,6 +75,7 @@ const sidecarLogCodes = new Map<string, ReadonlySet<string>>([
   ["runtime_bootstrap_failed", new Set(["DATABASE_SCHEMA_INCOMPATIBLE"])],
   ["runtime_frame_rejected", new Set(["IPC_DIRECTION_INVALID", "IPC_FRAME_INVALID", "IPC_FRAME_TOO_LARGE"])],
   ["runtime_request_failed", new Set(["IPC_REQUEST_FAILED"])],
+  ["runtime_unhandled_exception", new Set(["RUNTIME_UNHANDLED_EXCEPTION"])],
 ]);
 
 export type SafeRuntimeLog = { level: "ERROR"; event: string; code: string };
@@ -126,6 +132,7 @@ export function sanitizeRuntimeDiagnostics(value: unknown): SafeRuntimeDiagnosti
     startup_stage: allowedString(record.startupStage, startupStages),
     ipc_handshake_status: allowedString(record.handshakeStatus, handshakeStatuses),
     failure_stage: allowedString(record.failureStage, failureStages) as RuntimeFailureStage,
+    exit_kind: allowedString(record.exitKind, exitKinds),
     sidecar_exit_code: allowedExitCode(record.sidecarExitCode),
     sidecar_signal: allowedSignal(record.sidecarSignal),
     safe_error_code: allowedCode(record.safeErrorCode, runtimeErrorCodes),

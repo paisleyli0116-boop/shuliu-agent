@@ -156,3 +156,75 @@ def test_sdk_network_and_timeout_errors_are_classified_without_text(
 
 def test_unrecognized_error_code_is_not_exposed_as_a_safe_diagnostic() -> None:
     assert ModelProviderError("INTERNAL_SECRET_MARKER").code == "MODEL_PROVIDER_ERROR"
+
+
+@pytest.mark.parametrize(("status_code", "expected"), [
+    (401, "MODEL_CREDENTIAL_REJECTED"),
+    (402, "MODEL_BALANCE_INSUFFICIENT"),
+    (429, "MODEL_RATE_LIMITED"),
+    (503, "MODEL_PROVIDER_SERVER_ERROR"),
+])
+def test_http_failure_preserves_request_status_and_status_code(status_code, expected):
+    def completion(**_):
+        raise FakeProviderHttpError(status_code)
+
+    adapter = LiteLLMAdapter(completion=completion)
+    with pytest.raises(ModelProviderError) as captured:
+        adapter.invoke(
+            _provider("deepseek", "deepseek/deepseek-flash"),
+            _request(),
+            api_key="fake-secret",
+        )
+
+    assert captured.value.code == expected
+    assert captured.value.request_status == "http_response_received"
+    assert captured.value.failure_stage == "provider_http"
+    assert captured.value.http_status == status_code
+
+
+def test_network_failure_keeps_request_status_unknown_and_never_invents_http_status():
+    def completion(**_):
+        raise type("APIConnectionError", (Exception,), {})("secret-bearing exception")
+
+    adapter = LiteLLMAdapter(completion=completion)
+    with pytest.raises(ModelProviderError) as captured:
+        adapter.invoke(
+            _provider("deepseek", "deepseek/deepseek-flash"),
+            _request(),
+            api_key="fake-secret",
+        )
+
+    assert captured.value.code == "MODEL_NETWORK_ERROR"
+    assert captured.value.request_status == "unknown"
+    assert captured.value.failure_stage == "provider_transport"
+    assert captured.value.http_status is None
+
+
+def test_malformed_provider_response_is_marked_as_response_received():
+    adapter = LiteLLMAdapter(completion=lambda **_: {"choices": []})
+    with pytest.raises(ModelProviderError) as captured:
+        adapter.invoke(
+            _provider("deepseek", "deepseek/deepseek-flash"),
+            _request(),
+            api_key="fake-secret",
+        )
+
+    assert captured.value.code == "MODEL_PROVIDER_RESPONSE_INVALID"
+    assert captured.value.request_status == "http_response_received"
+    assert captured.value.failure_stage == "provider_response"
+    assert captured.value.http_status is None
+
+
+def test_litellm_log_level_defaults_to_error_for_protocol_channel_safety(monkeypatch):
+    """litellm routes INFO/DEBUG logs to sys.stdout; the sidecar's stdout is the
+    IPC channel. The adapter must default LITELLM_LOG to ERROR before litellm
+    reads the environment at import time."""
+    import importlib
+    import os
+
+    import shuliu_runtime.models.providers.litellm_adapter as adapter
+
+    monkeypatch.delenv("LITELLM_LOG", raising=False)
+    importlib.reload(adapter)
+
+    assert os.environ.get("LITELLM_LOG") == "ERROR"

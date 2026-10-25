@@ -238,7 +238,7 @@ def test_gateway_provider_scoped_call_does_not_fallback_after_failure():
         capability="fast_chat",
         privacy="PUBLIC",
         budget_ref="budget://org-a/provider-connection-test",
-        input="Reply with only OK.",
+        input="Reply with exactly OK.",
         trace_id="trace-connection-test",
         organization_id="org-a",
         subject_id="user-a",
@@ -377,7 +377,7 @@ def test_connection_canary_limits_completion_output_tokens():
         capability="fast_chat",
         privacy="PUBLIC",
         budget_ref="budget://org-a/test",
-        input="Reply with only OK.",
+        input="Reply with exactly OK.",
         trace_id="trace-limited-canary",
         organization_id="org-a",
         subject_id="user-a",
@@ -387,3 +387,147 @@ def test_connection_canary_limits_completion_output_tokens():
     adapter.invoke(profile.to_model_provider_config(), request, api_key="sk-test-marker")
 
     assert calls[0]["max_tokens"] == 8
+
+
+def test_connection_probe_uses_the_exact_authorized_canary_text(monkeypatch):
+    from shuliu_runtime.models.gateway import ModelResult
+
+    service, _, _ = _service()
+    requests = []
+
+    def complete_for_provider(provider_id, request):
+        requests.append((provider_id, request))
+        return ModelResult(
+            output="OK",
+            requested_capability="fast_chat",
+            resolved_provider="provider-a",
+            resolved_model="openai/gpt-4.1-mini",
+            model_version="test-model-v1",
+            usage={"total_tokens": 2},
+            latency_ms=1.0,
+            cost=None,
+        )
+
+    monkeypatch.setattr(service._gateway, "complete_for_provider", complete_for_provider)
+
+    result = service.test_provider_connection("provider-a", "fast_chat")
+
+    assert result.status == "connected"
+    assert len(requests) == 1
+    assert requests[0][0] == "provider-a"
+    assert requests[0][1].input == "Reply with exactly OK."
+    assert requests[0][1].privacy == "PUBLIC"
+
+
+def test_connection_results_classify_pre_send_blocks_and_provider_http_failures():
+    disabled, _, _ = _service(canary_enabled=False)
+    denied, _, _ = _service(policy_allowed=False)
+    exhausted, _, _ = _service(budget_allowed=False)
+
+    disabled_result = disabled.test_provider_connection("provider-a", "fast_chat")
+    denied_result = denied.test_provider_connection("provider-a", "fast_chat")
+    exhausted_result = exhausted.test_provider_connection("provider-a", "fast_chat")
+
+    assert (disabled_result.request_status, disabled_result.failure_stage, disabled_result.http_status) == (
+        "not_sent", "canary_gate", None,
+    )
+    assert (denied_result.request_status, denied_result.failure_stage, denied_result.http_status) == (
+        "not_sent", "policy", None,
+    )
+    assert (exhausted_result.request_status, exhausted_result.failure_stage, exhausted_result.http_status) == (
+        "not_sent", "budget", None,
+    )
+
+
+def test_connection_result_preserves_http_evidence_from_gateway():
+    from shuliu_runtime.models.gateway import ModelProviderError
+
+    service, adapter, _ = _service()
+
+    def unauthorized(_provider, _request, api_key=None):
+        assert api_key == "sk-connection-test-marker"
+        raise ModelProviderError(
+            "MODEL_CREDENTIAL_REJECTED",
+            request_status="http_response_received",
+            failure_stage="provider_http",
+            http_status=401,
+        )
+
+    adapter.invoke = unauthorized
+    result = service.test_provider_connection("provider-a", "fast_chat")
+
+    assert result.safe_error_code == "MODEL_CREDENTIAL_REJECTED"
+    assert result.request_status == "http_response_received"
+    assert result.failure_stage == "provider_http"
+    assert result.http_status == 401
+
+
+def test_explicit_canary_authorization_is_consumed_after_one_attempt(monkeypatch):
+    from shuliu_runtime.models.gateway import ModelResult
+
+    service, _, _ = _service()
+    calls = []
+
+    def complete_for_provider(provider_id, request):
+        calls.append((provider_id, request))
+        return ModelResult(
+            output="OK",
+            requested_capability="fast_chat",
+            resolved_provider="provider-a",
+            resolved_model="openai/gpt-4.1-mini",
+            model_version="test-model-v1",
+            usage={"total_tokens": 2},
+            latency_ms=1.0,
+            cost=None,
+        )
+
+    monkeypatch.setattr(service._gateway, "complete_for_provider", complete_for_provider)
+
+    first = service.test_provider_connection("provider-a", "fast_chat")
+    replay = service.test_provider_connection("provider-a", "fast_chat")
+
+    assert first.status == "connected"
+    assert replay.status == "blocked"
+    assert replay.safe_error_code == "MODEL_CONNECTION_TEST_DISABLED"
+    assert replay.request_status == "not_sent"
+    assert replay.failure_stage == "canary_gate"
+    assert len(calls) == 1
+
+
+def test_explicit_canary_authorization_allows_only_one_concurrent_gateway_call(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Lock
+    from shuliu_runtime.models.gateway import ModelResult
+
+    service, _, _ = _service()
+    start = Barrier(3)
+    calls = []
+    calls_lock = Lock()
+
+    def complete_for_provider(provider_id, request):
+        with calls_lock:
+            calls.append((provider_id, request))
+        return ModelResult(
+            output="OK",
+            requested_capability="fast_chat",
+            resolved_provider="provider-a",
+            resolved_model="openai/gpt-4.1-mini",
+            model_version="test-model-v1",
+            usage={"total_tokens": 2},
+            latency_ms=1.0,
+            cost=None,
+        )
+
+    monkeypatch.setattr(service._gateway, "complete_for_provider", complete_for_provider)
+
+    def test_once():
+        start.wait(timeout=2)
+        return service.test_provider_connection("provider-a", "fast_chat")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(test_once) for _ in range(2)]
+        start.wait(timeout=2)
+        results = [future.result(timeout=3) for future in futures]
+
+    assert len(calls) == 1
+    assert sorted(result.status for result in results) == ["blocked", "connected"]

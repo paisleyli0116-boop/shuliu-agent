@@ -40,6 +40,10 @@ export type ProviderOption = {
   selected_model_id?: string;
 };
 export type ProviderCatalog = { providers: ProviderOption[] };
+export type ProviderRequestStatus = "not_sent" | "http_response_received" | "unknown";
+export type ProviderFailureStage =
+  | "none" | "preflight" | "canary_gate" | "provider_profile" | "secret_resolution" | "gateway" | "policy"
+  | "budget" | "provider_setup" | "provider_transport" | "provider_http" | "provider_response" | "sidecar_ipc" | "unknown";
 export type ProviderTestResult = {
   status: "connected" | "blocked" | "failed";
   provider_id: string;
@@ -48,6 +52,9 @@ export type ProviderTestResult = {
   latency_ms: number;
   trace_id: string;
   safe_error_code: string | null;
+  request_status: ProviderRequestStatus;
+  failure_stage: ProviderFailureStage;
+  http_status: number | null;
 };
 export type ProviderCredentialResult = {
   profile_id: string;
@@ -68,7 +75,7 @@ export type RendererApi = {
   };
   providers: {
     list(): Promise<ProviderCatalog>;
-    testConnection(input: { providerId: string; capability: string }): Promise<ProviderTestResult>;
+    testConnection(input: { providerId: string; capability: string; traceId: string }): Promise<ProviderTestResult>;
     saveProfile(input: { providerId: string; modelId: string; apiKey: string }): Promise<ProviderCredentialResult>;
     replaceCredential(input: { profileId: string; apiKey: string }): Promise<ProviderCredentialResult>;
   };

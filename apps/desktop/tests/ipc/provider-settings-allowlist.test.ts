@@ -90,13 +90,21 @@ it("accepts a capability-scoped provider canary request", async () => {
     () => true,
   );
 
-  await handlers.get("shuliu:providers:test-connection")?.("trusted", {
+  const handler = handlers.get("shuliu:providers:test-connection");
+  await expect(handler?.("trusted", {
     providerId: "openai-compatible",
     capability: "fast_chat",
+    traceId: "not-a-uuid",
+  })).rejects.toMatchObject({ code: "DESKTOP_REQUEST_INVALID" });
+  await handler?.("trusted", {
+    providerId: "openai-compatible",
+    capability: "fast_chat",
+    traceId: "11111111-2222-4333-8444-555555555555",
   });
 
   expect(providers.testConnection).toHaveBeenCalledWith({
     providerId: "openai-compatible",
     capability: "fast_chat",
+    traceId: "11111111-2222-4333-8444-555555555555",
   });
 });

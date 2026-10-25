@@ -45,16 +45,56 @@ _SAFE_MODEL_ERROR_CODES = frozenset(
 )
 
 
+_REQUEST_STATUSES = frozenset({"not_sent", "http_response_received", "unknown"})
+_FAILURE_STAGES = frozenset({
+    "preflight", "canary_gate", "provider_profile", "secret_resolution", "gateway", "policy",
+    "budget", "provider_setup", "provider_transport", "provider_http", "provider_response", "sidecar_ipc", "unknown",
+})
+
+
+def _safe_request_status(value: object, default: str) -> str:
+    return value if isinstance(value, str) and value in _REQUEST_STATUSES else default
+
+
+def _safe_failure_stage(value: object, default: str) -> str:
+    return value if isinstance(value, str) and value in _FAILURE_STAGES else default
+
+
+def _safe_http_status(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599 else None
+
+
 class ModelGatewayError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        request_status: str = "not_sent",
+        failure_stage: str = "gateway",
+        http_status: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = _safe_error_code(code)
+        self.request_status = _safe_request_status(request_status, "unknown")
+        self.failure_stage = _safe_failure_stage(failure_stage, "unknown")
+        self.http_status = _safe_http_status(http_status)
 
 
 class ModelProviderError(RuntimeError):
-    def __init__(self, code: str = "MODEL_PROVIDER_ERROR") -> None:
+    def __init__(
+        self,
+        code: str = "MODEL_PROVIDER_ERROR",
+        *,
+        request_status: str = "unknown",
+        failure_stage: str = "unknown",
+        http_status: int | None = None,
+    ) -> None:
         super().__init__("model provider request failed")
         self.code = _safe_error_code(code)
+        self.request_status = _safe_request_status(request_status, "unknown")
+        self.failure_stage = _safe_failure_stage(failure_stage, "unknown")
+        self.http_status = _safe_http_status(http_status)
 
 
 @dataclass(frozen=True)
@@ -252,11 +292,17 @@ class ModelGateway:
             )
 
         last_route_error: str | None = None
+        last_request_status = "not_sent"
+        last_failure_stage = "gateway"
+        last_http_status: int | None = None
         attempted = 0
         for provider in candidates:
             decision = self._evaluate_policy(parsed, capability, provider)
             if decision.decision is not PolicyOutcome.ALLOW:
                 last_route_error = "MODEL_POLICY_DENIED"
+                last_request_status = "not_sent"
+                last_failure_stage = "policy"
+                last_http_status = None
                 if not self._fallback_enabled:
                     break
                 continue
@@ -271,10 +317,14 @@ class ModelGateway:
                 )
             except Exception as error:
                 raise ModelGatewayError(
-                    "MODEL_BUDGET_UNAVAILABLE", "model budget could not be verified"
+                    "MODEL_BUDGET_UNAVAILABLE", "model budget could not be verified",
+                    request_status="not_sent", failure_stage="budget",
                 ) from None
             if not reserved:
                 last_route_error = "MODEL_BUDGET_EXHAUSTED"
+                last_request_status = "not_sent"
+                last_failure_stage = "budget"
+                last_http_status = None
                 if not self._fallback_enabled:
                     break
                 continue
@@ -287,11 +337,16 @@ class ModelGateway:
                 provider_result = self._invoke_with_resolved_key(provider, parsed)
                 provider_result = _validate_provider_result(provider_result)
             except Exception as error:
-                error_code = (
-                    error.code
-                    if isinstance(error, ModelProviderError)
-                    else "MODEL_PROVIDER_ERROR"
-                )
+                if isinstance(error, ModelProviderError):
+                    error_code = error.code
+                    last_request_status = error.request_status
+                    last_failure_stage = error.failure_stage
+                    last_http_status = error.http_status
+                else:
+                    error_code = "MODEL_PROVIDER_ERROR"
+                    last_request_status = "unknown"
+                    last_failure_stage = "unknown"
+                    last_http_status = None
                 try:
                     self._budget.release(
                         parsed.organization_id,
@@ -301,8 +356,9 @@ class ModelGateway:
                     )
                 except Exception as release_error:
                     raise ModelGatewayError(
-                        "MODEL_BUDGET_UNAVAILABLE", "model budget reservation could not be released"
-                        ) from None
+                        "MODEL_BUDGET_UNAVAILABLE", "model budget reservation could not be released",
+                        request_status=last_request_status, failure_stage="budget", http_status=last_http_status,
+                    ) from None
                 elapsed = _elapsed_ms(started, self._monotonic())
                 self._record_call(
                     parsed,
@@ -342,7 +398,8 @@ class ModelGateway:
                     "MODEL_BUDGET_SETTLEMENT_FAILED",
                 )
                 raise ModelGatewayError(
-                    "MODEL_BUDGET_SETTLEMENT_FAILED", "model usage could not be reconciled"
+                    "MODEL_BUDGET_SETTLEMENT_FAILED", "model usage could not be reconciled",
+                    request_status="http_response_received", failure_stage="budget",
                 ) from None
             self._record_call(
                 parsed,
@@ -367,6 +424,9 @@ class ModelGateway:
         raise ModelGatewayError(
             last_route_error or "MODEL_PROVIDER_UNAVAILABLE",
             "all permitted model providers failed",
+            request_status=last_request_status,
+            failure_stage=last_failure_stage,
+            http_status=last_http_status,
         )
 
     def _invoke_with_resolved_key(
@@ -406,20 +466,30 @@ class ModelGateway:
                 },
             )
         except Exception as error:
-            raise ModelGatewayError("MODEL_POLICY_UNAVAILABLE", "model policy could not be evaluated") from None
+            raise ModelGatewayError(
+                "MODEL_POLICY_UNAVAILABLE", "model policy could not be evaluated",
+                request_status="not_sent", failure_stage="policy",
+            ) from None
         if not isinstance(decision, PolicyDecision):
-            raise ModelGatewayError("MODEL_POLICY_UNAVAILABLE", "model policy returned an invalid decision")
+            raise ModelGatewayError(
+                "MODEL_POLICY_UNAVAILABLE", "model policy returned an invalid decision",
+                request_status="not_sent", failure_stage="policy",
+            )
         return decision
 
     def _resolve_key(self, provider: ModelProviderConfig) -> str | None:
         if provider.secret_ref is None:
             return None
         if self._secret_resolver is None:
-            raise ModelProviderError("MODEL_CREDENTIAL_UNAVAILABLE")
+            raise ModelProviderError(
+                "MODEL_CREDENTIAL_UNAVAILABLE", request_status="not_sent", failure_stage="secret_resolution",
+            )
         try:
             return self._secret_resolver.get(provider.secret_ref)
         except Exception as error:
-            raise ModelProviderError("MODEL_CREDENTIAL_UNAVAILABLE") from None
+            raise ModelProviderError(
+                "MODEL_CREDENTIAL_UNAVAILABLE", request_status="not_sent", failure_stage="secret_resolution",
+            ) from None
 
     def _record_call(
         self,
@@ -448,19 +518,20 @@ class ModelGateway:
             self._model_calls.record(call)
         except Exception as error:
             raise ModelGatewayError(
-                "MODEL_TELEMETRY_UNAVAILABLE", "model call could not be recorded"
+                "MODEL_TELEMETRY_UNAVAILABLE", "model call could not be recorded",
+                request_status="http_response_received", failure_stage="gateway",
             ) from None
 
 
 def _validate_provider_result(result: object) -> ProviderResult:
     if not isinstance(result, ProviderResult):
-        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID")
+        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
     if not isinstance(result.usage, Mapping):
-        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID")
+        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
     usage: dict[str, int] = {}
     for key, value in result.usage.items():
         if not _non_empty(key) or isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID")
+            raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
         usage[key] = value
     if result.cost is not None and (
         isinstance(result.cost, bool)
@@ -468,9 +539,9 @@ def _validate_provider_result(result: object) -> ProviderResult:
         or not isfinite(float(result.cost))
         or result.cost < 0
     ):
-        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID")
+        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
     if result.output is None:
-        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID")
+        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
     return ProviderResult(
         output=result.output,
         usage=usage,
