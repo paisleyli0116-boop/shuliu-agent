@@ -158,12 +158,14 @@ The Task 28 implementation is locally testable and passes the stated local Windo
 - The successful real connection closes the real-Provider-response evidence gap for this canary. Task 28 remains **BLOCKED** pending project-owner approval of the Provider license/data-processing/security review and validation of the current uncommitted code against its exact-SHA Windows Validation. Task 29 has not started.
 ## 2026-10-25 Task 28 验收关闭（PASSED）
 
-**三项验收门槛全部满足：**
+Task 28 的关闭依据是以下三类证据；本结论只覆盖已记录的验收范围，不表示未审阅的供应商条款已经完成法律审查。
 
-1. **真实 Provider 连接成功**：DeepSeek canary 返回 OK（Trace `cf526ffb-1e41-4332-bf34-c16e9946865e`，2026-10-25T02:34:33Z，UI 截图 + 运行时诊断日志双重佐证）。
-2. **合规审批**：负责人于 2026-10-25 批准全部四项（见 `task-28-provider-compliance-review.md`，状态 APPROVED；DeepSeek ToS 细节审查保留为后续待办）。
-3. **Windows Validation 通过**：commit `ec3a02b`（含 Task 28 代码提交 `2396884` 与批准记录 `e1c58d0`），run `40161078580`，conclusion=success，15/15 验证步骤全部真实执行并成功——含 Electron↔Python IPC、Sidecar PyInstaller 构建、NSIS 打包、签名校验、安装冒烟、升级/回滚/数据保留。首次两次失败为 GitHub Artifact 存储配额（基础设施），已清理旧产物并使证据上传不阻断验证链（`ec3a02b`）。
+1. **真实 Provider 连接**：用户提供的真实 Desktop 页面报告 DeepSeek“真实 Provider 连接成功”（4094 ms，Trace `cf526ffb-1e41-4332-bf34-c16e9946865e`）；同 Trace 的运行时记录为 `request_status=http_response_received`、`failure_stage=none`。这证明连接测试收到 Provider HTTP 响应并报告成功。诊断未保存 HTTP 状态、响应正文、token 用量或费用，因此不把预期文本 `OK` 写成已独立核验的返回正文。
+2. **负责人审批**：负责人于 2026-10-25 对 `task-28-provider-compliance-review.md` 中四项范围作了 APPROVED 记录：接入 DeepSeek、常规对话数据发送、Windows 凭据存储、本地元数据日志保留。DeepSeek ToS / 隐私政策细节仍列为后续审查事项；该待办未被描述为已完成。
+3. **精确 SHA 的 Windows Validation**：远端 `feat/foundation-v0.1` 的已验证代码 SHA 为 `ec3a02b26c6c9850441ad83003a93ddf59c4b391`。Windows Validation run [40161078580](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/40161078580) 的目标 SHA 完全匹配，状态 `completed`、结论 `success`，唯一必需 job `Windows-only build, install, upgrade, rollback, and runtime validation` 成功。实际执行并成功的关键步骤包括 Computer Runtime 交互会话测试、真实 Windows Chrome、Skill 进程隔离、Windows sandbox fail-closed、安全测试、真实子进程 IPC、Desktop UI/IPC/security、Electron 类型检查与构建、Python Sidecar 构建、NSIS 安装包构建、签名校验、安装启动/Safe Mode/卸载，以及升级/失败恢复/回滚/数据保留验证。
 
-**基线说明**：Generic CI / Browser run 中 PostgreSQL migration 等失败在 10-22 基线 `f9675f8`（不含本任务改动）即已存在，非 Task 28 回归，另册处理。
+**Artifact 说明**：三个证据包上传受 GitHub Artifact 存储配额影响并产生 `Failed to CreateArtifact` 注释。工作流对这些上传步骤设置了容错；上传失败没有跳过或阻断上述验收步骤。不得把证据包上传报告为成功。
 
-**结论：Task 28 PASSED，Task 29 解锁。**
+**SHA 对账（2026-10-25）**：本地 HEAD 与只读读取的远端 `feat/foundation-v0.1` 均为 `2a905aeda52eba4f3246c3949a480d56d7076ae4`；其父提交为 `ec3a02b26c6c9850441ad83003a93ddf59c4b391`。该文档更正提交不含产品代码，Task 28 的 Windows 运行证据仍对应代码 SHA `ec3a02b26c6c9850441ad83003a93ddf59c4b391` 和 run `40161078580`。未跟踪的 `scripts/` 保持原样并排除在 Task 28 文件范围之外。
+
+**结论：Task 28 PASSED。** 远端已验证代码 SHA、真实连接成功证据与负责人审批记录齐备。DeepSeek 条款细节审查仍是已记录的后续事项；本结论不声称该事项已解决。Task 29 现在解锁。
