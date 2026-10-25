@@ -156,3 +156,14 @@ The Task 28 implementation is locally testable and passes the stated local Windo
 - The screenshot does not expose the model's response text, token usage, or cost, and the runtime record has no HTTP status. Record those details as unavailable; do not claim an exact `OK` body or usage/cost measurement.
 - The one-time DeepSeek canary authorization is consumed. No retry or additional Provider call is authorized by this evidence.
 - The successful real connection closes the real-Provider-response evidence gap for this canary. Task 28 remains **BLOCKED** pending project-owner approval of the Provider license/data-processing/security review and validation of the current uncommitted code against its exact-SHA Windows Validation. Task 29 has not started.
+## 2026-10-25 Task 28 验收关闭（PASSED）
+
+**三项验收门槛全部满足：**
+
+1. **真实 Provider 连接成功**：DeepSeek canary 返回 OK（Trace `cf526ffb-1e41-4332-bf34-c16e9946865e`，2026-10-25T02:34:33Z，UI 截图 + 运行时诊断日志双重佐证）。
+2. **合规审批**：负责人于 2026-10-25 批准全部四项（见 `task-28-provider-compliance-review.md`，状态 APPROVED；DeepSeek ToS 细节审查保留为后续待办）。
+3. **Windows Validation 通过**：commit `ec3a02b`（含 Task 28 代码提交 `2396884` 与批准记录 `e1c58d0`），run `40161078580`，conclusion=success，15/15 验证步骤全部真实执行并成功——含 Electron↔Python IPC、Sidecar PyInstaller 构建、NSIS 打包、签名校验、安装冒烟、升级/回滚/数据保留。首次两次失败为 GitHub Artifact 存储配额（基础设施），已清理旧产物并使证据上传不阻断验证链（`ec3a02b`）。
+
+**基线说明**：Generic CI / Browser run 中 PostgreSQL migration 等失败在 10-22 基线 `f9675f8`（不含本任务改动）即已存在，非 Task 28 回归，另册处理。
+
+**结论：Task 28 PASSED，Task 29 解锁。**
