@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import isfinite
 from typing import Protocol
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from shuliu_runtime.policy.engine import PolicyEngine
 from shuliu_runtime.policy.rules import PolicyDecision, PolicyOutcome
@@ -12,6 +13,7 @@ from shuliu_runtime.security.secret_store import SecretResolver
 
 from .capability import ModelCapability, ModelProviderConfig, parse_capability
 from .routing import LOCAL_ONLY, ModelBudget, ModelHealth, route_candidates
+from .usage import validate_usage
 
 _SAFE_MODEL_ERROR_CODES = frozenset(
     {
@@ -107,6 +109,7 @@ class ModelRequest:
     organization_id: str
     subject_id: str
     permissions: tuple[str, ...]
+    call_id: str = field(default_factory=lambda: uuid4().hex)
 
     @classmethod
     def parse(cls, request: ModelRequest | Mapping[str, object]) -> ModelRequest:
@@ -126,6 +129,7 @@ class ModelRequest:
                     organization_id=request["organization_id"],
                     subject_id=request["subject_id"],
                     permissions=tuple(raw_permissions),
+                    call_id=request["call_id"] if "call_id" in request else uuid4().hex,
                 )
             except (KeyError, TypeError):
                 raise ModelGatewayError("MODEL_REQUEST_INVALID", "model request is invalid") from None
@@ -138,6 +142,7 @@ class ModelRequest:
             "trace_id",
             "organization_id",
             "subject_id",
+            "call_id",
         ):
             if not _non_empty(getattr(parsed, field_name)):
                 raise ModelGatewayError("MODEL_REQUEST_INVALID", "model request is invalid")
@@ -179,6 +184,7 @@ class ModelResult:
 
 @dataclass(frozen=True)
 class ModelCall:
+    call_id: str
     organization_id: str
     trace_id: str
     requested_capability: str
@@ -189,6 +195,7 @@ class ModelCall:
     usage: dict[str, int]
     cost: float | None
     error_code: str | None
+    status: str
 
 
 class ModelAdapter(Protocol):
@@ -297,6 +304,9 @@ class ModelGateway:
         last_http_status: int | None = None
         attempted = 0
         for provider in candidates:
+            call_id = uuid5(
+                NAMESPACE_URL, f"shuliu:model-call:{parsed.call_id}:{provider.provider_id}"
+            ).hex
             decision = self._evaluate_policy(parsed, capability, provider)
             if decision.decision is not PolicyOutcome.ALLOW:
                 last_route_error = "MODEL_POLICY_DENIED"
@@ -314,6 +324,7 @@ class ModelGateway:
                     provider.provider_id,
                     capability.value,
                     parsed.trace_id,
+                    call_id=call_id,
                 )
             except Exception as error:
                 raise ModelGatewayError(
@@ -347,29 +358,59 @@ class ModelGateway:
                     last_request_status = "unknown"
                     last_failure_stage = "unknown"
                     last_http_status = None
-                try:
-                    self._budget.release(
-                        parsed.organization_id,
-                        parsed.budget_ref,
-                        provider.provider_id,
-                        parsed.trace_id,
-                    )
-                except Exception as release_error:
-                    raise ModelGatewayError(
-                        "MODEL_BUDGET_UNAVAILABLE", "model budget reservation could not be released",
-                        request_status=last_request_status, failure_stage="budget", http_status=last_http_status,
-                    ) from None
                 elapsed = _elapsed_ms(started, self._monotonic())
-                self._record_call(
+                call = self._build_call(
                     parsed,
                     provider,
                     elapsed,
                     {},
                     None,
                     error_code,
+                    call_id=call_id,
+                    status="UNKNOWN" if last_request_status == "unknown" else "FAILED",
                 )
+                finalizer = getattr(self._budget, "finalize_call", None)
+                if callable(finalizer):
+                    try:
+                        finalizer(call, budget_ref=parsed.budget_ref)
+                    except Exception:
+                        try:
+                            self._budget.mark_unknown(
+                                parsed.organization_id, parsed.budget_ref, call_id
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            self._record_call(
+                                parsed,
+                                provider,
+                                elapsed,
+                                {},
+                                None,
+                                "MODEL_BUDGET_UNAVAILABLE",
+                                call_id=call_id,
+                                status="UNKNOWN",
+                            )
+                        except ModelGatewayError:
+                            pass
+                        raise ModelGatewayError(
+                            "MODEL_BUDGET_UNAVAILABLE", "model usage could not be finalized",
+                            request_status=last_request_status, failure_stage="budget", http_status=last_http_status,
+                        ) from None
+                else:
+                    try:
+                        if last_request_status == "unknown":
+                            self._budget.mark_unknown(parsed.organization_id, parsed.budget_ref, call_id)
+                        else:
+                            self._budget.release(parsed.organization_id, parsed.budget_ref, call_id)
+                    except Exception:
+                        raise ModelGatewayError(
+                            "MODEL_BUDGET_UNAVAILABLE", "model budget reservation could not be released",
+                            request_status=last_request_status, failure_stage="budget", http_status=last_http_status,
+                        ) from None
+                    self._persist_call(call, request_status=last_request_status)
                 last_route_error = error_code
-                if not self._fallback_enabled:
+                if not self._fallback_enabled or last_request_status == "unknown":
                     break
                 if attempted < len(candidates):
                     delay = min(self._fallback_backoff_seconds, self._max_fallback_backoff_seconds)
@@ -381,27 +422,7 @@ class ModelGateway:
 
             assert provider_result is not None
             elapsed = _elapsed_ms(started, self._monotonic())
-            try:
-                self._budget.settle(
-                    parsed.organization_id,
-                    parsed.budget_ref,
-                    dict(provider_result.usage),
-                    provider_result.cost,
-                )
-            except Exception as error:
-                self._record_call(
-                    parsed,
-                    provider,
-                    elapsed,
-                    dict(provider_result.usage),
-                    provider_result.cost,
-                    "MODEL_BUDGET_SETTLEMENT_FAILED",
-                )
-                raise ModelGatewayError(
-                    "MODEL_BUDGET_SETTLEMENT_FAILED", "model usage could not be reconciled",
-                    request_status="http_response_received", failure_stage="budget",
-                ) from None
-            self._record_call(
+            call = self._build_call(
                 parsed,
                 provider,
                 elapsed,
@@ -409,7 +430,65 @@ class ModelGateway:
                 provider_result.cost,
                 None,
                 model_version=provider_result.model_version,
+                call_id=call_id,
+                status="SUCCEEDED",
             )
+            finalizer = getattr(self._budget, "finalize_call", None)
+            if callable(finalizer):
+                try:
+                    finalizer(call, budget_ref=parsed.budget_ref)
+                except Exception:
+                    try:
+                        self._budget.mark_unknown(parsed.organization_id, parsed.budget_ref, call_id)
+                    except Exception:
+                        pass
+                    try:
+                        self._record_call(
+                            parsed,
+                            provider,
+                            elapsed,
+                            dict(provider_result.usage),
+                            provider_result.cost,
+                            "MODEL_BUDGET_SETTLEMENT_FAILED",
+                            model_version=provider_result.model_version,
+                            call_id=call_id,
+                            status="UNKNOWN",
+                        )
+                    except ModelGatewayError:
+                        pass
+                    raise ModelGatewayError(
+                        "MODEL_BUDGET_SETTLEMENT_FAILED", "model usage could not be reconciled",
+                        request_status="http_response_received", failure_stage="budget",
+                    ) from None
+            else:
+                try:
+                    self._budget.settle(
+                        parsed.organization_id,
+                        parsed.budget_ref,
+                        call_id,
+                        dict(provider_result.usage),
+                        provider_result.cost,
+                    )
+                except Exception:
+                    try:
+                        self._budget.mark_unknown(parsed.organization_id, parsed.budget_ref, call_id)
+                    except Exception:
+                        pass
+                    self._record_call(
+                        parsed,
+                        provider,
+                        elapsed,
+                        dict(provider_result.usage),
+                        provider_result.cost,
+                        "MODEL_BUDGET_SETTLEMENT_FAILED",
+                        call_id=call_id,
+                        status="UNKNOWN",
+                    )
+                    raise ModelGatewayError(
+                        "MODEL_BUDGET_SETTLEMENT_FAILED", "model usage could not be reconciled",
+                        request_status="http_response_received", failure_stage="budget",
+                    ) from None
+                self._persist_call(call, request_status="http_response_received")
             return ModelResult(
                 output=provider_result.output,
                 requested_capability=capability.value,
@@ -491,7 +570,7 @@ class ModelGateway:
                 "MODEL_CREDENTIAL_UNAVAILABLE", request_status="not_sent", failure_stage="secret_resolution",
             ) from None
 
-    def _record_call(
+    def _build_call(
         self,
         request: ModelRequest,
         provider: ModelProviderConfig,
@@ -501,8 +580,11 @@ class ModelGateway:
         error_code: str | None,
         *,
         model_version: str | None = None,
-    ) -> None:
-        call = ModelCall(
+        call_id: str,
+        status: str,
+    ) -> ModelCall:
+        return ModelCall(
+            call_id=call_id,
             organization_id=request.organization_id,
             trace_id=request.trace_id,
             requested_capability=request.capability,
@@ -513,26 +595,56 @@ class ModelGateway:
             usage=usage,
             cost=cost,
             error_code=error_code,
+            status=status,
         )
+
+    def _record_call(
+        self,
+        request: ModelRequest,
+        provider: ModelProviderConfig,
+        latency_ms: float,
+        usage: dict[str, int],
+        cost: float | None,
+        error_code: str | None,
+        *,
+        model_version: str | None = None,
+        call_id: str,
+        status: str,
+    ) -> None:
+        call = self._build_call(
+            request,
+            provider,
+            latency_ms,
+            usage,
+            cost,
+            error_code,
+            model_version=model_version,
+            call_id=call_id,
+            status=status,
+        )
+        self._persist_call(call, request_status="http_response_received")
+
+    def _persist_call(self, call: ModelCall, *, request_status: str) -> None:
         try:
             self._model_calls.record(call)
-        except Exception as error:
+        except Exception:
             raise ModelGatewayError(
                 "MODEL_TELEMETRY_UNAVAILABLE", "model call could not be recorded",
-                request_status="http_response_received", failure_stage="gateway",
+                request_status=request_status, failure_stage="gateway",
             ) from None
 
 
 def _validate_provider_result(result: object) -> ProviderResult:
     if not isinstance(result, ProviderResult):
         raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
-    if not isinstance(result.usage, Mapping):
-        raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
-    usage: dict[str, int] = {}
-    for key, value in result.usage.items():
-        if not _non_empty(key) or isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ModelProviderError("MODEL_PROVIDER_RESPONSE_INVALID", request_status="http_response_received", failure_stage="provider_response")
-        usage[key] = value
+    try:
+        usage = validate_usage(result.usage)
+    except ValueError:
+        raise ModelProviderError(
+            "MODEL_PROVIDER_RESPONSE_INVALID",
+            request_status="http_response_received",
+            failure_stage="provider_response",
+        ) from None
     if result.cost is not None and (
         isinstance(result.cost, bool)
         or not isinstance(result.cost, (int, float))

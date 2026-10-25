@@ -134,7 +134,10 @@ def test_missing_policy_allow_fails_closed_before_provider_call() -> None:
 
 def test_each_fallback_candidate_gets_its_own_policy_decision() -> None:
     providers = (_provider("primary", priority=1), _provider("secondary", priority=2))
-    fake = FakeModel(failures={"primary": RuntimeError("provider secret detail")})
+    fake = FakeModel(failures={"primary": ModelProviderError(
+        "MODEL_PROVIDER_SERVER_ERROR", request_status="http_response_received",
+        failure_stage="provider_http", http_status=503,
+    )})
     records = MemoryModelCalls()
     policy = _policy("primary", "secondary")
     gateway = _gateway(providers, fake, policy=policy, model_calls=records)
@@ -144,13 +147,16 @@ def test_each_fallback_candidate_gets_its_own_policy_decision() -> None:
     assert result.resolved_provider == "secondary"
     assert [call.provider_id for call in fake.calls] == ["primary", "secondary"]
     assert [call.resolved_provider for call in records.records] == ["primary", "secondary"]
-    assert records.records[0].error_code == "MODEL_PROVIDER_ERROR"
+    assert records.records[0].error_code == "MODEL_PROVIDER_SERVER_ERROR"
     assert records.records[1].error_code is None
 
 
 def test_policy_denial_blocks_a_fallback_provider() -> None:
     providers = (_provider("primary", priority=1), _provider("secondary", priority=2))
-    fake = FakeModel(failures={"primary": RuntimeError("provider secret detail")})
+    fake = FakeModel(failures={"primary": ModelProviderError(
+        "MODEL_PROVIDER_SERVER_ERROR", request_status="http_response_received",
+        failure_stage="provider_http", http_status=503,
+    )})
     policy = _policy("primary")
     gateway = _gateway(providers, fake, policy=policy)
 

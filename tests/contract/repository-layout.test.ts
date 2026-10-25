@@ -95,4 +95,12 @@ describe("Foundation repository layout", () => {
     expect(generic).toContain("version-file: pyproject.toml");
     expect(read("pyproject.toml")).toContain('required-version = "==0.12.20"');
   });
+
+  it("runs durable model usage integration against both PostgreSQL CI versions", () => {
+    const postgresJob = read(".github/workflows/ci.yml").split("  postgres-migration:")[1];
+    expect(postgresJob).toContain("postgres: [17, 18]");
+    expect(postgresJob).toContain(
+      "uv run --locked --all-packages pytest tests/integration/test_model_usage_persistence.py -q",
+    );
+  });
 });

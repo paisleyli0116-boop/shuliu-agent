@@ -12,6 +12,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     MetaData,
+    Numeric,
     String,
     Table,
     Text,
@@ -397,6 +399,76 @@ apscheduler_jobs = Table(
     Column("job_state", LargeBinary, nullable=False),
 )
 
+model_calls = Table(
+    "model_calls",
+    metadata,
+    Column("call_id", String(128), primary_key=True),
+    Column("organization_id", String(128), primary_key=True),
+    Column("trace_id", String(128), nullable=False),
+    Column("requested_capability", String(64), nullable=False),
+    Column("provider_id", String(128), nullable=False),
+    Column("model", String(256), nullable=False),
+    Column("model_version", String(128), nullable=False),
+    Column("usage", JSON, nullable=False),
+    Column("latency_ms", Numeric(14, 3), nullable=False),
+    Column("cost", Numeric(20, 8)),
+    Column("currency", String(3), nullable=False, server_default="USD"),
+    Column("error_code", String(96)),
+    Column("status", String(32), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("latency_ms >= 0", name="ck_model_calls_latency_nonnegative"),
+    CheckConstraint("cost IS NULL OR cost >= 0", name="ck_model_calls_cost_nonnegative"),
+    CheckConstraint(
+        "status IN ('SUCCEEDED', 'FAILED', 'UNKNOWN')",
+        name="ck_model_calls_status",
+    ),
+)
+
+model_budget_accounts = Table(
+    "model_budget_accounts",
+    metadata,
+    Column("organization_id", String(128), primary_key=True),
+    Column("budget_ref", String(256), primary_key=True),
+    Column("currency", String(3), nullable=False),
+    Column("limit_amount", Numeric(20, 8), nullable=False),
+    Column("reservation_amount", Numeric(20, 8), nullable=False),
+    Column("reserved_amount", Numeric(20, 8), nullable=False, server_default="0"),
+    Column("spent_amount", Numeric(20, 8), nullable=False, server_default="0"),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("limit_amount >= 0", name="ck_model_budget_limit_nonnegative"),
+    CheckConstraint("reservation_amount > 0", name="ck_model_budget_reservation_positive"),
+    CheckConstraint("reserved_amount >= 0", name="ck_model_budget_reserved_nonnegative"),
+    CheckConstraint("spent_amount >= 0", name="ck_model_budget_spent_nonnegative"),
+)
+
+model_budget_reservations = Table(
+    "model_budget_reservations",
+    metadata,
+    Column("call_id", String(128), primary_key=True),
+    Column("organization_id", String(128), primary_key=True),
+    Column("budget_ref", String(256), nullable=False),
+    Column("provider_id", String(128), nullable=False),
+    Column("capability", String(64), nullable=False),
+    Column("trace_id", String(128), nullable=False),
+    Column("reserved_amount", Numeric(20, 8), nullable=False),
+    Column("settled_amount", Numeric(20, 8)),
+    Column("usage", JSON),
+    Column("status", String(32), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ["organization_id", "budget_ref"],
+        ["model_budget_accounts.organization_id", "model_budget_accounts.budget_ref"],
+        name="fk_model_budget_reservation_account",
+    ),
+    CheckConstraint("reserved_amount > 0", name="ck_model_budget_reservation_amount_positive"),
+    CheckConstraint("settled_amount IS NULL OR settled_amount >= 0", name="ck_model_budget_settled_nonnegative"),
+    CheckConstraint(
+        "status IN ('RESERVED', 'RECONCILIATION_REQUIRED', 'SETTLED', 'RELEASED')",
+        name="ck_model_budget_reservation_status",
+    ),
+)
+
 Index("ix_events_org_received_at", events.c.organization_id, events.c.received_at)
 Index("ix_worker_leases_org_status", worker_leases.c.organization_id, worker_leases.c.status)
 Index(
@@ -445,6 +517,8 @@ Index(
     schedule_occurrences.c.scheduled_at,
 )
 Index("ix_apscheduler_jobs_next_run_time", apscheduler_jobs.c.next_run_time)
+Index("ix_model_calls_org_trace_created", model_calls.c.organization_id, model_calls.c.trace_id, model_calls.c.created_at)
+Index("ix_model_budget_reservations_org_status", model_budget_reservations.c.organization_id, model_budget_reservations.c.status)
 
 
 class MigrationStateError(RuntimeError):
@@ -565,12 +639,22 @@ def verify_applied_migration_checksums(connection, config: Config) -> None:
 
 
 def record_applied_migration_checksums(connection, config: Config) -> None:
+    if not inspect(connection).has_table("schema_migrations"):
+        return
     directory, scripts = _migration_scripts(config)
     applied = {
         revision
         for head in _current_revisions(connection)
         for revision in _revision_chain(directory, head)
     }
+    stored = set(
+        connection.execute(text("SELECT migration_id FROM schema_migrations")).scalars()
+    )
+    for migration_id in stored - applied:
+        connection.execute(
+            text("DELETE FROM schema_migrations WHERE migration_id = :migration_id"),
+            {"migration_id": migration_id},
+        )
     for migration_id in sorted(applied):
         checksum = _checksum(scripts[migration_id])
         existing = connection.execute(

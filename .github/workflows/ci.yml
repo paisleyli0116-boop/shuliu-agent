@@ -117,6 +117,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: uv sync --locked --all-packages
       - run: pnpm test:migration
+      - name: Run durable model usage and budget integration tests
+        run: uv run --locked --all-packages pytest tests/integration/test_model_usage_persistence.py -q
       - name: Run PostgreSQL Knowledge unit and revocation tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
       - name: Run PostgreSQL Knowledge ACL integration tests

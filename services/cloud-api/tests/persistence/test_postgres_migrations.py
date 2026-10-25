@@ -293,3 +293,68 @@ def test_configured_postgres_migration_enables_pgvector_and_accepts_events():
         assert duplicate.duplicate is True
     finally:
         engine.dispose()
+
+@pytest.mark.migration
+def test_task29_model_usage_migration_creates_org_scoped_safe_tables():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            upgrade_to_head(connection)
+            inspector = inspect(connection)
+            tables = set(inspector.get_table_names())
+            assert {"model_calls", "model_budget_accounts", "model_budget_reservations"} <= tables
+
+            expected_columns = {
+                "call_id", "organization_id", "trace_id", "requested_capability",
+                "provider_id", "model", "model_version", "usage", "latency_ms",
+                "cost", "error_code", "status", "created_at",
+            }
+            call_columns = {column["name"] for column in inspector.get_columns("model_calls")}
+            assert expected_columns <= call_columns
+            assert not {"prompt", "completion", "input", "output", "secret", "api_key"} & call_columns
+            call_checks = inspector.get_check_constraints("model_calls")
+            assert any("SUCCEEDED" in check["sqltext"] and "UNKNOWN" in check["sqltext"] for check in call_checks)
+
+            for table in ("model_calls", "model_budget_accounts", "model_budget_reservations"):
+                columns = {column["name"]: column for column in inspector.get_columns(table)}
+                assert "organization_id" in columns
+                assert columns["organization_id"]["nullable"] is False
+
+            account_columns = {column["name"] for column in inspector.get_columns("model_budget_accounts")}
+            assert {"budget_ref", "currency", "limit_amount", "reserved_amount", "spent_amount", "reservation_amount"} <= account_columns
+            reservation_columns = {column["name"] for column in inspector.get_columns("model_budget_reservations")}
+            assert {"call_id", "budget_ref", "provider_id", "trace_id", "reserved_amount", "settled_amount", "status", "usage"} <= reservation_columns
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.migration
+def test_task29_model_usage_migration_downgrades_and_reapplies_cleanly():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        with engine.connect() as connection:
+            config = Config(str(SERVICE_ROOT / "alembic.ini"))
+            config.attributes["connection"] = connection
+            command.upgrade(config, "head")
+            connection.commit()
+
+            command.downgrade(config, "0007_task_scoped_fencing_tokens")
+            connection.commit()
+            tables_after_downgrade = set(inspect(connection).get_table_names())
+            assert not {
+                "model_calls",
+                "model_budget_accounts",
+                "model_budget_reservations",
+            } & tables_after_downgrade
+            assert "events" in tables_after_downgrade
+
+            command.upgrade(config, "head")
+            connection.commit()
+            tables_after_reapply = set(inspect(connection).get_table_names())
+            assert {
+                "model_calls",
+                "model_budget_accounts",
+                "model_budget_reservations",
+            } <= tables_after_reapply
+    finally:
+        engine.dispose()

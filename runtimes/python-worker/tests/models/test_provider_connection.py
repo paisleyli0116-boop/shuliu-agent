@@ -353,12 +353,12 @@ def test_connection_test_budget_limits_repeated_canaries_per_runtime_process():
 
     budget = _ConnectionTestBudget(max_probes=2)
 
-    assert budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-1")
-    assert not budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-concurrent")
-    budget.release("org-a", "budget-a", "provider-a", "trace-1")
-    assert budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-2")
-    budget.settle("org-a", "budget-a", {"total_tokens": 2}, 0.001)
-    assert not budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-3")
+    assert budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-1", call_id="call-1")
+    assert not budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-concurrent", call_id="call-concurrent")
+    budget.release("org-a", "budget-a", "call-1")
+    assert budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-2", call_id="call-2")
+    budget.settle("org-a", "budget-a", "call-2", {"total_tokens": 2}, 0.001)
+    assert not budget.reserve("org-a", "budget-a", "provider-a", "fast_chat", "trace-3", call_id="call-3")
 
 
 def test_connection_canary_limits_completion_output_tokens():

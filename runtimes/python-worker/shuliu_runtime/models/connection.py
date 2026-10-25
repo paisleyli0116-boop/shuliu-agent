@@ -410,21 +410,25 @@ class _ConnectionTestBudget:
         self._lock = threading.Lock()
         self._active: set[str] = set()
 
-    def reserve(self, organization_id, budget_ref, provider_id, capability, trace_id) -> bool:
+    def reserve(self, organization_id, budget_ref, provider_id, capability, trace_id, *, call_id) -> bool:
         with self._lock:
             if self._active or self._accepted_probes >= self._max_probes:
                 return False
-            self._active.add(trace_id)
+            self._active.add(call_id)
             self._accepted_probes += 1
             return True
 
-    def settle(self, organization_id, budget_ref, usage, cost) -> None:
+    def settle(self, organization_id, budget_ref, call_id, usage, cost) -> None:
         with self._lock:
-            self._active.clear()
+            self._active.discard(call_id)
 
-    def release(self, organization_id, budget_ref, provider_id, trace_id) -> None:
+    def release(self, organization_id, budget_ref, call_id) -> None:
         with self._lock:
-            self._active.discard(trace_id)
+            self._active.discard(call_id)
+
+    def mark_unknown(self, organization_id, budget_ref, call_id) -> None:
+        with self._lock:
+            self._active.discard(call_id)
 
 
 class _ConfiguredProviderHealth:

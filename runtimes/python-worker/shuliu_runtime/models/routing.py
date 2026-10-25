@@ -23,19 +23,24 @@ class ModelBudget(Protocol):
         provider_id: str,
         capability: str,
         trace_id: str,
+        *,
+        call_id: str,
     ) -> bool: ...
 
     def settle(
         self,
         organization_id: str,
         budget_ref: str,
+        call_id: str,
         usage: dict[str, int],
         cost: float | None,
     ) -> None: ...
 
     def release(
-        self, organization_id: str, budget_ref: str, provider_id: str, trace_id: str
+        self, organization_id: str, budget_ref: str, call_id: str
     ) -> None: ...
+
+    def mark_unknown(self, organization_id: str, budget_ref: str, call_id: str) -> None: ...
 
 
 HealthCheck = Callable[[str], bool]
