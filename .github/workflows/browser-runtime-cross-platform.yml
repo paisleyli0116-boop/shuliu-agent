@@ -24,6 +24,9 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     env:
       SHULIU_REQUIRE_REAL_BROWSER: "1"
+      # Hosted Linux/macOS runners lack the Chromium SUID sandbox helper, which
+      # breaks sandboxed headless Chrome startup; opt out explicitly for CI.
+      SHULIU_BROWSER_ALLOW_NO_SANDBOX: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,6 +50,8 @@ jobs:
           uv run --locked --all-packages pytest runtimes/python-worker/tests/browser tests/integration/test_browser_tool_policy.py -q --tb=short --junitxml=browser-tests.xml 2>&1 | tee browser-tests.log
       - name: Save real browser test evidence
         if: always()
+        # Evidence upload only: never fail the job on artifact storage quota.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: browser-runtime-${{ matrix.os }}

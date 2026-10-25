@@ -47,6 +47,10 @@ class BrowserUseBackend:
             Path(env["APPDATA"]).mkdir(parents=True, exist_ok=True)
         env.update(ANONYMIZED_TELEMETRY="false", BROWSER_USE_DISABLE_EXTENSIONS="1",
                    BROWSER_USE_LOGGING_LEVEL="critical", PYTHONIOENCODING="utf-8")
+        # The minimal environment is a whitelist; forward the explicit CI
+        # sandbox opt-in only when the host deliberately set it.
+        if os.environ.get("SHULIU_BROWSER_ALLOW_NO_SANDBOX") == "1":
+            env["SHULIU_BROWSER_ALLOW_NO_SANDBOX"] = "1"
         self.process = _spawn([str(self.python), "-I", str(Path(__file__).with_name("driver.py"))], directory, env)
         try:
             if os.name == "nt":

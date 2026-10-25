@@ -17,6 +17,7 @@ from shuliu_runtime.skills.sandbox import SandboxPolicy, UnavailableSandboxProvi
 from tests.fakes.fake_skill_sandbox import TestOnlyProcessProvider
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows runner only")
 def test_windows_job_cleanup_waits_for_late_job_members(monkeypatch: pytest.MonkeyPatch):
     job_handle = 101
     captured_process_handle = 202
@@ -112,6 +113,7 @@ def test_windows_job_cleanup_waits_for_late_job_members(monkeypatch: pytest.Monk
     assert calls[-1] == ("close", late_process_handle, None)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows runner only")
 def test_windows_job_cleanup_rescans_member_created_during_termination_call(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -197,6 +199,7 @@ def test_windows_job_cleanup_rescans_member_created_during_termination_call(
     assert calls[-1] == ("close", late_process_handle, None)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows runner only")
 def test_windows_empty_job_cleanup_returns_without_waiting_for_job_signal(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -235,6 +238,7 @@ def test_windows_empty_job_cleanup_returns_without_waiting_for_job_signal(
     assert calls == []
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows runner only")
 def test_windows_job_cleanup_timeout_does_not_report_live_member_as_terminated(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -285,6 +289,7 @@ def test_windows_job_cleanup_timeout_does_not_report_live_member_as_terminated(
     assert all(timeout is not None and timeout < 0xFFFFFFFF for _, _, timeout in calls)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows runner only")
 def test_windows_job_cleanup_does_not_trust_empty_membership_before_job_signals(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -355,6 +360,7 @@ def test_windows_job_cleanup_does_not_trust_empty_membership_before_job_signals(
     assert state["process_ids"] == []
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows runner only")
 def test_windows_job_termination_failure_does_not_wait_forever(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -401,6 +407,7 @@ def test_windows_job_termination_failure_does_not_wait_forever(
     assert calls[-1] == ("close", captured_process_handle, None)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows runner only")
 def test_windows_job_termination_failure_with_disappearing_pid_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ):

@@ -58,6 +58,39 @@ PREFLIGHT = """(expected, operation) => {
 }"""
 
 
+_LAUNCH_ARGS = [
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-networking",
+    "--disable-extensions",
+    "--disable-component-update",
+    "--disable-sync",
+    "--no-pings",
+]
+
+
+def launch_options() -> dict:
+    """Chrome launch kwargs for browser-use's Browser constructor.
+
+    The Chromium sandbox stays ON by default. Hosted CI runners (Linux
+    containers, macOS images) often lack the Chromium SUID sandbox helper,
+    where a sandboxed headless Chrome fails to start or hangs; CI may set
+    SHULIU_BROWSER_ALLOW_NO_SANDBOX=1 to opt out explicitly. That flag is a
+    per-environment deployment choice — it is never enabled by default and the
+    CDP-level navigation guards in this driver do not depend on the Chromium
+    sandbox.
+    """
+    options: dict = {"chromium_sandbox": True, "args": list(_LAUNCH_ARGS)}
+    if os.environ.get("SHULIU_BROWSER_ALLOW_NO_SANDBOX") == "1":
+        options["chromium_sandbox"] = False
+        options["args"] = options["args"] + [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+        ]
+    return options
+
+
 class Driver:
     def __init__(self):
         self.browser = self.page = None
@@ -83,9 +116,8 @@ class Driver:
             self.browser = Browser(headless=True, executable_path=payload["executable_path"],
                 user_data_dir=payload["profile"], downloads_path=str(Path(payload["profile"]) / "downloads"),
                 use_cloud=False, enable_default_extensions=False, accept_downloads=False,
-                chromium_sandbox=True, disable_security=False, keep_alive=False,
-                ignore_default_args=True, args=["--no-first-run", "--no-default-browser-check", "--disable-background-networking",
-                    "--disable-extensions", "--disable-component-update", "--disable-sync", "--no-pings"])
+                disable_security=False, keep_alive=False,
+                ignore_default_args=True, **launch_options())
             self.report_progress("start_browser")
             await self.browser.start()
             self.report_progress("create_page")

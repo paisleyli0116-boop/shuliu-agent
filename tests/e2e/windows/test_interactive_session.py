@@ -10,6 +10,14 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
+# The skipif pytestmark below only applies to test items; module-level imports
+# still run at collection time on non-Windows runners and would crash the whole
+# pytest invocation (win32gui/win32process do not exist there). Skip the module
+# before those imports so non-Windows runners can collect the rest of the suite.
+if os.name != "nt":
+    pytest.skip("Windows Interactive User Session only", allow_module_level=True)
+
 import win32gui
 import win32process
 
