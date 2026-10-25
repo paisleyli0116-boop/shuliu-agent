@@ -134,3 +134,14 @@ Fixes for every failure class found in the exact-SHA verification, none of which
 3. **Browser startup/hang on hosted runners**: `driver.py` gained `launch_options()` — Chromium sandbox stays ON by default; setting `SHULIU_BROWSER_ALLOW_NO_SANDBOX=1` (explicit per-environment opt-in) disables it and adds `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage` for runners without the SUID helper. `backend.py` forwards the flag through the whitelisted driver environment only when the host set it. The browser workflow sets it for the hosted-runner matrix and its evidence upload is now `continue-on-error` (artifact quota). TDD: 3 focused tests (RED→GREEN) in `tests/browser/test_driver_launch_options.py`; full local browser suite 64 passed on Windows (sandboxed path unchanged).
 
 Local verification: skills 55 passed/2 skipped; repository-layout contract 35 passed; browser 64 passed.
+
+## 2026-10-25 — Task 29 accepted (PASSED)
+
+All plan acceptance criteria are met on exact SHAs:
+
+- **Real PostgreSQL 17 and 18 evidence**: `PostgreSQL migration (PG 17)` and `(PG 18)` CI jobs executed the Task 29 migration and integration tests against real PostgreSQL services and passed (runs `40170136452` @ `63e397f`, `40170959775` @ `749bb35`, both success).
+- **Exact-SHA CI review**: `749bb35` (contains Task 29 implementation `04922fa` plus the platform-guard fixes) — Generic CI **success** (4/4 jobs) and Windows Validation **success** (full build/install/sign/upgrade/rollback chain).
+- **Local suites**: Model Gateway/Provider 108, persistent subset 9, migration 17 passed/1 skipped (local skip by design), repository-layout contract 35, browser 64, typecheck/build passed.
+- **Out of Task 29 scope, tracked separately**: the browser cross-platform *diagnostics* workflow (Task 24's smoke on hosted ubuntu/macos runners) still fails on those runners; `7431dfd` adds raw driver-stderr capture into run logs for the next diagnosis pass. Its CI execution is pending a GitHub Actions infrastructure incident (jobs failed with zero steps executed; retries scheduled). This workflow is not a Task 29 acceptance gate.
+
+**Conclusion: Task 29 PASSED. Task 30 may start.**
