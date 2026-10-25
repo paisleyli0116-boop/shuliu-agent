@@ -37,6 +37,9 @@ jobs:
         run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/computer tests/e2e/windows -q -rs --junitxml=computer-tests.xml
       - name: Save Windows Computer Runtime test report
         if: always()
+        # Evidence upload only: never block the validation chain on artifact
+        # storage quota (GitHub recalculates usage every 6-12 hours).
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: computer-runtime-windows
@@ -50,6 +53,7 @@ jobs:
         run: uv run --locked --all-packages pytest runtimes/python-worker/tests/browser tests/integration/test_browser_tool_policy.py -q --junitxml=browser-tests.xml
       - name: Save real browser test evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: browser-tests-windows
@@ -151,6 +155,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload Task 26 installers, reports, logs, and signed update evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: task26-windows-installers-and-evidence
