@@ -40,7 +40,12 @@ describe("SidecarSupervisor health diagnostics", () => {
     }
   });
 
-  it("classifies a Windows NTSTATUS-style Sidecar crash without guessing request delivery", async () => {
+  // Node clamps exit codes differently per platform; the NTSTATUS crash
+  // classification only exists on Windows, where real Sidecar crashes carry
+  // NTSTATUS codes (e.g. 0xC0000005). Linux/macOS cannot reproduce it.
+  it.runIf(process.platform === "win32")(
+    "classifies a Windows NTSTATUS-style Sidecar crash without guessing request delivery",
+    async () => {
     const child = [
       'const readline = require("node:readline");',
       'const input = readline.createInterface({ input: process.stdin });',
@@ -76,7 +81,8 @@ describe("SidecarSupervisor health diagnostics", () => {
     } finally {
       await sidecar.close();
     }
-  });
+    },
+  );
 
   it("ignores unrecognized Sidecar log content rather than retaining it", async () => {
     const sidecar = new SidecarSupervisor({

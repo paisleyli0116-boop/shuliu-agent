@@ -27,6 +27,9 @@ jobs:
       # Hosted Linux/macOS runners lack the Chromium SUID sandbox helper, which
       # breaks sandboxed headless Chrome startup; opt out explicitly for CI.
       SHULIU_BROWSER_ALLOW_NO_SANDBOX: "1"
+      # Diagnostics-only: capture raw driver stderr (normally discarded) so
+      # Chrome startup failures on hosted runners can be diagnosed.
+      SHULIU_BROWSER_DEBUG_STDERR_FILE: ${{ github.workspace }}/driver-stderr-${{ matrix.os }}.log
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,4 +63,5 @@ jobs:
             browser-smoke.xml
             browser-tests.log
             browser-tests.xml
+            driver-stderr-${{ matrix.os }}.log
           if-no-files-found: warn

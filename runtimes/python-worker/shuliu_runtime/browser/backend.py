@@ -31,6 +31,7 @@ class BrowserUseBackend:
         self.threads = []
         self.last_diagnostic = None
         self.last_progress = None
+        self.stderr_debug_file = None
 
     def _start(self, profile):
         if not self.python.is_file():
@@ -52,13 +53,25 @@ class BrowserUseBackend:
         if os.environ.get("SHULIU_BROWSER_ALLOW_NO_SANDBOX") == "1":
             env["SHULIU_BROWSER_ALLOW_NO_SANDBOX"] = "1"
         self.process = _spawn([str(self.python), "-I", str(Path(__file__).with_name("driver.py"))], directory, env)
+        # Diagnostics-only: when the host explicitly opts in, tee driver stderr
+        # to a local file so Chrome startup failures on hosted runners can be
+        # diagnosed. The default path still discards stderr entirely.
+        self.stderr_debug_file = None
+        debug_stderr_file = os.environ.get("SHULIU_BROWSER_DEBUG_STDERR_FILE")
+        stderr_target = (_drain_stderr, (self.process.stderr,))
+        if debug_stderr_file:
+            self.stderr_debug_file = open(debug_stderr_file, "ab")
+            stderr_target = (
+                _capture_stderr_to_sink,
+                (self.process.stderr, self.stderr_debug_file.write),
+            )
         try:
             if os.name == "nt":
                 self.job = _attach_windows_job(self.process)
                 _resume_windows_process(self.process.pid)
             for target, args in (
                 (_read_stdout, (self.process.stdout, self.responses, self.stop)),
-                (_drain_stderr, (self.process.stderr,)),
+                stderr_target,
                 (_write_stdin, (self.process.stdin.fileno(), self.writes, self.errors)),
             ):
                 thread = threading.Thread(target=target, args=args, daemon=True)
@@ -158,6 +171,21 @@ class BrowserUseBackend:
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
                 stream.close()
+        if self.stderr_debug_file is not None:
+            self.stderr_debug_file.close()
+            self.stderr_debug_file = None
+
+
+def _capture_stderr_to_sink(stream, write) -> None:
+    """Drain driver stderr into a diagnostics sink, tolerating a dead stream."""
+    try:
+        while True:
+            chunk = stream.read(4096)
+            if not chunk:
+                return
+            write(chunk)
+    except (OSError, ValueError):
+        return
 
 
 def _stop_windows_job(handle):
