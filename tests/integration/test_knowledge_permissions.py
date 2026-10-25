@@ -15,18 +15,32 @@ from app.knowledge.ingest import (
     ingest_document,
     replace_document_permissions,
 )
+from app.knowledge.embedding import EmbeddingProfile
 from app.knowledge.retrieval import KnowledgeAuthorizationContext, KnowledgeRetriever
 from app.persistence.postgres import create_postgres_engine
 
 
-class FakeGateway:
+class FakeEmbedding:
     def __init__(self, vectors: dict[str, list[float]]) -> None:
         self.vectors = vectors
+        self.profile = EmbeddingProfile(
+            "test-embedding-v1",
+            "fake-embedding",
+            "fake/embed-v1",
+            2,
+            frozenset({"INTERNAL"}),
+            1,
+        )
         self.requests: list[dict[str, object]] = []
 
-    def complete(self, request):
-        self.requests.append(dict(request))
-        return type("Result", (), {"output": [self.vectors[str(request["input"])]]})()
+    def embed(self, texts, **context):
+        request = {
+            "capability": "embedding",
+            "input": list(texts),
+            **context,
+        }
+        self.requests.append(request)
+        return tuple(tuple(self.vectors[text]) for text in texts)
 
 
 class RecordingInvalidator:
@@ -57,7 +71,7 @@ def test_unauthorized_nearest_chunk_is_filtered_before_vector_search_and_revocat
     organization_id = f"org-knowledge-{uuid4()}"
     authorized_id = f"doc-authorized-{uuid4()}"
     restricted_id = f"doc-restricted-{uuid4()}"
-    gateway = FakeGateway({"query": [0.0, 0.0], "authorized": [1.0, 0.0], "restricted": [0.0, 0.0]})
+    gateway = FakeEmbedding({"query": [0.0, 0.0], "authorized": [1.0, 0.0], "restricted": [0.0, 0.0]})
     invalidator = RecordingInvalidator()
     config = Config("services/cloud-api/alembic.ini")
     try:
@@ -95,6 +109,27 @@ def test_unauthorized_nearest_chunk_is_filtered_before_vector_search_and_revocat
         assert all(request["capability"] == "embedding" for request in gateway.requests)
         assert all(request["budget_ref"] == f"budget://{organization_id}/knowledge" for request in gateway.requests)
         assert all(request["privacy"] == "INTERNAL" for request in gateway.requests)
+        with engine.connect() as connection:
+            profile_row = connection.execute(
+                text(
+                    "SELECT embedding_profile_id, embedding_provider_id, embedding_model, "
+                    "embedding_dimensions, embedding_index_version FROM knowledge_chunks "
+                    "WHERE organization_id = :organization_id AND document_id = :document_id"
+                ),
+                {"organization_id": organization_id, "document_id": authorized_id},
+            ).one()
+        assert tuple(profile_row) == (
+            "test-embedding-v1", "fake-embedding", "fake/embed-v1", 2, 1
+        )
+
+        alternate_profile = FakeEmbedding(gateway.vectors)
+        alternate_profile.profile = EmbeddingProfile(
+            "test-embedding-v2", "fake-embedding", "fake/embed-v2", 2,
+            frozenset({"INTERNAL"}), 2,
+        )
+        assert KnowledgeRetriever(engine, alternate_profile).retrieve(
+            "query", _context(organization_id), 5
+        ) == []
 
         replace_document_permissions(engine, organization_id, authorized_id, ("knowledge.private",), invalidator)
         assert retriever.retrieve("query", _context(organization_id), 5) == []

@@ -324,6 +324,11 @@ knowledge_chunks = Table(
     Column("content", Text, nullable=False),
     Column("source_reference", JSON, nullable=False),
     Column("embedding", VectorType(), nullable=False),
+    Column("embedding_profile_id", String(128)),
+    Column("embedding_provider_id", String(128)),
+    Column("embedding_model", String(256)),
+    Column("embedding_dimensions", Integer),
+    Column("embedding_index_version", Integer),
     ForeignKeyConstraint(
         ["organization_id", "document_id"],
         ["knowledge_documents.organization_id", "knowledge_documents.document_id"],
@@ -332,6 +337,16 @@ knowledge_chunks = Table(
     ),
     UniqueConstraint(
         "organization_id", "document_id", "chunk_index", name="uq_knowledge_chunks_order"
+    ),
+    CheckConstraint(
+        "(embedding_profile_id IS NULL AND embedding_provider_id IS NULL "
+        "AND embedding_model IS NULL AND embedding_dimensions IS NULL "
+        "AND embedding_index_version IS NULL) OR "
+        "(embedding_profile_id IS NOT NULL AND embedding_provider_id IS NOT NULL "
+        "AND embedding_model IS NOT NULL AND embedding_dimensions IS NOT NULL "
+        "AND embedding_dimensions > 0 AND embedding_index_version IS NOT NULL "
+        "AND embedding_index_version > 0)",
+        name="ck_knowledge_chunks_embedding_profile_complete",
     ),
 )
 
@@ -347,6 +362,22 @@ knowledge_document_acl = Table(
         name="fk_knowledge_document_acl_org_document",
         ondelete="CASCADE",
     ),
+)
+
+knowledge_embedding_profiles = Table(
+    "knowledge_embedding_profiles",
+    metadata,
+    Column("organization_id", String(128), primary_key=True),
+    Column("profile_id", String(128), primary_key=True),
+    Column("index_version", Integer, primary_key=True),
+    Column("provider_id", String(128), nullable=False),
+    Column("model", String(256), nullable=False),
+    Column("dimensions", Integer, nullable=False),
+    Column("state", String(24), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("dimensions > 0", name="ck_knowledge_embedding_profiles_dimensions_positive"),
+    CheckConstraint("index_version > 0", name="ck_knowledge_embedding_profiles_version_positive"),
+    CheckConstraint("state IN ('BUILDING', 'READY')", name="ck_knowledge_embedding_profiles_state"),
 )
 
 schedules = Table(
@@ -481,6 +512,17 @@ Index(
     "ix_knowledge_chunks_org_document",
     knowledge_chunks.c.organization_id,
     knowledge_chunks.c.document_id,
+)
+Index(
+    "ix_knowledge_chunks_embedding_profile",
+    knowledge_chunks.c.organization_id,
+    knowledge_chunks.c.embedding_profile_id,
+    knowledge_chunks.c.embedding_index_version,
+)
+Index(
+    "ix_knowledge_embedding_profiles_state",
+    knowledge_embedding_profiles.c.organization_id,
+    knowledge_embedding_profiles.c.state,
 )
 Index(
     "ix_knowledge_document_acl_permission",

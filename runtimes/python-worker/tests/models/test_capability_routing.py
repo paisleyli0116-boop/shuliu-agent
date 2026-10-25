@@ -106,6 +106,86 @@ def test_gateway_uses_configured_priority_and_records_resolved_route() -> None:
     assert records.records[0].resolved_provider == "primary"
 
 
+def test_complete_for_provider_rejects_mismatched_embedding_model_before_budget_or_provider() -> None:
+    provider = ModelProviderConfig(
+        "embed-provider", "embed-model-v1", frozenset({"embedding"}), 1, False
+    )
+    fake = FakeModel()
+    budget = MemoryBudget()
+    gateway = ModelGateway(
+        providers=(provider,),
+        adapter=fake,
+        policy=_policy("embed-provider"),
+        budget=budget,
+        health=MemoryHealth(("embed-provider",)),
+        model_calls=MemoryModelCalls(),
+    )
+
+    with pytest.raises(ModelGatewayError) as error:
+        gateway.complete_for_provider(
+            "embed-provider",
+            _request(capability="embedding", input=["text"]),
+            model="other-embedding-model",
+        )
+
+    assert error.value.code == "MODEL_ROUTE_MISMATCH"
+    assert fake.calls == []
+    assert budget.reservations == []
+
+
+def test_complete_for_provider_pins_embedding_route_and_records_gateway_usage() -> None:
+    provider = ModelProviderConfig(
+        "embed-provider", "embed-model-v1", frozenset({"embedding"}), 1, False
+    )
+    fake = FakeModel(
+        responses={
+            "embed-provider": FakeModelResult(
+                output=[[0.1, 0.2]], usage={"total_tokens": 4}, cost=0.001
+            )
+        }
+    )
+    records = MemoryModelCalls()
+    budget = MemoryBudget()
+    policy = PolicyEngine(
+        [
+            PolicyRule(
+                rule_id="allow-embedding",
+                action="model.invoke.embedding.embed-provider",
+                risk="LOW",
+                decision="ALLOW",
+                organization_id="org-a",
+                permission="foundation.model.invoke",
+                resource_type="model_provider",
+                classification="INTERNAL",
+                privacy="INTERNAL",
+            )
+        ],
+        policy_version="policy-v1",
+    )
+    gateway = ModelGateway(
+        providers=(provider,),
+        adapter=fake,
+        policy=policy,
+        budget=budget,
+        health=MemoryHealth(("embed-provider",)),
+        model_calls=records,
+        fallback_enabled=True,
+    )
+
+    result = gateway.complete_for_provider(
+        "embed-provider",
+        _request(capability="embedding", input=["one"]),
+        model="embed-model-v1",
+    )
+
+    assert result.output == [[0.1, 0.2]]
+    assert result.resolved_provider == "embed-provider"
+    assert result.resolved_model == "embed-model-v1"
+    assert [call.provider_id for call in fake.calls] == ["embed-provider"]
+    assert records.records[0].requested_capability == "embedding"
+    assert len(budget.settlements) == 1
+
+
 def test_unknown_or_unsupported_capability_fails_closed_without_provider_call() -> None:
     fake = FakeModel()
     gateway = _gateway((_provider("primary", priority=1, capabilities=("vision",)),), fake)

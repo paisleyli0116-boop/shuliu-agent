@@ -261,19 +261,34 @@ class ModelGateway:
         return self._complete(request)
 
     def complete_for_provider(
-        self, provider_id: str, request: ModelRequest | Mapping[str, object]
+        self,
+        provider_id: str,
+        request: ModelRequest | Mapping[str, object],
+        *,
+        model: str | None = None,
     ) -> ModelResult:
         if not _non_empty(provider_id):
             raise ModelGatewayError("MODEL_PROVIDER_NOT_CONFIGURED", "model provider is not configured")
-        if not any(provider.provider_id == provider_id for provider in self._providers):
+        provider_configs = tuple(
+            provider for provider in self._providers if provider.provider_id == provider_id
+        )
+        if not provider_configs:
             raise ModelGatewayError("MODEL_PROVIDER_NOT_CONFIGURED", "model provider is not configured")
-        return self._complete(request, only_provider=provider_id)
+        if model is not None and (
+            not _non_empty(model)
+            or all(provider.model != model for provider in provider_configs)
+        ):
+            raise ModelGatewayError(
+                "MODEL_ROUTE_MISMATCH", "configured model does not match the requested profile"
+            )
+        return self._complete(request, only_provider=provider_id, only_model=model)
 
     def _complete(
         self,
         request: ModelRequest | Mapping[str, object],
         *,
         only_provider: str | None = None,
+        only_model: str | None = None,
     ) -> ModelResult:
         parsed = ModelRequest.parse(request)
         capability = parse_capability(parsed.capability)
@@ -282,6 +297,7 @@ class ModelGateway:
             for provider in self._providers
             if capability.value in provider.capabilities
             and (only_provider is None or provider.provider_id == only_provider)
+            and (only_model is None or provider.model == only_model)
         )
         if not matching:
             raise ModelGatewayError(

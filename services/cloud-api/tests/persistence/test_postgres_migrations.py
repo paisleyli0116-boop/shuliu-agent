@@ -46,6 +46,7 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "knowledge_documents",
                 "knowledge_chunks",
                 "knowledge_document_acl",
+                "knowledge_embedding_profiles",
                 "schema_migrations",
                 "users",
                 "organization_memberships",
@@ -71,6 +72,7 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "knowledge_documents",
                 "knowledge_chunks",
                 "knowledge_document_acl",
+                "knowledge_embedding_profiles",
                 "organization_memberships",
                 "roles",
                 "membership_roles",
@@ -356,5 +358,114 @@ def test_task29_model_usage_migration_downgrades_and_reapplies_cleanly():
                 "model_budget_accounts",
                 "model_budget_reservations",
             } <= tables_after_reapply
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.migration
+def test_task30_knowledge_embedding_profile_migration_is_additive_and_profile_scoped():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            upgrade_to_head(connection)
+            inspector = inspect(connection)
+            chunk_columns = {
+                column["name"]: column
+                for column in inspector.get_columns("knowledge_chunks")
+            }
+            assert {
+                "embedding",
+                "embedding_profile_id",
+                "embedding_provider_id",
+                "embedding_model",
+                "embedding_dimensions",
+                "embedding_index_version",
+            } <= set(chunk_columns)
+            assert all(
+                chunk_columns[name]["nullable"]
+                for name in (
+                    "embedding_profile_id",
+                    "embedding_provider_id",
+                    "embedding_model",
+                    "embedding_dimensions",
+                    "embedding_index_version",
+                )
+            )
+            assert "ix_knowledge_chunks_embedding_profile" in {
+                index["name"] for index in inspector.get_indexes("knowledge_chunks")
+            }
+            checks = inspector.get_check_constraints("knowledge_chunks")
+            assert any(
+                check["name"] == "ck_knowledge_chunks_embedding_profile_complete"
+                for check in checks
+            )
+            profile_table_columns = {
+                column["name"]
+                for column in inspector.get_columns("knowledge_embedding_profiles")
+            }
+            assert {
+                "organization_id", "profile_id", "index_version", "provider_id",
+                "model", "dimensions", "state", "updated_at",
+            } <= profile_table_columns
+            profile_checks = inspector.get_check_constraints("knowledge_embedding_profiles")
+            assert any(
+                check["name"] == "ck_knowledge_embedding_profiles_state"
+                for check in profile_checks
+            )
+
+        with engine.connect() as connection:
+            config = Config(str(SERVICE_ROOT / "alembic.ini"))
+            config.attributes["connection"] = connection
+            command.downgrade(config, "0008_model_usage_budget")
+            connection.commit()
+            chunk_columns = {
+                column["name"] for column in inspect(connection).get_columns("knowledge_chunks")
+            }
+            assert "embedding" in chunk_columns
+            assert "embedding_profile_id" not in chunk_columns
+            assert "knowledge_embedding_profiles" not in inspect(connection).get_table_names()
+
+            command.upgrade(config, "head")
+            connection.commit()
+            chunk_columns = {
+                column["name"] for column in inspect(connection).get_columns("knowledge_chunks")
+            }
+            assert {"embedding", "embedding_profile_id", "embedding_dimensions"} <= chunk_columns
+            assert "knowledge_embedding_profiles" in inspect(connection).get_table_names()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.migration
+@pytest.mark.parametrize(("dimensions", "index_version"), [(None, 1), (3, None)])
+def test_task30_embedding_profile_check_rejects_partial_metadata(dimensions, index_version):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            upgrade_to_head(connection)
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge_documents "
+                    "(document_id, organization_id, scope, classification, metadata, created_at) "
+                    "VALUES ('doc-partial-profile', 'org-partial-profile', 'team:test', 'PUBLIC', '{}', CURRENT_TIMESTAMP)"
+                )
+            )
+
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO knowledge_chunks "
+                        "(chunk_id, organization_id, document_id, chunk_index, content, source_reference, embedding, "
+                        "embedding_profile_id, embedding_provider_id, embedding_model, embedding_dimensions, embedding_index_version) "
+                        "VALUES (:chunk_id, 'org-partial-profile', 'doc-partial-profile', 0, 'public', '{}', '[1,0]', "
+                        "'profile', 'provider', 'model', :dimensions, :index_version)"
+                    ),
+                    {
+                        "chunk_id": f"chunk-partial-profile-{dimensions}-{index_version}",
+                        "dimensions": dimensions,
+                        "index_version": index_version,
+                    },
+                )
     finally:
         engine.dispose()

@@ -16,6 +16,7 @@ from app.knowledge.ingest import (
     ingest_document,
     replace_document_permissions,
 )
+from app.knowledge.embedding import EmbeddingProfile
 from app.knowledge.retrieval import KnowledgeAuthorizationContext, KnowledgeRetriever
 from app.persistence.postgres import create_postgres_engine
 
@@ -23,13 +24,21 @@ from app.persistence.postgres import create_postgres_engine
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
 
-class FakeGateway:
+class FakeEmbedding:
     def __init__(self) -> None:
+        self.profile = EmbeddingProfile(
+            "test-embedding-v1",
+            "fake-embedding",
+            "fake/embed-v1",
+            2,
+            frozenset({"INTERNAL"}),
+            1,
+        )
         self.requests: list[dict[str, object]] = []
 
-    def complete(self, request):
-        self.requests.append(dict(request))
-        return type("Result", (), {"output": [[0.25, 0.75]]})()
+    def embed(self, texts, **context):
+        self.requests.append({"capability": "embedding", "input": list(texts), **context})
+        return tuple((0.25, 0.75) for _ in texts)
 
 
 class RecordingInvalidator:
@@ -59,7 +68,7 @@ def _document(organization_id: str, document_id: str) -> KnowledgeDocumentInput:
 
 def test_knowledge_storage_rejects_local_sqlite_vector_index() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
-    gateway = FakeGateway()
+    gateway = FakeEmbedding()
     invalidator = RecordingInvalidator()
     try:
         with pytest.raises(ValueError, match="Cloud PostgreSQL"):
@@ -80,7 +89,7 @@ def test_acl_revocation_and_document_delete_invalidate_cached_evidence() -> None
     engine = create_postgres_engine(database_url)
     organization_id = f"org-revoke-{uuid4()}"
     document_id = f"doc-revoke-{uuid4()}"
-    gateway = FakeGateway()
+    gateway = FakeEmbedding()
     invalidator = RecordingInvalidator()
     config = Config(str(SERVICE_ROOT / "alembic.ini"))
     try:
