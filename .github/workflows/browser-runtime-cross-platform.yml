@@ -51,6 +51,17 @@ jobs:
         run: |
           set -o pipefail
           uv run --locked --all-packages pytest runtimes/python-worker/tests/browser tests/integration/test_browser_tool_policy.py -q --tb=short --junitxml=browser-tests.xml 2>&1 | tee browser-tests.log
+      - name: Print driver stderr diagnostics
+        if: always()
+        # CI logs do not consume artifact storage quota, so the raw driver
+        # stderr stays readable even when uploads are quota-blocked.
+        run: |
+          for f in driver-stderr-*.log; do
+            if [ -f "$f" ]; then
+              echo "===== $f ====="
+              tail -c 8000 "$f"
+            fi
+          done
       - name: Save real browser test evidence
         if: always()
         # Evidence upload only: never fail the job on artifact storage quota.
