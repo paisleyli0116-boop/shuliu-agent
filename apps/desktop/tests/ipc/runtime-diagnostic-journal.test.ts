@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { appendProviderConnectionDiagnostic, appendRuntimeDiagnostic } from "../../src/main/runtime/diagnostic-journal";
+import { sanitizeRuntimeDiagnostics } from "../../src/main/runtime/diagnostics";
 
 const directories: string[] = [];
 
@@ -11,6 +12,37 @@ afterEach(async () => {
 });
 
 describe("safe runtime diagnostic journal", () => {
+  it("preserves the recovery waiting state and stage through diagnostic sanitization", () => {
+    expect(sanitizeRuntimeDiagnostics({
+      runtimeState: "waiting",
+      startupStage: "recovery",
+      handshakeStatus: "succeeded",
+      failureStage: "none",
+      exitKind: "process_crash",
+      sidecarExitCode: 17,
+      sidecarSignal: null,
+      safeErrorCode: "RUNTIME_RECOVERY_WAITING",
+      sidecarLogEvent: null,
+      sidecarLogCode: null,
+    })).toMatchObject({
+      runtime_state: "waiting",
+      startup_stage: "recovery",
+      safe_error_code: "RUNTIME_RECOVERY_WAITING",
+    });
+    expect(sanitizeRuntimeDiagnostics({
+      runtimeState: "waiting",
+      startupStage: "recovery",
+      handshakeStatus: "succeeded",
+      failureStage: "none",
+      exitKind: "process_crash",
+      sidecarExitCode: 17,
+      sidecarSignal: null,
+      safeErrorCode: "APPROVAL_PENDING",
+      sidecarLogEvent: null,
+      sidecarLogCode: null,
+    }).safe_error_code).toBe("APPROVAL_PENDING");
+  });
+
   it("persists only allowlisted Sidecar exit and provider request evidence", async () => {
     const directory = await mkdtemp(join(tmpdir(), "shuliu-runtime-journal-"));
     directories.push(directory);

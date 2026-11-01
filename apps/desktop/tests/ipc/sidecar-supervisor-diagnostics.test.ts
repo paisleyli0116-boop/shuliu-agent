@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { RuntimeRecoveryCoordinator } from "../../src/main/runtime/recovery-coordinator";
 import { SidecarSupervisor } from "../../src/main/runtime/supervisor";
 
 describe("SidecarSupervisor health diagnostics", () => {
@@ -133,6 +134,10 @@ describe("SidecarSupervisor health diagnostics", () => {
       args: ["-e", child],
       cwd: process.cwd(),
       maxRestarts: 2,
+      recovery: new RuntimeRecoveryCoordinator(
+        { max_restarts: 2, backoff: [], health_timeout: 2 },
+        async () => ({ status: "RESUME" }),
+      ),
       handshakeTimeoutMs: 2_000,
     });
 

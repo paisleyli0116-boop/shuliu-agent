@@ -1,10 +1,10 @@
-export type RuntimeStartupStage = "not_started" | "sidecar_spawn" | "ipc_handshake" | "ready" | "sidecar_exit";
+export type RuntimeStartupStage = "not_started" | "sidecar_spawn" | "ipc_handshake" | "recovery" | "ready" | "sidecar_exit";
 export type RuntimeHandshakeStatus = "not_started" | "pending" | "succeeded" | "failed";
 export type RuntimeFailureStage = "none" | "sidecar_spawn" | "ipc_handshake" | "sidecar_exit" | "unknown";
 export type RuntimeExitKind = "none" | "controlled" | "normal_exit" | "unhandled_exception" | "process_crash" | "unexpected_exit";
 
 export type RuntimeDiagnostics = {
-  runtimeState: "stopped" | "starting" | "ready" | "restarting" | "safe_mode";
+  runtimeState: "stopped" | "starting" | "ready" | "restarting" | "waiting" | "safe_mode";
   startupStage: RuntimeStartupStage;
   handshakeStatus: RuntimeHandshakeStatus;
   failureStage: RuntimeFailureStage;
@@ -29,8 +29,8 @@ export type SafeRuntimeDiagnostics = {
   sidecar_log_code: string | "UNKNOWN" | null;
 };
 
-const runtimeStates = new Set<RuntimeDiagnostics["runtimeState"]>(["stopped", "starting", "ready", "restarting", "safe_mode"]);
-const startupStages = new Set<RuntimeStartupStage>(["not_started", "sidecar_spawn", "ipc_handshake", "ready", "sidecar_exit"]);
+const runtimeStates = new Set<RuntimeDiagnostics["runtimeState"]>(["stopped", "starting", "ready", "restarting", "waiting", "safe_mode"]);
+const startupStages = new Set<RuntimeStartupStage>(["not_started", "sidecar_spawn", "ipc_handshake", "recovery", "ready", "sidecar_exit"]);
 const handshakeStatuses = new Set<RuntimeHandshakeStatus>(["not_started", "pending", "succeeded", "failed"]);
 const failureStages = new Set<RuntimeFailureStage>(["none", "sidecar_spawn", "ipc_handshake", "sidecar_exit"]);
 const exitKinds = new Set<RuntimeExitKind>(["none", "controlled", "normal_exit", "unhandled_exception", "process_crash", "unexpected_exit"]);
@@ -40,6 +40,15 @@ const processSignals = new Set([
 ]);
 
 const runtimeErrorCodes = new Set([
+  "APPROVAL_PENDING",
+  "APPLIED_RESULT_UNAVAILABLE",
+  "CHECKPOINT_NOT_FOUND",
+  "CHECKPOINT_SCHEMA_INCOMPATIBLE",
+  "CHECKPOINT_STATE_INVALID",
+  "CHECKPOINT_UNAVAILABLE",
+  "EXTERNAL_STATE_INVALID",
+  "EXTERNAL_STATE_UNAVAILABLE",
+  "IDEMPOTENCY_KEY_REQUIRED",
   "DATABASE_SCHEMA_INCOMPATIBLE",
   "IPC_CHANNEL_CLOSED",
   "IPC_DIRECTION_INVALID",
@@ -58,12 +67,29 @@ const runtimeErrorCodes = new Set([
   "IPC_WRITE_FAILED",
   "MODEL_PROVIDER_CONFIGURATION_INVALID",
   "PROTOCOL_VERSION_UNSUPPORTED",
+  "PENDING_ACTION_INVALID",
+  "PROCESS_RECOVERY_FAILED",
+  "RECONCILED_RESULT_INVALID",
+  "RECOVERY_AUDIT_UNAVAILABLE",
+  "RECOVERY_METADATA_INVALID",
+  "RUNTIME_GENERATION_INVALID",
+  "RUNTIME_RECOVERY_CANCELLED",
+  "RUNTIME_RECOVERY_DEAD_LETTER",
+  "RUNTIME_RECOVERY_FAILED",
   "RUNTIME_SAFE_MODE",
+  "RUNTIME_RECOVERY_RESULT_INVALID",
+  "RUNTIME_RECOVERY_REQUIRED",
+  "RUNTIME_RECOVERY_TIMEOUT",
+  "RUNTIME_RECOVERY_WAITING",
   "RUNTIME_UNHANDLED_EXCEPTION",
   "SCHEMA_VALIDATION_FAILED",
+  "SIDE_EFFECT_STATE_UNKNOWN",
   "SIDECAR_EXITED",
   "SIDECAR_IO_FAILED",
   "SIDECAR_SPAWN_FAILED",
+  "WORKER_LEASE_FENCE_UNAVAILABLE",
+  "WORKER_LEASE_FENCE_UNCONFIRMED",
+  "WORKFLOW_CONTEXT_INCOMPATIBLE",
 ]);
 
 export function isSafeRuntimeErrorCode(value: string): boolean {

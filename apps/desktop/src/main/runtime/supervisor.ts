@@ -3,8 +3,9 @@ import type { SpawnOptions } from "node:child_process";
 import { isSafeRuntimeErrorCode, readSafeSidecarLogLine, type RuntimeDiagnostics, type RuntimeExitKind, type SafeRuntimeLog } from "./diagnostics";
 import { NdjsonChannel, RuntimeIpcError } from "./ndjson-channel";
 import { assertRuntimeHandshake } from "./handshake";
+import type { RuntimeRecoveryContext, RuntimeRecoveryCoordinator, RuntimeRecoveryOutcome } from "./recovery-coordinator";
 
-export type RuntimeState = "stopped" | "starting" | "ready" | "restarting" | "safe_mode";
+export type RuntimeState = "stopped" | "starting" | "ready" | "restarting" | "waiting" | "safe_mode";
 
 export type SidecarSupervisorOptions = {
   command: string;
@@ -13,6 +14,7 @@ export type SidecarSupervisorOptions = {
   env?: NodeJS.ProcessEnv;
   handshakeTimeoutMs?: number;
   maxRestarts?: number;
+  recovery?: RuntimeRecoveryCoordinator;
   onLog?: (entry: SafeRuntimeLog) => void;
   onDiagnostic?: (diagnostics: RuntimeDiagnostics) => void;
 };
@@ -48,7 +50,11 @@ export class SidecarSupervisor {
   private startPromise?: Promise<void>;
   private restartPromise?: Promise<void>;
   private restartCount = 0;
+  private generation = 0;
   private intentionalStop = false;
+  private activeRecoveryAbort?: AbortController;
+  private pendingRecoveryContext?: RuntimeRecoveryContext;
+  private pendingRecoveryPromise?: Promise<RuntimeState>;
   private readonly fatalChildren = new WeakSet<ChildProcess>();
   private readonly terminationRequested = new WeakSet<ChildProcess>();
   private stderrBuffer = "";
@@ -126,12 +132,29 @@ export class SidecarSupervisor {
   }
 
   async health(): Promise<{ status: "healthy" | "degraded" | "safe_mode"; [key: string]: unknown }> {
-    if (this.stateValue === "safe_mode") return { status: "safe_mode" };
+    if (this.stateValue === "safe_mode") return { status: "safe_mode", code: this.safeErrorCode ?? "RUNTIME_SAFE_MODE" };
+    if (this.stateValue === "waiting") return { status: "degraded", code: this.safeErrorCode ?? "RUNTIME_RECOVERY_WAITING" };
     return await this.request("runtime.health", {}) as { status: "healthy" | "degraded" | "safe_mode"; [key: string]: unknown };
+  }
+
+  async resumePendingRecovery(): Promise<RuntimeState> {
+    if (this.pendingRecoveryPromise) return this.pendingRecoveryPromise;
+    const child = this.child;
+    const channel = this.channel;
+    const context = this.pendingRecoveryContext;
+    if (this.stateValue !== "waiting" || !child || !channel || !context || !this.options.recovery) {
+      return this.stateValue;
+    }
+    this.pendingRecoveryPromise = this.completeRecovery(child, channel, context).finally(() => {
+      this.pendingRecoveryPromise = undefined;
+    });
+    return this.pendingRecoveryPromise;
   }
 
   async close(): Promise<void> {
     this.intentionalStop = true;
+    this.activeRecoveryAbort?.abort();
+    this.pendingRecoveryContext = undefined;
     const child = this.child;
     this.stateValue = "stopped";
     this.channel?.close(new RuntimeIpcError("IPC_CHANNEL_CLOSED"));
@@ -157,7 +180,8 @@ export class SidecarSupervisor {
     if (this.child === child) this.child = undefined;
   }
 
-  private async launch(): Promise<void> {
+  private async launch(recoveryContext?: RuntimeRecoveryContext): Promise<void> {
+    this.generation = recoveryContext?.current_generation ?? this.generation + 1;
     this.stateValue = this.restartCount === 0 ? "starting" : "restarting";
     this.startupStage = "sidecar_spawn";
     this.handshakeStatus = "not_started";
@@ -214,14 +238,13 @@ export class SidecarSupervisor {
     try {
       this.startupStage = "ipc_handshake";
       this.handshakeStatus = "pending";
-      const timeoutMs = this.options.handshakeTimeoutMs ?? 5_000;
+      const timeoutMs = this.options.handshakeTimeoutMs
+        ?? (this.options.recovery?.policy.health_timeout ?? 5) * 1_000;
       const handshake = await channel.request("runtime.handshake", {}, { timeoutMs });
       assertRuntimeHandshake(handshake);
       if (this.child !== child || this.isSafeMode()) {
         throw new RuntimeIpcError("SIDECAR_EXITED");
       }
-      this.stateValue = "ready";
-      this.startupStage = "ready";
       this.handshakeStatus = "succeeded";
     } catch (error) {
       this.fatalChildren.add(child);
@@ -237,6 +260,16 @@ export class SidecarSupervisor {
       if (!childClosed) await Promise.race([childClosedPromise, delay(2_000)]);
       throw error instanceof RuntimeIpcError ? error : new RuntimeIpcError("IPC_HANDSHAKE_FAILED");
     }
+
+    if (recoveryContext) {
+      const recoveryState = await this.completeRecovery(child, channel, recoveryContext);
+      if (this.intentionalStop || this.child !== child || recoveryState !== "ready") return;
+    }
+    if (this.child !== child || this.isSafeMode()) {
+      throw new RuntimeIpcError("SIDECAR_EXITED");
+    }
+    this.stateValue = "ready";
+    this.startupStage = "ready";
   }
 
   private onStderr(chunk: Buffer | string): void {
@@ -322,20 +355,89 @@ export class SidecarSupervisor {
       this.stateValue = "safe_mode";
       return;
     }
-    if (this.restartCount >= (this.options.maxRestarts ?? 1)) {
+    const maxRestarts = this.options.recovery?.policy.max_restarts ?? this.options.maxRestarts ?? 1;
+    if (this.restartCount >= maxRestarts) {
       this.stateValue = "safe_mode";
       return;
     }
     this.restartCount += 1;
     this.stateValue = "restarting";
-    this.restartPromise = this.launch().catch(() => {
+    const recoveryContext: RuntimeRecoveryContext = {
+      previous_generation: this.generation,
+      current_generation: this.generation + 1,
+      previous_exit_code: outcome?.kind === "exit" ? outcome.code : null,
+      previous_exit_kind: this.exitKind,
+      previous_error_code: this.safeErrorCode,
+    };
+    this.restartPromise = this.restartAfterExit(recoveryContext).catch(() => {
       this.stateValue = "safe_mode";
     }).finally(() => {
       this.restartPromise = undefined;
     });
   }
 
+  private async restartAfterExit(context: RuntimeRecoveryContext): Promise<void> {
+    const delayMs = this.options.recovery?.backoffMilliseconds(this.restartCount) ?? 0;
+    if (delayMs > 0) await delay(delayMs);
+    if (this.intentionalStop || this.stateValue !== "restarting") return;
+    await this.launch(context);
+  }
+
+  private async evaluateRecovery(
+    channel: NdjsonChannel,
+    context: RuntimeRecoveryContext,
+  ): Promise<RuntimeRecoveryOutcome> {
+    if (!this.options.recovery) {
+      return { status: "SAFE_MODE", safeErrorCode: "RUNTIME_RECOVERY_REQUIRED" };
+    }
+    const controller = new AbortController();
+    this.activeRecoveryAbort = controller;
+    try {
+      return await this.options.recovery.recoverAfterRestart(channel, context, controller.signal);
+    } finally {
+      if (this.activeRecoveryAbort === controller) this.activeRecoveryAbort = undefined;
+    }
+  }
+
+  private async completeRecovery(
+    child: ChildProcess,
+    channel: NdjsonChannel,
+    context: RuntimeRecoveryContext,
+  ): Promise<RuntimeState> {
+    this.startupStage = "recovery";
+    const outcome = await this.evaluateRecovery(channel, context);
+    const decision = outcome.status;
+    if (this.intentionalStop || this.child !== child || this.channel !== channel) return this.stateValue;
+    if (decision === "RESUME") {
+      this.pendingRecoveryContext = undefined;
+      this.failureStage = "none";
+      this.safeErrorCode = null;
+      this.startupStage = "ready";
+      this.stateValue = "ready";
+      this.options.onDiagnostic?.({ ...this.diagnostics });
+      return this.stateValue;
+    }
+    if (decision === "WAIT") {
+      this.pendingRecoveryContext = context;
+      this.stateValue = "waiting";
+      this.safeErrorCode = outcome.safeErrorCode ?? "RUNTIME_RECOVERY_WAITING";
+      this.options.onDiagnostic?.({ ...this.diagnostics });
+      return this.stateValue;
+    }
+    this.fatalChildren.add(child);
+    this.stateValue = "safe_mode";
+    const safeErrorCode = outcome.safeErrorCode ?? "RUNTIME_RECOVERY_REQUIRED";
+    this.recordFailure("sidecar_exit", safeErrorCode);
+    this.safeErrorCode = safeErrorCode;
+    this.options.onDiagnostic?.({ ...this.diagnostics });
+    channel.close(new RuntimeIpcError(safeErrorCode));
+    this.terminateChild(child);
+    await Promise.race([new Promise<void>((resolve) => child.once("close", () => resolve())), delay(2_000)]);
+    return this.stateValue;
+  }
+
   private async waitUntilReady(): Promise<void> {
+    if (this.isWaiting()) throw new RuntimeIpcError(this.safeErrorCode ?? "RUNTIME_RECOVERY_WAITING");
     if (this.stateValue === "ready") return;
     if (this.stateValue === "stopped") await this.start();
     const recoveryDeadline = Date.now() + 10_000;
@@ -344,6 +446,7 @@ export class SidecarSupervisor {
     }
     if (this.restartPromise) await this.restartPromise;
     if (this.startPromise) await this.startPromise;
+    if (this.isWaiting()) throw new RuntimeIpcError(this.safeErrorCode ?? "RUNTIME_RECOVERY_WAITING");
     if (!this.isReady()) throw new RuntimeIpcError("RUNTIME_SAFE_MODE");
   }
 
@@ -366,6 +469,10 @@ export class SidecarSupervisor {
 
   private isReady(): boolean {
     return this.stateValue === "ready";
+  }
+
+  private isWaiting(): boolean {
+    return this.stateValue === "waiting";
   }
 
   private recordFailure(stage: Exclude<RuntimeDiagnostics["failureStage"], "none" | "unknown">, code: string): void {

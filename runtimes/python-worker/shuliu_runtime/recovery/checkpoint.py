@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,6 +15,31 @@ from shuliu_runtime.persistence.sqlite import SQLiteDatabase
 
 CHECKPOINT_SCHEMA_VERSION = 1
 _MAX_SEQUENCE = 2**63 - 1
+_SAFE_RECOVERY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_PROCESS_RECOVERY_STATUSES = frozenset({"RESUME", "WAIT", "SAFE_MODE", "DEAD_LETTER"})
+_PROCESS_RECOVERY_ERROR_CODES = frozenset(
+    {
+        "APPLIED_RESULT_UNAVAILABLE",
+        "APPROVAL_PENDING",
+        "CHECKPOINT_NOT_FOUND",
+        "CHECKPOINT_SCHEMA_INCOMPATIBLE",
+        "CHECKPOINT_STATE_INVALID",
+        "CHECKPOINT_UNAVAILABLE",
+        "EXTERNAL_STATE_INVALID",
+        "EXTERNAL_STATE_UNAVAILABLE",
+        "IDEMPOTENCY_KEY_REQUIRED",
+        "PENDING_ACTION_INVALID",
+        "PROCESS_RECOVERY_FAILED",
+        "RECONCILED_RESULT_INVALID",
+        "RECOVERY_AUDIT_UNAVAILABLE",
+        "RECOVERY_METADATA_INVALID",
+        "RUNTIME_GENERATION_INVALID",
+        "SIDE_EFFECT_STATE_UNKNOWN",
+        "WORKER_LEASE_FENCE_UNAVAILABLE",
+        "WORKER_LEASE_FENCE_UNCONFIRMED",
+        "WORKFLOW_CONTEXT_INCOMPATIBLE",
+    }
+)
 
 
 class IncompatibleCheckpointVersion(RuntimeError):
@@ -222,6 +248,84 @@ class CheckpointStore:
                 idempotency_key=f"recovery-decision:{event_id}",
             )
 
+    def record_process_crash(
+        self,
+        checkpoint: Checkpoint,
+        *,
+        previous_generation: int,
+        current_generation: int,
+        status: object,
+        error_code: str | None,
+    ) -> None:
+        """Persist metadata-only process recovery evidence idempotently."""
+        if (
+            isinstance(previous_generation, bool)
+            or not isinstance(previous_generation, int)
+            or previous_generation < 1
+            or isinstance(current_generation, bool)
+            or not isinstance(current_generation, int)
+            or current_generation <= previous_generation
+        ):
+            raise ValueError("runtime generations are invalid")
+        status_value = getattr(status, "value", status)
+        if not isinstance(status_value, str) or status_value not in _PROCESS_RECOVERY_STATUSES:
+            raise ValueError("status is not a process recovery status")
+        for field_name in ("run_id", "organization_id", "trace_id"):
+            field_value = getattr(checkpoint, field_name, None)
+            if not isinstance(field_value, str) or _SAFE_RECOVERY_ID.fullmatch(field_value) is None:
+                raise ValueError(f"{field_name} is invalid for recovery audit")
+        if error_code is not None and (
+            not isinstance(error_code, str)
+            or error_code not in _PROCESS_RECOVERY_ERROR_CODES
+        ):
+            raise ValueError("error_code is invalid")
+        event_key = (
+            f"process-crash-recovery:{checkpoint.run_id}:"
+            f"{previous_generation}:{current_generation}:"
+            f"{status_value}:{error_code or 'NONE'}"
+        )
+        event_id = str(uuid5(NAMESPACE_URL, f"shuliu:{event_key}"))
+        event_payload = {
+            "run_id": checkpoint.run_id,
+            "previous_generation": previous_generation,
+            "current_generation": current_generation,
+            "status": status_value,
+            "error_code": error_code,
+        }
+        with self._database.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT payload_json FROM outbox WHERE event_id = ? OR idempotency_key = ?",
+                (event_id, event_key),
+            ).fetchone()
+            if existing is not None:
+                try:
+                    stored = json.loads(existing["payload_json"])
+                except (TypeError, json.JSONDecodeError) as error:
+                    raise ValueError("stored process crash event is invalid") from error
+                expected = {
+                    "event_id": event_id,
+                    "schema_version": 1,
+                    "organization_id": checkpoint.organization_id,
+                    "trace_id": checkpoint.trace_id,
+                    "event_type": "WORKFLOW_PROCESS_CRASH_RECOVERY",
+                    "payload": event_payload,
+                }
+                if not isinstance(stored, dict) or any(
+                    stored.get(name) != value for name, value in expected.items()
+                ):
+                    raise ValueError("process crash event identity conflicts with stored payload")
+                return
+            event = EventRecord(
+                event_id=event_id,
+                schema_version=1,
+                timestamp=datetime.now(UTC).isoformat(),
+                organization_id=checkpoint.organization_id,
+                trace_id=checkpoint.trace_id,
+                event_type="WORKFLOW_PROCESS_CRASH_RECOVERY",
+                payload=event_payload,
+            )
+            _insert_outbox_event(connection, event, event_key)
 
 def _checkpoint_event(checkpoint: Checkpoint) -> EventRecord:
     event_id = str(
