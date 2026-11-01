@@ -15,7 +15,7 @@ from app.knowledge.ingest import (
     ingest_document,
     replace_document_permissions,
 )
-from app.knowledge.embedding import EmbeddingProfile
+from app.knowledge.embedding import EmbeddingIndexNotReadyError, EmbeddingProfile
 from app.knowledge.retrieval import KnowledgeAuthorizationContext, KnowledgeRetriever
 from app.persistence.postgres import create_postgres_engine
 
@@ -127,9 +127,12 @@ def test_unauthorized_nearest_chunk_is_filtered_before_vector_search_and_revocat
             "test-embedding-v2", "fake-embedding", "fake/embed-v2", 2,
             frozenset({"INTERNAL"}), 2,
         )
-        assert KnowledgeRetriever(engine, alternate_profile).retrieve(
-            "query", _context(organization_id), 5
-        ) == []
+        # An unbuilt profile must fail closed instead of returning an empty hit
+        # list, which would read as "no matching knowledge".
+        with pytest.raises(EmbeddingIndexNotReadyError):
+            KnowledgeRetriever(engine, alternate_profile).retrieve(
+                "query", _context(organization_id), 5
+            )
 
         replace_document_permissions(engine, organization_id, authorized_id, ("knowledge.private",), invalidator)
         assert retriever.retrieve("query", _context(organization_id), 5) == []
