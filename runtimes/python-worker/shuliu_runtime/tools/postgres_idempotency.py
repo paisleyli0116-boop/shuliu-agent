@@ -40,7 +40,9 @@ tool_idempotency = Table(
     Column("idempotency_key", String(256), nullable=False),
     Column("request_digest", String(128), nullable=False),
     Column("status", String(32), nullable=False),
-    Column("result_json", JSON),
+    # none_as_null keeps a Python None as SQL NULL so the completed-result check
+    # constraint can distinguish "no result yet" from a stored JSON null.
+    Column("result_json", JSON(none_as_null=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     CheckConstraint(
