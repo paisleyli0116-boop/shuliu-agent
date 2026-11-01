@@ -170,3 +170,11 @@ PostgreSQL 集成环境补记：精简 pytest 依赖目录最初缺少 `alembic`
 2. 当前代码没有生产 Tool runtime 组合根实例化 `PostgresIdempotencyStore` / `SQLiteIdempotencyStore` 并注入 Browser / Computer Broker。Broker 对缺少 durable store 的必需幂等调用会 fail-closed，因而当前安全状态是副作用 Tool 不可用；生产持久 adapter 接线尚无证据，不能称为已启用。
 
 审查者另行运行了聚焦 SQLite/Broker 集 **62 passed**，且未修改文件。该复审结论不替代真实 PG17/18、Windows IPC、Desktop 安全套件或远端 CI 验收。最新本地回归仍为 **165 passed, 17 skipped**；Vitest contract 选择集 **68 passed**；`pnpm typecheck`、相关 `compileall` 与 `git diff --check` 通过。PostgreSQL 集成 **4 skipped**，原因如上。Task 33 仍为 **BLOCKED**，Task 34 未开始。
+
+## 发布状态更新（2026-11-01）
+
+- Task 33 实现提交：`a519fc5a4e3522d6da3914231a6ce4ce8d00fe89`。
+- Task 34 后续提交：`5af33e49db2072b2a67c74be710cfd609f2abc83`。
+- SSH 只读核验显示 `origin/feat/foundation-v0.1` 指向 `5af33e49db2072b2a67c74be710cfd609f2abc83`；该提交链包含 Task 28 至 Task 33 的代码和证据文档。`main` 未修改。
+- 本次定向复测：PG 集成测试保护用例 4 passed、真实数据库用例 4 skipped；skip 原因是本地没有 PostgreSQL 测试数据库。Task 33 相关此前本地测试记录仍见上文。
+- 对应 GitHub Actions / PostgreSQL 17、18 结果尚未核实，不能视为通过。Task 33 继续 **BLOCKED**。

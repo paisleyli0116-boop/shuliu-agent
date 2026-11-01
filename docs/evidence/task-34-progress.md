@@ -95,3 +95,9 @@ The idempotency key now also includes the validated recovery status and allowlis
 - No external Provider request, commit, push, remote CI, production approval IPC, or production fencing adapter was performed in this follow-up.
 
 Task 34 remains **IN_PROGRESS / acceptance BLOCKED**. The production composition, actual worker fencing and tool-path crash windows, Task 33 PostgreSQL acceptance, platform matrix, and Windows CI blockers listed above remain open. Task 35 has not started.
+
+## 发布状态更新（2026-11-01）
+
+- Task 34 实现提交 `5af33e49db2072b2a67c74be710cfd609f2abc83` 已作为 Task 33 提交 `a519fc5a4e3522d6da3914231a6ce4ce8d00fe89` 的子提交，推送到 `origin/feat/foundation-v0.1`；推送后的远端 SHA 已只读核对为 `5af33e49db2072b2a67c74be710cfd609f2abc83`。
+- 本次 Python recovery 与进程恢复定向测试为 **37 passed**。这是本地 Windows 证据，不是 GitHub CI 结果。
+- GitHub Actions 结果尚未核实。生产 IPC / Workflow 接线、Worker fencing、真实 PostgreSQL 17/18 及 Task 33 前置验收仍阻塞；Task 34 继续 **IN_PROGRESS / acceptance BLOCKED**，Task 35 未开始。
