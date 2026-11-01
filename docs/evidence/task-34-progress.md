@@ -101,3 +101,19 @@ Task 34 remains **IN_PROGRESS / acceptance BLOCKED**. The production composition
 - Task 34 实现提交 `5af33e49db2072b2a67c74be710cfd609f2abc83` 已作为 Task 33 提交 `a519fc5a4e3522d6da3914231a6ce4ce8d00fe89` 的子提交，推送到 `origin/feat/foundation-v0.1`；推送后的远端 SHA 已只读核对为 `5af33e49db2072b2a67c74be710cfd609f2abc83`。
 - 本次 Python recovery 与进程恢复定向测试为 **37 passed**。这是本地 Windows 证据，不是 GitHub CI 结果。
 - GitHub Actions 结果尚未核实。生产 IPC / Workflow 接线、Worker fencing、真实 PostgreSQL 17/18 及 Task 33 前置验收仍阻塞；Task 34 继续 **IN_PROGRESS / acceptance BLOCKED**，Task 35 未开始。
+
+## GitHub CI 验证结果与行为决策（2026-11-01，真实运行）
+
+- 推送 HEAD：`30ad778`（`feat/foundation-v0.1`）。
+- Generic CI run `41310851081`：**success**（PG17 22/22、PG18 22/22、macOS 36/36、Ubuntu 36/36）。
+- Windows Validation run `41310851060`：**success**，35/35 步，其中包含 `Run Desktop UI, IPC, and security unit tests` 与 `Run Browser Runtime and real Windows Chrome integration tests`。
+- 首次真实 CI 运行暴露并已修复的三个缺陷：
+  1. IPC 契约测试在 macOS 上得到 `safe_mode` / `RUNTIME_SAFE_MODE` 而不是 `healthy` / `SIDECAR_EXITED`。原因：`evaluateRecovery` 在**未配置 recovery coordinator**时直接返回 `SAFE_MODE`，使任何一次崩溃都直接进入安全模式（`supervisor.ts`）。已改为无 coordinator 时返回 `RESUME`（提交 `60b0b12`）。
+  2. `runtime-crash-recovery` 测试在 Windows 上得到 `startupStage = sidecar_exit` 而不是 `recovery`。原因：`completeRecovery` 的 SAFE_MODE 分支调用 `terminateChild` 后，子进程退出处理器异步把 stage 改写为 `sidecar_exit`。现在在子进程关闭后重新断言 `recovery`（提交 `54fd9a0`）。
+  3. Browser 真实 Chrome 测试 `test_real_page_navigation_after_click_is_verified` 报 `KeyError: 'observation'`。根因在 Task 33 的 Broker：本意是只为持久化保存脱敏投影，却把投影直接赋给了返回值（`output = safe_output`），丢掉了 `observation`。现在首次执行返回完整输出，仅 durable 记录使用投影（提交 `39c4262`）。
+- **需要 owner 确认的设计决策：** 点位 1 的改动偏离了本文件先前「missing recovery configuration keeps the runtime in Safe Mode」的写法。理由：生产 `apps/desktop/src/main/index.ts` 目前并未实例化 `RuntimeRecoveryCoordinator`，若按原设计，生产应用任何一次 Sidecar 崩溃都会永久停在 Safe Mode，且既有 IPC 契约（崩溃后重启恢复 healthy）无法成立。当前语义为：**未配置 coordinator → 普通重启（无 checkpoint 恢复）；配置 coordinator → 恢复/等待/安全模式按策略执行**。若要恢复「无配置即 Safe Mode」，必须同时把 coordinator 接入生产 main 并更新契约测试。
+- 仍然阻塞 Task 34 验收的项（均未因 CI 转绿而解决）：
+  - Electron Main 仍未实例化 recovery coordinator，Python 恢复 IPC 通道未接入生产；
+  - Worker generation / lease fencing 仍是协议与测试夹具层面的证明，未走真实 Workflow → Tool Broker → repository 路径；
+  - crash-before-checkpoint 与 Tool-dispatched-before-ACK 两个窗口未在生产链路证明；
+  - 无生产安装包恢复与平台矩阵证据。

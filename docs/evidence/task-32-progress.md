@@ -34,3 +34,11 @@ The plan's acceptance commands (`pnpm test:integration`, `pnpm test:security`, P
 - [ ] Real PostgreSQL 17/18 run of `tests/integration/test_knowledge_server_rbac.py` in CI.
 - [ ] `pnpm test:integration` and `pnpm test:security` green runs.
 - [ ] Cross-organization forgery / revocation / Trace-Audit evidence review by the Cloud / Security owner.
+
+## GitHub CI 验证结果（2026-11-01，真实运行）
+
+- 推送 HEAD：`30ad778`（`feat/foundation-v0.1`）。
+- Generic CI run `41310851081`：**success**（PG17 22/22、PG18 22/22、macOS 36/36、Ubuntu 36/36）。其中 `Run Cloud API Knowledge unit tests`（含本任务的 12 个新测试）与 `pnpm test:security` 均为 success。
+- Windows Validation run `41310851060`：**success**，35/35 步。
+- 本任务的 PostgreSQL 集成模块 `tests/integration/test_knowledge_server_rbac.py` 之前只在无数据库的通用 job 中 skip。已将它加入 `PostgreSQL migration` job 的 Knowledge ACL 步骤并标记 `pytest.mark.postgres`，使真实 RBAC / 撤权 / 审计写入在 PG17 与 PG18 上执行。
+- 仍待完成：Cloud / Security owner 对跨组织伪造、撤权与 Trace / Audit 证据的独立审查。

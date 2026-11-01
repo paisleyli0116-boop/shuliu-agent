@@ -21,6 +21,8 @@ from app.knowledge.dependencies import (
 )
 from app.persistence.postgres import create_postgres_engine, events
 
+pytestmark = pytest.mark.postgres
+
 
 def _database_url() -> str:
     database_url = os.environ.get("SHULIU_DATABASE_URL")

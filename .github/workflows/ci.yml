@@ -124,6 +124,6 @@ jobs:
       - name: Run PostgreSQL Knowledge unit and revocation tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
       - name: Run PostgreSQL Knowledge ACL integration tests
-        run: uv run --locked --package shuliu-cloud-api pytest tests/integration/test_knowledge_permissions.py -q
+        run: uv run --locked --package shuliu-cloud-api pytest tests/integration/test_knowledge_permissions.py tests/integration/test_knowledge_server_rbac.py -q
       - name: Run PostgreSQL Worker lease concurrency tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/workers -q -m integration

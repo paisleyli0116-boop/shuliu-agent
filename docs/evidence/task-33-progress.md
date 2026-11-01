@@ -178,3 +178,15 @@ PostgreSQL 集成环境补记：精简 pytest 依赖目录最初缺少 `alembic`
 - SSH 只读核验显示 `origin/feat/foundation-v0.1` 指向 `5af33e49db2072b2a67c74be710cfd609f2abc83`；该提交链包含 Task 28 至 Task 33 的代码和证据文档。`main` 未修改。
 - 本次定向复测：PG 集成测试保护用例 4 passed、真实数据库用例 4 skipped；skip 原因是本地没有 PostgreSQL 测试数据库。Task 33 相关此前本地测试记录仍见上文。
 - 对应 GitHub Actions / PostgreSQL 17、18 结果尚未核实，不能视为通过。Task 33 继续 **BLOCKED**。
+
+## GitHub CI 验证结果（2026-11-01，真实运行）
+
+- 推送 HEAD：`30ad778`（`feat/foundation-v0.1`）。
+- Generic CI run `41310851081`：**success**，4 个 job 全部通过 —— `PostgreSQL migration (PG 17)` 22/22 步、`PostgreSQL migration (PG 18)` 22/22 步、`Generic tests (macos-latest)` 36/36 步、`Generic tests (ubuntu-latest)` 36/36 步。
+- PG17 / PG18 job 内的 `Run durable Tool idempotency restart and concurrency integration tests` 步骤为 **success**，即 `tests/integration/test_postgres_tool_idempotency.py`（重启、并发、仅 CLAIMED 可释放）与 `tests/integration/test_tool_idempotency_crash.py`（ACK 丢失不重放、退出码 23 路径）已在真实 PostgreSQL 17 与 18 上执行并通过。
+- Windows Validation run `41310851060`：**success**，35/35 步。
+- 首次真实 CI 运行暴露并已修复的两个缺陷：
+  1. `ck_tool_idempotency_completed_result` 被违反 —— SQLAlchemy 默认把 Python `None` 绑定成 JSON 字面量 `null` 而不是 SQL `NULL`，导致 `CLAIMED` 行插入失败。`result_json` 列改为 `JSON(none_as_null=True)`（提交 `66e6e62`）。SQLite 等价约束复现确认：SQL `NULL` 通过、JSON `'null'` 触发同一约束错误。
+  2. 通用集成 job 没有数据库却执行 PG-only 测试，按设计抛出 `CI requires a PostgreSQL test database`。两个模块标记 `pytest.mark.postgres`，通用 job 过滤为 `integration and not real_browser and not postgres`；PG 矩阵 job 仍显式执行它们（提交 `30ad778`）。
+- 结论：**Task 33 的真实 PostgreSQL 17/18 验收证据已取得**，不再是「skipped / database unavailable」。
+- 仍然开放（不因 CI 转绿而消失）：生产 Tool runtime 组合根尚未实例化 durable store 并注入 Browser / Computer Broker（复审 Important #2），因此生产环境副作用 Tool 仍为 fail-closed 不可用。该接线属 Task 27 范围。
