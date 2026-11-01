@@ -212,7 +212,129 @@ def test_malformed_provider_response_is_marked_as_response_received():
     assert captured.value.code == "MODEL_PROVIDER_RESPONSE_INVALID"
     assert captured.value.request_status == "http_response_received"
     assert captured.value.failure_stage == "provider_response"
+
+
+def test_dashscope_embedding_uses_openai_compatible_route_dimensions_and_no_retry():
+    calls: list[dict[str, object]] = []
+
+    def embedding(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return {
+            "data": [{"embedding": [0.1] * 1024}],
+            "usage": {"total_tokens": 4},
+            "model": "text-embedding-v3",
+        }
+
+    provider = ModelProviderConfig(
+        provider_id="dashscope",
+        model="text-embedding-v3",
+        capabilities=frozenset({"embedding"}),
+        priority=1,
+        is_local=False,
+        secret_ref="secret://os/providers/dashscope/credential",
+        embedding_api_base="https://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        embedding_dimensions=1024,
+    )
+    request = ModelRequest(
+        capability="embedding",
+        privacy="PUBLIC",
+        budget_ref="budget://org/test",
+        input=["public test fixture"],
+        trace_id="trace-dashscope-test",
+        organization_id="org-test",
+        subject_id="user-test",
+        permissions=("foundation.model.invoke",),
+        dimensions=1024,
+    )
+
+    result = LiteLLMAdapter(embedding=embedding).invoke(provider, request, api_key="fake-secret")
+
+    assert result.output == [[0.1] * 1024]
+    assert calls == [
+        {
+            "model": "openai/text-embedding-v3",
+            "input": ["public test fixture"],
+            "api_key": "fake-secret",
+            "timeout": 60.0,
+            "num_retries": 0,
+            "api_base": provider.embedding_api_base,
+            "dimensions": 1024,
+        }
+    ]
+
+
+def test_dashscope_embedding_dimension_mismatch_fails_before_provider_call():
+    calls: list[dict[str, object]] = []
+    provider = ModelProviderConfig(
+        provider_id="dashscope",
+        model="text-embedding-v3",
+        capabilities=frozenset({"embedding"}),
+        priority=1,
+        is_local=False,
+        secret_ref="secret://os/providers/dashscope/credential",
+        embedding_api_base="https://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        embedding_dimensions=1024,
+    )
+    request = ModelRequest(
+        capability="embedding",
+        privacy="PUBLIC",
+        budget_ref="budget://org/test",
+        input=["public test fixture"],
+        trace_id="trace-dashscope-dimension-mismatch",
+        organization_id="org-test",
+        subject_id="user-test",
+        permissions=("foundation.model.invoke",),
+        dimensions=768,
+    )
+
+    with pytest.raises(ModelProviderError) as captured:
+        LiteLLMAdapter(embedding=lambda **kwargs: calls.append(kwargs)).invoke(
+            provider, request, api_key="fake-secret"
+        )
+
+    assert captured.value.code == "MODEL_REQUEST_INVALID"
+    assert captured.value.request_status == "not_sent"
+    assert captured.value.failure_stage == "preflight"
+    assert calls == []
     assert captured.value.http_status is None
+
+
+def test_dashscope_embedding_rejects_provider_vector_with_wrong_dimensions():
+    provider = ModelProviderConfig(
+        provider_id="dashscope",
+        model="text-embedding-v3",
+        capabilities=frozenset({"embedding"}),
+        priority=1,
+        is_local=False,
+        secret_ref="secret://os/providers/dashscope/credential",
+        embedding_api_base="https://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        embedding_dimensions=1024,
+    )
+    request = ModelRequest(
+        capability="embedding",
+        privacy="PUBLIC",
+        budget_ref="budget://org/test",
+        input=["public test fixture"],
+        trace_id="trace-dashscope-response-dimensions",
+        organization_id="org-test",
+        subject_id="user-test",
+        permissions=("foundation.model.invoke",),
+        dimensions=1024,
+    )
+    adapter = LiteLLMAdapter(
+        embedding=lambda **_: {
+            "data": [{"embedding": [0.1] * 768}],
+            "usage": {"total_tokens": 4},
+            "model": "text-embedding-v3",
+        }
+    )
+
+    with pytest.raises(ModelProviderError) as captured:
+        adapter.invoke(provider, request, api_key="fake-secret")
+
+    assert captured.value.code == "MODEL_PROVIDER_RESPONSE_INVALID"
+    assert captured.value.request_status == "http_response_received"
+    assert captured.value.failure_stage == "provider_response"
 
 
 def test_litellm_log_level_defaults_to_error_for_protocol_channel_safety(monkeypatch):

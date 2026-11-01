@@ -58,6 +58,58 @@ def test_reservations_are_atomic_scoped_and_settlement_is_idempotent():
         engine.dispose()
 
 
+def test_actual_cost_above_reservation_blocks_followup_calls_at_account_limit():
+    engine, budget = _budget_with_schema()
+    try:
+        budget.configure_account(
+            "org-a", "budget://org-a/embedding", currency="USD",
+            limit_amount=Decimal("0.10000000"),
+            reservation_amount=Decimal("0.06000000"),
+        )
+        assert budget.reserve(
+            "org-a", "budget://org-a/embedding", "provider-a", "embedding", "trace-1", call_id="call-1"
+        ) is True
+
+        # The provider's actual charge can be higher than the fixed pre-call reservation.
+        actual = Decimal("0.08000000")
+        budget.settle("org-a", "budget://org-a/embedding", "call-1", {"total_tokens": 5}, actual)
+
+        account = budget.get_account("org-a", "budget://org-a/embedding")
+        assert account.spent_amount == actual
+        assert account.reserved_amount == Decimal("0E-8")
+        assert budget.reserve(
+            "org-a", "budget://org-a/embedding", "provider-a", "embedding", "trace-2", call_id="call-2"
+        ) is False
+    finally:
+        engine.dispose()
+
+
+def test_provider_overage_is_recorded_and_blocks_future_reservations():
+    engine, budget = _budget_with_schema()
+    try:
+        budget.configure_account(
+            "org-a", "budget://org-a/embedding", currency="USD",
+            limit_amount=Decimal("0.10000000"),
+            reservation_amount=Decimal("0.06000000"),
+        )
+        assert budget.reserve(
+            "org-a", "budget://org-a/embedding", "provider-a", "embedding", "trace-1", call_id="call-1"
+        ) is True
+
+        # Settlement must preserve a known provider charge even when it exceeds the cap.
+        actual = Decimal("0.12000000")
+        budget.settle("org-a", "budget://org-a/embedding", "call-1", {"total_tokens": 5}, actual)
+
+        account = budget.get_account("org-a", "budget://org-a/embedding")
+        assert account.spent_amount == actual
+        assert account.reserved_amount == Decimal("0E-8")
+        assert budget.reserve(
+            "org-a", "budget://org-a/embedding", "provider-a", "embedding", "trace-2", call_id="call-2"
+        ) is False
+    finally:
+        engine.dispose()
+
+
 def test_unknown_provider_outcome_keeps_reservation_for_reconciliation():
     engine, budget = _budget_with_schema()
     try:

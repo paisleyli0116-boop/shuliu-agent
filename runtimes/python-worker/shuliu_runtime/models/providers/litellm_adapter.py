@@ -67,20 +67,51 @@ class LiteLLMAdapter:
         api_key: str | None = None,
     ) -> ProviderResult:
         capability = parse_capability(request.capability)
+        is_dashscope_embedding = (
+            capability is ModelCapability.EMBEDDING and provider.provider_id.casefold() == "dashscope"
+        )
+        if is_dashscope_embedding and (
+            provider.embedding_dimensions is None
+            or request.dimensions != provider.embedding_dimensions
+            or provider.embedding_api_base is None
+        ):
+            raise ModelProviderError(
+                "MODEL_REQUEST_INVALID", request_status="not_sent", failure_stage="preflight",
+            )
         if not provider.is_local and not api_key:
             raise ModelProviderError(
                 "MODEL_CREDENTIAL_UNAVAILABLE", request_status="not_sent", failure_stage="secret_resolution",
             )
         try:
             if capability is ModelCapability.EMBEDDING:
-                response = self._embedding_call()(
-                    model=provider.model,
-                    input=request.input,
-                    api_key=api_key,
-                    timeout=self._timeout_seconds,
-                    num_retries=0,
-                )
+                embedding_options: dict[str, object] = {
+                    "model": provider.model,
+                    "input": request.input,
+                    "api_key": api_key,
+                    "timeout": self._timeout_seconds,
+                    "num_retries": 0,
+                }
+                if is_dashscope_embedding:
+                    embedding_options.update(
+                        {
+                            "model": f"openai/{provider.model}",
+                            "api_base": provider.embedding_api_base,
+                            "dimensions": request.dimensions,
+                        }
+                    )
+                response = self._embedding_call()(**embedding_options)
                 output = _embedding_output(response)
+                if is_dashscope_embedding and any(
+                    not isinstance(vector, Sequence)
+                    or isinstance(vector, (str, bytes, bytearray))
+                    or len(vector) != provider.embedding_dimensions
+                    for vector in output
+                ):
+                    raise ModelProviderError(
+                        "MODEL_PROVIDER_RESPONSE_INVALID",
+                        request_status="http_response_received",
+                        failure_stage="provider_response",
+                    )
             else:
                 completion_options: dict[str, object] = {
                     "model": provider.model,

@@ -173,6 +173,104 @@ def test_gateway_persists_actual_call_and_prevents_replaying_same_call_id():
         engine.dispose()
 
 
+def test_gateway_records_actual_budget_overage_then_blocks_followup_before_provider_call():
+    engine = _engine_with_schema()
+    try:
+        organization_id = "org-budget-overage"
+        budget_ref = "budget://org-budget-overage/embedding"
+        budget = PostgresModelBudget(engine)
+        budget.configure_account(
+            organization_id,
+            budget_ref,
+            currency="USD",
+            limit_amount=Decimal("0.10"),
+            reservation_amount=Decimal("0.06"),
+        )
+        sink = PostgresModelCallSink(engine)
+
+        class _Adapter:
+            calls = 0
+
+            def invoke(self, provider, request, api_key=None):
+                self.calls += 1
+                return ProviderResult(
+                    output=[[0.1, 0.2]],
+                    usage={"prompt_tokens": 5, "total_tokens": 5},
+                    cost=0.12,
+                    model_version="embedding-v1",
+                )
+
+        class _Health:
+            def is_healthy(self, provider_id):
+                return True
+
+        adapter = _Adapter()
+        provider = ModelProviderConfig("provider-a", "embedding-v1", frozenset({"embedding"}), 1, False)
+        policy = PolicyEngine(
+            [
+                PolicyRule(
+                    rule_id="allow-embedding",
+                    action="model.invoke.embedding.provider-a",
+                    risk="LOW",
+                    decision="ALLOW",
+                    organization_id=organization_id,
+                    permission="foundation.model.invoke",
+                    resource_type="model_provider",
+                    classification="INTERNAL",
+                    privacy="INTERNAL",
+                )
+            ],
+            policy_version="policy-v1",
+        )
+        gateway = ModelGateway(
+            providers=(provider,),
+            adapter=adapter,
+            policy=policy,
+            budget=budget,
+            health=_Health(),
+            model_calls=sink,
+        )
+        common_request = {
+            "capability": "embedding",
+            "privacy": "INTERNAL",
+            "budget_ref": budget_ref,
+            "input": ["public fixture"],
+            "organization_id": organization_id,
+            "subject_id": "user-a",
+            "permissions": ("foundation.model.invoke",),
+        }
+
+        first = ModelRequest(
+            **common_request,
+            call_id="embedding-overage-1",
+            trace_id="trace-overage-1",
+        )
+        result = gateway.complete(first)
+        first_call_id = uuid5(
+            NAMESPACE_URL, "shuliu:model-call:embedding-overage-1:provider-a"
+        ).hex
+
+        assert result.cost == 0.12
+        assert budget.get_account(organization_id, budget_ref).spent_amount == Decimal("0.12000000")
+        assert budget.get_reservation(organization_id, first_call_id).status == "SETTLED"
+        assert sink.get(organization_id, first_call_id).cost == Decimal("0.12000000")
+
+        second = ModelRequest(
+            **common_request,
+            call_id="embedding-overage-2",
+            trace_id="trace-overage-2",
+        )
+        with pytest.raises(ModelGatewayError) as error:
+            gateway.complete(second)
+
+        assert error.value.code == "MODEL_BUDGET_EXHAUSTED"
+        assert error.value.request_status == "not_sent"
+        assert error.value.failure_stage == "budget"
+        assert adapter.calls == 1
+    finally:
+        engine.dispose()
+
+
 def test_gateway_rolls_back_budget_settlement_when_model_call_write_fails():
     engine = _engine_with_schema()
     try:

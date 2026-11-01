@@ -151,6 +151,7 @@ class GatewayEmbeddingAdapter:
                 "organization_id": organization_id,
                 "subject_id": subject_id,
                 "permissions": permissions,
+                "dimensions": self.profile.dimensions,
             },
             model=self.profile.model,
         )

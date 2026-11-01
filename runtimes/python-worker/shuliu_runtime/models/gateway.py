@@ -110,6 +110,7 @@ class ModelRequest:
     subject_id: str
     permissions: tuple[str, ...]
     call_id: str = field(default_factory=lambda: uuid4().hex)
+    dimensions: int | None = None
 
     @classmethod
     def parse(cls, request: ModelRequest | Mapping[str, object]) -> ModelRequest:
@@ -130,6 +131,7 @@ class ModelRequest:
                     subject_id=request["subject_id"],
                     permissions=tuple(raw_permissions),
                     call_id=request["call_id"] if "call_id" in request else uuid4().hex,
+                    dimensions=request.get("dimensions"),
                 )
             except (KeyError, TypeError):
                 raise ModelGatewayError("MODEL_REQUEST_INVALID", "model request is invalid") from None
@@ -155,9 +157,16 @@ class ModelRequest:
         ):
             raise ModelGatewayError("MODEL_REQUEST_INVALID", "model authorization context is invalid")
         try:
-            parse_capability(parsed.capability)
+            capability = parse_capability(parsed.capability)
         except ValueError as error:
             raise ModelGatewayError("MODEL_CAPABILITY_UNSUPPORTED", "model capability is unsupported") from error
+        if parsed.dimensions is not None and (
+            isinstance(parsed.dimensions, bool)
+            or not isinstance(parsed.dimensions, int)
+            or not 1 <= parsed.dimensions <= 65535
+            or capability is not ModelCapability.EMBEDDING
+        ):
+            raise ModelGatewayError("MODEL_REQUEST_INVALID", "model request is invalid", failure_stage="preflight")
         return parsed
 
 
@@ -303,6 +312,23 @@ class ModelGateway:
             raise ModelGatewayError(
                 "MODEL_CAPABILITY_UNSUPPORTED", "no provider supports the requested capability"
             )
+        if any(provider.embedding_dimensions is not None for provider in matching):
+            if parsed.dimensions is None:
+                raise ModelGatewayError(
+                    "MODEL_REQUEST_INVALID", "model request is invalid", failure_stage="preflight"
+                )
+        if parsed.dimensions is not None:
+            dimension_matches = tuple(
+                provider
+                for provider in matching
+                if provider.embedding_dimensions is None
+                or provider.embedding_dimensions == parsed.dimensions
+            )
+            if not dimension_matches:
+                raise ModelGatewayError(
+                    "MODEL_REQUEST_INVALID", "model request is invalid", failure_stage="preflight"
+                )
+            matching = dimension_matches
         candidates = route_candidates(
             matching,
             capability=capability,

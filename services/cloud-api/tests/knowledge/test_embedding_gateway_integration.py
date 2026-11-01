@@ -61,6 +61,7 @@ def test_embedding_adapter_uses_configured_profile_through_gateway():
     assert request["capability"] == "embedding"
     assert request["input"] == ["safe test text"]
     assert request["budget_ref"] == "budget://org-a/knowledge"
+    assert request["dimensions"] == 3
 
 
 def test_embedding_profile_rejects_invalid_dimensions_and_privacy():

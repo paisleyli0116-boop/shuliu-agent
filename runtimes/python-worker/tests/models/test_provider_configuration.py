@@ -103,3 +103,105 @@ def test_accepts_custom_model_with_dot_separated_words():
     profile, = _load_profiles(json.dumps([_profile(model="provider/custom-model.version-one.preview-model")]))
 
     assert profile.model == "provider/custom-model.version-one.preview-model"
+
+
+def _dashscope_embedding_profile(**overrides):
+    value = {
+        "provider_id": "dashscope",
+        "model": "text-embedding-v3",
+        "capabilities": ["embedding"],
+        "priority": 1,
+        "is_local": False,
+        "secret_ref": "secret://os/providers/dashscope/credential",
+        "embedding_api_base": "https://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "embedding_dimensions": 1024,
+        "enabled": True,
+    }
+    value.update(overrides)
+    return value
+
+
+def test_loads_dashscope_embedding_profile_and_passes_safe_route_to_gateway_config():
+    profile, = _load_profiles(json.dumps([_dashscope_embedding_profile()]))
+
+    assert profile.embedding_api_base == (
+        "https://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    )
+    assert profile.embedding_dimensions == 1024
+    model_provider = profile.to_model_provider_config()
+    assert model_provider.embedding_api_base == profile.embedding_api_base
+    assert model_provider.embedding_dimensions == 1024
+    assert profile.embedding_api_base not in repr(profile)
+    assert model_provider.embedding_api_base not in repr(model_provider)
+
+
+def test_dashscope_embedding_endpoint_scheme_and_host_are_case_insensitive():
+    profile, = _load_profiles(
+        json.dumps(
+            [
+                _dashscope_embedding_profile(
+                    embedding_api_base=(
+                        "HTTPS://TEST-WORKSPACE.CN-BEIJING.MAAS.ALIYUNCS.COM/compatible-mode/v1"
+                    )
+                )
+            ]
+        )
+    )
+
+    assert profile.embedding_api_base.startswith("HTTPS://TEST-WORKSPACE.")
+
+
+def test_dashscope_chat_profile_without_embedding_route_keeps_existing_configuration():
+    profile, = _load_profiles(
+        json.dumps(
+            [
+                {
+                    "provider_id": "dashscope",
+                    "model": "qwen-turbo",
+                    "capabilities": ["fast_chat"],
+                    "priority": 1,
+                    "is_local": False,
+                    "secret_ref": "secret://os/providers/dashscope/credential",
+                    "enabled": True,
+                }
+            ]
+        )
+    )
+
+    assert profile.model == "qwen-turbo"
+    assert profile.embedding_api_base is None
+    assert profile.embedding_dimensions is None
+
+
+@pytest.mark.parametrize(
+    "embedding_api_base",
+    [
+        "http://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "https://evil.example/compatible-mode/v1",
+        "https://test-workspace.cn-beijing.maas.aliyuncs.com/other/v1",
+        "https://test-workspace.cn-beijing.maas.aliyuncs.com/COMPATIBLE-MODE/v1",
+        "https://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/V1",
+        "https://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1?redirect=https://evil.example",
+        "https://test-workspace.cn-beijing.maas.aliyuncs.com:443/compatible-mode/v1",
+        "https://user:password@test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    ],
+)
+def test_rejects_non_allowlisted_dashscope_embedding_endpoints(embedding_api_base):
+    with pytest.raises(ValueError):
+        _load_profiles(json.dumps([_dashscope_embedding_profile(embedding_api_base=embedding_api_base)]))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"provider_id": "openai-compatible"},
+        {"model": "text-embedding-v4"},
+        {"capabilities": ["fast_chat"]},
+        {"embedding_dimensions": 999},
+        {"embedding_dimensions": True},
+        {"embedding_api_base": None},
+    ],
+)
+def test_dashscope_embedding_profile_fails_closed_on_incompatible_routing(overrides):
+    with pytest.raises(ValueError):
+        _load_profiles(json.dumps([_dashscope_embedding_profile(**overrides)]))

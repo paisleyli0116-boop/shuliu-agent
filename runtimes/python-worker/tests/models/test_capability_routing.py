@@ -186,6 +186,115 @@ def test_complete_for_provider_pins_embedding_route_and_records_gateway_usage() 
     assert len(budget.settlements) == 1
 
 
+def test_embedding_dimension_mismatch_is_rejected_before_policy_budget_or_provider() -> None:
+    provider = ModelProviderConfig(
+        provider_id="dashscope",
+        model="text-embedding-v3",
+        capabilities=frozenset({"embedding"}),
+        priority=1,
+        is_local=False,
+        secret_ref="secret://os/providers/dashscope/credential",
+        embedding_api_base="https://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        embedding_dimensions=1024,
+    )
+    fake = FakeModel()
+    budget = MemoryBudget()
+    gateway = ModelGateway(
+        providers=(provider,),
+        adapter=fake,
+        policy=_policy("dashscope"),
+        budget=budget,
+        health=MemoryHealth(("dashscope",)),
+        model_calls=MemoryModelCalls(),
+        fallback_enabled=True,
+    )
+
+    with pytest.raises(ModelGatewayError) as error:
+        gateway.complete_for_provider(
+            "dashscope",
+            _request(capability="embedding", input=["text"], dimensions=768),
+            model="text-embedding-v3",
+        )
+
+    assert error.value.code == "MODEL_REQUEST_INVALID"
+    assert error.value.failure_stage == "preflight"
+    assert error.value.request_status == "not_sent"
+    assert budget.reservations == []
+    assert fake.calls == []
+
+
+def test_configured_embedding_dimensions_cannot_be_omitted_from_gateway_request() -> None:
+    provider = ModelProviderConfig(
+        provider_id="dashscope",
+        model="text-embedding-v3",
+        capabilities=frozenset({"embedding"}),
+        priority=1,
+        is_local=False,
+        secret_ref="secret://os/providers/dashscope/credential",
+        embedding_api_base="https://test-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        embedding_dimensions=1024,
+    )
+    fake = FakeModel()
+    budget = MemoryBudget()
+    embedding_policy = PolicyEngine(
+        [
+            PolicyRule(
+                rule_id="allow-dashscope-embedding",
+                action="model.invoke.embedding.dashscope",
+                risk="LOW",
+                decision="ALLOW",
+                organization_id="org-a",
+                permission="foundation.model.invoke",
+                resource_type="model_provider",
+                classification="INTERNAL",
+                privacy="INTERNAL",
+            )
+        ],
+        policy_version="policy-v1",
+    )
+    gateway = ModelGateway(
+        providers=(provider,),
+        adapter=fake,
+        policy=embedding_policy,
+        budget=budget,
+        health=MemoryHealth(("dashscope",)),
+        model_calls=MemoryModelCalls(),
+    )
+
+    with pytest.raises(ModelGatewayError) as error:
+        gateway.complete_for_provider(
+            "dashscope",
+            _request(capability="embedding", input=["text"]),
+            model="text-embedding-v3",
+        )
+
+    assert error.value.code == "MODEL_REQUEST_INVALID"
+    assert error.value.failure_stage == "preflight"
+    assert error.value.request_status == "not_sent"
+    assert budget.reservations == []
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("dimensions", [True, 0, 65536, "1024"])
+def test_model_request_rejects_invalid_embedding_dimensions(dimensions: object) -> None:
+    with pytest.raises(ModelGatewayError) as error:
+        ModelRequest.parse(
+            {
+                "capability": "embedding",
+                "privacy": "PUBLIC",
+                "budget_ref": "budget://org-a/embedding",
+                "input": ["text"],
+                "trace_id": "trace-invalid-dimensions",
+                "organization_id": "org-a",
+                "subject_id": "user-a",
+                "permissions": ("foundation.model.invoke",),
+                "dimensions": dimensions,
+            }
+        )
+
+    assert error.value.code == "MODEL_REQUEST_INVALID"
+
+
 def test_unknown_or_unsupported_capability_fails_closed_without_provider_call() -> None:
     fake = FakeModel()
     gateway = _gateway((_provider("primary", priority=1, capabilities=("vision",)),), fake)

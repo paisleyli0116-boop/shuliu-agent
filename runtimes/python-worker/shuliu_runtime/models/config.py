@@ -4,7 +4,7 @@ import json
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .capability import ModelCapability, ModelProviderConfig, parse_capability
@@ -21,7 +21,10 @@ _SECRET_LIKE_MODEL = re.compile(
     re.IGNORECASE,
 )
 _ALLOWED_FIELDS = frozenset(
-    {"provider_id", "model", "capabilities", "priority", "is_local", "secret_ref", "enabled"}
+    {
+        "provider_id", "model", "capabilities", "priority", "is_local", "secret_ref", "enabled",
+        "embedding_api_base", "embedding_dimensions",
+    }
 )
 _REQUIRED_FIELDS = frozenset(
     {"provider_id", "model", "capabilities", "priority", "is_local"}
@@ -42,6 +45,8 @@ class ProviderProfile:
     is_local: bool
     secret_ref: str | None
     enabled: bool = True
+    embedding_api_base: str | None = field(default=None, repr=False)
+    embedding_dimensions: int | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -75,19 +80,20 @@ class ProviderProfile:
             raise ProviderConfigurationError("provider priority is invalid")
         if not isinstance(self.is_local, bool) or not isinstance(self.enabled, bool):
             raise ProviderConfigurationError("provider flags are invalid")
-        if self.secret_ref is not None:
-            try:
-                ModelProviderConfig(
-                    provider_id=self.provider_id,
-                    model=self.model,
-                    capabilities=self.capabilities,
-                    priority=self.priority,
-                    is_local=self.is_local,
-                    secret_ref=self.secret_ref,
-                )
-            except (TypeError, ValueError):
-                raise ProviderConfigurationError("provider secret reference is invalid") from None
-        elif not self.is_local:
+        try:
+            ModelProviderConfig(
+                provider_id=self.provider_id,
+                model=self.model,
+                capabilities=self.capabilities,
+                priority=self.priority,
+                is_local=self.is_local,
+                secret_ref=self.secret_ref,
+                embedding_api_base=self.embedding_api_base,
+                embedding_dimensions=self.embedding_dimensions,
+            )
+        except (TypeError, ValueError):
+            raise ProviderConfigurationError("provider profile configuration is invalid") from None
+        if self.secret_ref is None and not self.is_local:
             raise ProviderConfigurationError("remote provider requires a secret reference")
 
     def to_model_provider_config(self) -> ModelProviderConfig:
@@ -98,6 +104,8 @@ class ProviderProfile:
             priority=self.priority,
             is_local=self.is_local,
             secret_ref=self.secret_ref,
+            embedding_api_base=self.embedding_api_base,
+            embedding_dimensions=self.embedding_dimensions,
         )
 
 
@@ -139,6 +147,8 @@ def load_provider_profiles(raw: str | None = None) -> tuple[ProviderProfile, ...
             is_local=item["is_local"],
             secret_ref=item.get("secret_ref"),
             enabled=item.get("enabled", True),
+            embedding_api_base=item.get("embedding_api_base"),
+            embedding_dimensions=item.get("embedding_dimensions"),
         )
         seen_ids.add(profile.provider_id)
         profiles.append(profile)
