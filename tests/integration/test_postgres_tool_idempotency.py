@@ -20,6 +20,8 @@ from shuliu_runtime.tools.postgres_idempotency import PostgresIdempotencyStore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+pytestmark = pytest.mark.postgres
+
 
 def _store():
     database_url = _test_database_url()

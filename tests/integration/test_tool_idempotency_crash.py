@@ -19,6 +19,8 @@ from shuliu_runtime.tools.postgres_idempotency import PostgresIdempotencyStore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+pytestmark = pytest.mark.postgres
+
 
 def _test_database_url() -> str:
     database_url = os.environ.get("SHULIU_DATABASE_URL")

@@ -59,8 +59,9 @@ describe("runtime IPC contract", () => {
       },
     );
     const marker = result.stdout.split(/\r?\n/).find((line) => line.startsWith("SHULIU_IPC_RESULT:"));
-    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(marker, `${result.stderr}\n${result.stdout}`).toBeDefined();
+    const diagnostics = `signal=${String(result.signal)} error=${String(result.error)} stderr=${result.stderr}\nstdout=${result.stdout}`;
+    expect(result.status, diagnostics).toBe(0);
+    expect(marker, diagnostics).toBeDefined();
     const report = JSON.parse(marker!.slice("SHULIU_IPC_RESULT:".length));
     expect(report).toMatchObject({
       health: { status: "healthy" },

@@ -72,7 +72,7 @@ jobs:
       - name: Run generic integration tests without the dedicated real-browser suite
         run: |
           pnpm exec vitest run tests/integration --passWithNoTests
-          uvx --from uv==0.12.20 uv run --locked --all-packages pytest -m "integration and not real_browser"
+          uvx --from uv==0.12.20 uv run --locked --all-packages pytest -m "integration and not real_browser and not postgres"
       - run: pnpm typecheck
 
   postgres-migration:

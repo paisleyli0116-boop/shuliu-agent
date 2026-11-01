@@ -25,4 +25,5 @@ markers = [
     "integration: exercises multiple Foundation persistence adapters",
     "migration: validates database migrations and migration state",
     "real_embedding: explicitly opted-in real Provider embedding integration; excluded from standard integration runs",
+    "postgres: requires a live PostgreSQL test database; only the postgres-migration job provides one",
 ]
