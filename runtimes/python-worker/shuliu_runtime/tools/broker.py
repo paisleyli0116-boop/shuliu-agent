@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
 from hashlib import sha256
@@ -262,6 +262,7 @@ class ToolBroker:
             )
         except Exception:  # noqa: BLE001 - verifier failures must fail closed
             verified = False
+        safe_output: dict[str, object] | None = None
         if definition.idempotency_required:
             if not isinstance(output, Mapping):
                 safe_output = None
@@ -284,7 +285,6 @@ class ToolBroker:
                     "IDEMPOTENCY_RESULT_INVALID",
                     "A safe, schema-valid result reference could not be recorded",
                 )
-            output = safe_output
         result = ToolResult(
             tool_id=definition.name,
             tool_version=definition.version,
@@ -328,7 +328,13 @@ class ToolBroker:
                 "Execution result could not be recorded; do not retry automatically",
             ) from error
         self._complete_idempotency(
-            definition, principal, context, idempotency_key, request_digest, result
+            definition,
+            principal,
+            context,
+            idempotency_key,
+            request_digest,
+            result,
+            stored_output=safe_output,
         )
         return result
 
@@ -656,6 +662,8 @@ class ToolBroker:
         key: str | None,
         request_digest: str,
         result: ToolResult,
+        *,
+        stored_output: Mapping[str, object] | None = None,
     ) -> None:
         if not definition.idempotency_required or key is None:
             return
@@ -663,12 +671,15 @@ class ToolBroker:
             raise ToolExecutionError(
                 "IDEMPOTENCY_UNAVAILABLE", "Idempotency store is unavailable"
             )
+        # The durable record keeps only the sanitized replay projection; the
+        # caller still receives the full executor output for this execution.
+        stored_result = result if stored_output is None else replace(result, output=dict(stored_output))
         try:
             self._idempotency_store.complete(
                 scope=_idempotency_scope(definition, principal, context),
                 key=key,
                 request_digest=request_digest,
-                result=result,
+                result=stored_result,
             )
         except Exception as error:
             self._mark_idempotency_indeterminate(

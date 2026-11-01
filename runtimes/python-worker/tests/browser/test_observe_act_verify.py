@@ -42,7 +42,14 @@ def test_duplicate_click_and_reused_observation_never_dispatch_twice(tmp_path):
         first = call(runtime, "click", args, key="same-click")
         second = call(runtime, "click", args, key="same-click")
         third = call(runtime, "click", args, key="different-key")
-        assert first == second
+        # The first dispatch returns the executor's full result; the idempotent
+        # replay returns only the sanitized reference projection that was
+        # persisted, because page content must never be stored durably.
+        assert first.execution_status == second.execution_status
+        assert first.output["status"] == second.output["status"] == "VERIFIED"
+        assert first.output["evidence_ref"] == second.output["evidence_ref"]
+        assert first.output["observation"]["url"].endswith("/")
+        assert "observation" not in second.output
         assert backend.calls.count("click") == 1
         assert third.output["error_code"] == "BROWSER_OBSERVATION_STALE"
     finally:

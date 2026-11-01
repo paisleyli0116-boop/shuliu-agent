@@ -71,10 +71,17 @@ def test_broker_replays_sanitized_result_after_sqlite_store_reopen(tmp_path):
             ("durable-replay",),
         ).fetchone()[0]
 
-    assert first.output == replay.output
-    assert first == replay
-    assert "private page text must not be persisted" not in str(first.output)
-    assert first.output == {"ok": True, "evidence_ref": "evidence-write-1"}
+    # The first execution still returns the executor's full output; only the
+    # durable replay record keeps the sanitized projection.
+    assert first.output == {
+        "ok": True,
+        "api_key": "do-not-persist-this-value",
+        "evidence_ref": "evidence-write-1",
+        "observation": "private page text must not be persisted",
+    }
+    assert replay.output == {"ok": True, "evidence_ref": "evidence-write-1"}
+    assert first.execution_status == replay.execution_status
+    assert first.verification_status == replay.verification_status
     assert executor.calls == 1
     assert second_executor.calls == 0
     assert "do-not-persist-this-value" not in stored_result
