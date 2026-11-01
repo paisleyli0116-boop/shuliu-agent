@@ -388,7 +388,9 @@ export class SidecarSupervisor {
     context: RuntimeRecoveryContext,
   ): Promise<RuntimeRecoveryOutcome> {
     if (!this.options.recovery) {
-      return { status: "SAFE_MODE", safeErrorCode: "RUNTIME_RECOVERY_REQUIRED" };
+      // Without a recovery coordinator there is no checkpoint to restore, so the
+      // pre-existing semantics apply: a crash restarts the sidecar back to ready.
+      return { status: "RESUME", safeErrorCode: null };
     }
     const controller = new AbortController();
     this.activeRecoveryAbort = controller;
