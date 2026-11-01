@@ -435,6 +435,10 @@ export class SidecarSupervisor {
     channel.close(new RuntimeIpcError(safeErrorCode));
     this.terminateChild(child);
     await Promise.race([new Promise<void>((resolve) => child.once("close", () => resolve())), delay(2_000)]);
+    // The child exit handler runs asynchronously and rewrites the startup stage
+    // to sidecar_exit; keep the recovery stage that caused safe mode.
+    this.startupStage = "recovery";
+    this.options.onDiagnostic?.({ ...this.diagnostics });
     return this.stateValue;
   }
 
