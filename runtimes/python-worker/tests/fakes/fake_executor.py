@@ -11,7 +11,11 @@ class FakeExecutor:
         verified: bool = True,
         order: list[str] | None = None,
     ) -> None:
-        self.output = output if output is not None else {"ok": True}
+        self.output = (
+            output
+            if output is not None
+            else {"ok": True, "evidence_ref": "test-evidence-1"}
+        )
         self.verified = verified
         self.order = order if order is not None else []
         self.calls: list[tuple[str, dict[str, object], dict[str, object]]] = []

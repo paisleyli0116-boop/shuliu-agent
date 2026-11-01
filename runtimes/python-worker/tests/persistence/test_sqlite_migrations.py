@@ -36,6 +36,7 @@ def test_sqlite_migrations_create_only_approved_local_tables(tmp_path):
         "inbox",
         "checkpoints",
         "local_task_state",
+        "tool_idempotency",
     } <= tables
     assert not {
         "tasks",
@@ -46,7 +47,89 @@ def test_sqlite_migrations_create_only_approved_local_tables(tmp_path):
         "worker_leases",
         "knowledge_documents",
     } & tables
-    assert migration_count == 1
+    assert migration_count == 2
+
+
+@pytest.mark.migration
+def test_sqlite_tool_idempotency_scope_is_unique_and_state_is_constrained(tmp_path):
+    database = SQLiteDatabase(tmp_path / "foundation.sqlite3")
+    database.migrate()
+
+    with database.connect() as connection:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(tool_idempotency)")
+        }
+        unique_indexes = [
+            row["name"]
+            for row in connection.execute("PRAGMA index_list(tool_idempotency)")
+            if row["unique"]
+        ]
+        scope_columns = [
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA index_info(uq_tool_idempotency_scope_key)"
+            )
+        ]
+
+    assert {
+        "organization_id",
+        "tool_id",
+        "operation_id",
+        "idempotency_key",
+        "request_digest",
+        "status",
+        "result_json",
+        "created_at",
+        "updated_at",
+    } <= columns
+    assert "uq_tool_idempotency_scope_key" in unique_indexes
+    assert scope_columns == [
+        "organization_id",
+        "tool_id",
+        "operation_id",
+        "idempotency_key",
+    ]
+
+
+@pytest.mark.migration
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("organization_id", "o" * 129),
+        ("tool_id", "t" * 129),
+        ("operation_id", "p" * 129),
+        ("idempotency_key", "k" * 257),
+        ("request_digest", "d" * 129),
+    ],
+)
+def test_sqlite_tool_idempotency_schema_rejects_unpersistable_values(
+    tmp_path, field, value
+):
+    database = SQLiteDatabase(tmp_path / "foundation.sqlite3")
+    database.migrate()
+    base = {
+        "organization_id": "org-1",
+        "tool_id": "tool-1",
+        "operation_id": "operation-1",
+        "idempotency_key": "key-1",
+        "request_digest": "digest-1",
+        "status": "CLAIMED",
+        "result_json": None,
+        "created_at": "2026-10-26T00:00:00Z",
+        "updated_at": "2026-10-26T00:00:00Z",
+    }
+    base[field] = value
+
+    with pytest.raises(sqlite3.IntegrityError):
+        with database.connect() as connection:
+            connection.execute(
+                "INSERT INTO tool_idempotency "
+                "(organization_id, tool_id, operation_id, "
+                "idempotency_key, request_digest, status, result_json, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(base.values()),
+            )
 
 
 @pytest.mark.migration

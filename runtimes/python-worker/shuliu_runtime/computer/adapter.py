@@ -53,7 +53,18 @@ _ACT_SCHEMA: dict[str, object] = {
         },
     ],
 }
-_OBJECT_SCHEMA = {"type": "object"}
+_OBJECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "evidence_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(?![\s\S])",
+        }
+    },
+    "required": ["evidence_ref"],
+}
 
 
 class _WindowsBackend:

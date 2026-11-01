@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from shuliu_runtime.policy.risk import RiskLevel
 from shuliu_runtime.tools.broker import IdentityPrincipal, ToolBroker
+from shuliu_runtime.tools.idempotency import SAFE_TRACE_OR_SESSION_ID_SCHEMA_PATTERN
 from shuliu_runtime.tools.registry import ToolDefinition, ToolRegistry
 
 from .session import SessionStore
@@ -17,10 +18,16 @@ from .verification import BrowserError, check_url, origin, safe_text, safe_url, 
 
 _READ = {"launch", "observe", "close"}
 _TEXT = {"type": "string", "minLength": 1, "maxLength": 8192}
+_SESSION_ID = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 128,
+    "pattern": SAFE_TRACE_OR_SESSION_ID_SCHEMA_PATTERN,
+}
 
 
 def _input(operation):
-    properties = {} if operation == "launch" else {"session_id": _TEXT}
+    properties = {} if operation == "launch" else {"session_id": _SESSION_ID}
     if operation == "navigate":
         properties["url"] = _TEXT
     if operation in ("click", "type", "scroll"):

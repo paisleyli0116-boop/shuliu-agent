@@ -67,6 +67,26 @@ LOCAL_MIGRATIONS = (
             "task_id TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT NOT NULL)",
         ),
     ),
+    LocalMigration(
+        migration_id="0002_tool_idempotency",
+        statements=(
+            "CREATE TABLE tool_idempotency ("
+            "organization_id TEXT NOT NULL CHECK (length(organization_id) BETWEEN 1 AND 128), "
+            "tool_id TEXT NOT NULL CHECK (length(tool_id) BETWEEN 1 AND 128), "
+            "operation_id TEXT NOT NULL CHECK (length(operation_id) BETWEEN 1 AND 128), "
+            "idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 256), "
+            "request_digest TEXT NOT NULL CHECK (length(request_digest) BETWEEN 1 AND 128), "
+            "status TEXT NOT NULL CHECK (status IN "
+            "('CLAIMED', 'DISPATCHED', 'COMPLETED', 'INDETERMINATE')), "
+            "result_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+            "CHECK ((status = 'COMPLETED' AND result_json IS NOT NULL) OR "
+            "(status <> 'COMPLETED' AND result_json IS NULL)))",
+            "CREATE UNIQUE INDEX uq_tool_idempotency_scope_key ON tool_idempotency "
+            "(organization_id, tool_id, operation_id, idempotency_key)",
+            "CREATE INDEX ix_tool_idempotency_status_updated "
+            "ON tool_idempotency(status, updated_at)",
+        ),
+    ),
 )
 
 

@@ -19,7 +19,10 @@ def test_first_bootstrap_creates_database_under_the_user_data_directory(tmp_path
             "SELECT migration_id FROM schema_migrations ORDER BY migration_id"
         ).fetchall()
 
-    assert migration_ids == [("0001_local_foundation",)]
+    assert migration_ids == [
+        ("0001_local_foundation",),
+        ("0002_tool_idempotency",),
+    ]
 
 
 def test_unknown_database_migration_fails_bootstrap_without_downgrading_or_erasing_data(tmp_path):

@@ -7,13 +7,13 @@
   "required": ["status", "trace_id", "session_id", "retryable", "outcome_unknown", "evidence_ref"],
   "properties": {
     "status": {"enum": ["VERIFIED", "UNVERIFIED", "FAILED"]},
-    "trace_id": {"type": "string", "minLength": 1},
-    "session_id": {"type": ["string", "null"]},
+    "trace_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\\s\\S])"},
+    "session_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\\s\\S])"},
     "retryable": {"const": false},
     "outcome_unknown": {"type": "boolean"},
-    "evidence_ref": {"type": "string", "minLength": 1},
-    "before_evidence_ref": {"type": "string", "minLength": 1},
-    "error_code": {"type": "string", "pattern": "^BROWSER_[A-Z_]+$"},
+    "evidence_ref": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(?![\\s\\S])"},
+    "before_evidence_ref": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(?![\\s\\S])"},
+    "error_code": {"type": "string", "minLength": 9, "maxLength": 128, "pattern": "^BROWSER_[A-Z_]{1,120}(?![\\s\\S])"},
     "browser": {
       "type": "object", "additionalProperties": false,
       "required": ["browser_version", "process_id"],

@@ -60,6 +60,7 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
                 "worker_registration_tokens",
                 "worker_session_tokens",
                 "worker_auth_challenges",
+                "tool_idempotency",
             } <= tables
 
             for table in {
@@ -97,9 +98,22 @@ def test_foundation_postgres_migration_creates_org_scoped_tables():
             worker_columns = {
                 column["name"] for column in inspector.get_columns("workers")
             }
+            tool_idempotency_columns = {
+                column["name"]
+                for column in inspector.get_columns("tool_idempotency")
+            }
             lease_columns = {
                 column["name"] for column in inspector.get_columns("worker_leases")
             }
+            assert "subject_id" not in tool_idempotency_columns
+            tool_idempotency_unique = inspector.get_unique_constraints(
+                "tool_idempotency"
+            )
+            assert any(
+                item["column_names"]
+                == ["organization_id", "tool_id", "operation_id", "idempotency_key"]
+                for item in tool_idempotency_unique
+            )
             assert {
                 "worker_version",
                 "protocol_version",
@@ -166,6 +180,50 @@ def test_schedule_occurrences_enforce_one_active_run_per_schedule():
                         ),
                         values,
                     )
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.migration
+def test_tool_idempotency_migration_enforces_scope_digest_and_state():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            upgrade_to_head(connection)
+            inspector = inspect(connection)
+            columns = {
+                column["name"]
+                for column in inspector.get_columns("tool_idempotency")
+            }
+            unique_constraints = inspector.get_unique_constraints("tool_idempotency")
+            check_constraints = inspector.get_check_constraints("tool_idempotency")
+
+        assert {
+            "organization_id",
+            "tool_id",
+            "operation_id",
+            "idempotency_key",
+            "request_digest",
+            "status",
+            "result_json",
+            "created_at",
+            "updated_at",
+        } <= columns
+        assert "subject_id" not in columns
+        assert any(
+            constraint["column_names"]
+            == [
+                "organization_id",
+                "tool_id",
+                "operation_id",
+                "idempotency_key",
+            ]
+            for constraint in unique_constraints
+        )
+        assert any("INDETERMINATE" in constraint["sqltext"] for constraint in check_constraints)
+        assert any("result_json" in constraint["sqltext"] for constraint in check_constraints)
+        assert any("organization_id" in constraint["sqltext"] for constraint in check_constraints)
+        assert any("idempotency_key" in constraint["sqltext"] for constraint in check_constraints)
     finally:
         engine.dispose()
 

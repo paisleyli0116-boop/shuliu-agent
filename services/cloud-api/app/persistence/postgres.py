@@ -192,6 +192,55 @@ events = Table(
     ),
 )
 
+tool_idempotency = Table(
+    "tool_idempotency",
+    metadata,
+    Column("organization_id", String(128), nullable=False),
+    Column("tool_id", String(128), nullable=False),
+    Column("operation_id", String(128), nullable=False),
+    Column("idempotency_key", String(256), nullable=False),
+    Column("request_digest", String(128), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("result_json", JSON),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "status IN ('CLAIMED', 'DISPATCHED', 'COMPLETED', 'INDETERMINATE')",
+        name="ck_tool_idempotency_status",
+    ),
+    CheckConstraint(
+        "length(request_digest) BETWEEN 1 AND 128",
+        name="ck_tool_idempotency_digest_length",
+    ),
+    CheckConstraint(
+        "length(organization_id) BETWEEN 1 AND 128 AND "
+        "length(tool_id) BETWEEN 1 AND 128 AND "
+        "length(operation_id) BETWEEN 1 AND 128",
+        name="ck_tool_idempotency_scope_length",
+    ),
+    CheckConstraint(
+        "length(idempotency_key) BETWEEN 1 AND 256",
+        name="ck_tool_idempotency_key_length",
+    ),
+    CheckConstraint(
+        "(status = 'COMPLETED' AND result_json IS NOT NULL) OR "
+        "(status <> 'COMPLETED' AND result_json IS NULL)",
+        name="ck_tool_idempotency_completed_result",
+    ),
+    UniqueConstraint(
+        "organization_id",
+        "tool_id",
+        "operation_id",
+        "idempotency_key",
+        name="uq_tool_idempotency_scope_key",
+    ),
+)
+Index(
+    "ix_tool_idempotency_status_updated",
+    tool_idempotency.c.status,
+    tool_idempotency.c.updated_at,
+)
+
 approvals = Table(
     "approvals",
     metadata,

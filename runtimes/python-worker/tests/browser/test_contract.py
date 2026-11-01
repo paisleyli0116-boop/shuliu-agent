@@ -2,6 +2,7 @@ import json
 import pytest
 from pathlib import Path
 from jsonschema import Draft202012Validator
+from shuliu_runtime.tools.broker import ToolExecutionError
 
 from .support import call, make_runtime, opened
 
@@ -37,5 +38,24 @@ def test_redaction_remains_within_shared_contract_bounds(tmp_path, field, limit)
         rendered = view["text"] if field == "text" else view["elements"][0]["label"]
         assert len(rendered) <= limit
         assert "token=x" not in rendered
+    finally:
+        runtime.close()
+
+
+def test_unsafe_session_id_is_rejected_before_browser_dispatch_or_approval(tmp_path):
+    runtime, backend, _, evidence, approvals = make_runtime(tmp_path)
+    try:
+        with pytest.raises(ToolExecutionError) as rejected:
+            call(
+                runtime,
+                "navigate",
+                {"session_id": "bad/id", "url": "http://127.0.0.1:8765/"},
+                key="unsafe-session",
+            )
+
+        assert rejected.value.code == "TOOL_INPUT_INVALID"
+        assert "navigate" not in backend.calls
+        assert evidence == []
+        assert approvals.calls == []
     finally:
         runtime.close()

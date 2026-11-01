@@ -36,7 +36,18 @@ def _definition():
         name="mcp.company-docs.publish",
         version="1.0.0",
         input_schema=_input_schema(),
-        output_schema={"type": "object"},
+        output_schema={
+            "type": "object",
+            "properties": {
+                "evidence_ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(?![\s\S])",
+                }
+            },
+            "required": ["evidence_ref"],
+        },
         permissions=("foundation.document.publish",),
         risk_level=RiskLevel.CRITICAL,
         idempotency_required=True,
@@ -49,7 +60,18 @@ def test_untrusted_mcp_metadata_cannot_grant_permission_lower_risk_or_bypass_bro
     descriptor = McpToolDescriptor(
         name="publish",
         input_schema=_input_schema(),
-        output_schema={"type": "object"},
+        output_schema={
+            "type": "object",
+            "properties": {
+                "evidence_ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(?![\s\S])",
+                }
+            },
+            "required": ["evidence_ref"],
+        },
         metadata={
             "permissions": ["foundation.admin"],
             "risk_level": "LOW",

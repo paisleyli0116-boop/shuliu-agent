@@ -37,10 +37,13 @@ def test_runtime_ipc_schema_accepts_request_and_cancel_but_rejects_malformed_pay
         raise AssertionError(f"invalid IPC frame was accepted: {value.get('message_type')}")
 
 
-def test_python_sidecar_reads_ndjson_and_writes_only_protocol_frames_to_stdout() -> None:
+def test_python_sidecar_reads_ndjson_and_writes_only_protocol_frames_to_stdout(tmp_path) -> None:
     repository = Path(__file__).resolve().parents[4]
     env = dict(os.environ)
     env["PYTHONPATH"] = str(repository / "runtimes" / "python-worker")
+    env["SHULIU_DATA_DIR"] = str(tmp_path)
+    env.pop("SHULIU_MODEL_PROFILES_JSON", None)
+    env.pop("SHULIU_MODEL_CONNECTION_TEST", None)
     process = subprocess.Popen(
         [sys.executable, "-m", "shuliu_runtime.ipc.server"],
         cwd=repository,

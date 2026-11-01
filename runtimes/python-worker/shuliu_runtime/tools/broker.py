@@ -15,7 +15,13 @@ from shuliu_runtime.events.models import EventRecord
 from shuliu_runtime.policy.risk import RiskLevel
 from shuliu_runtime.policy.rules import PolicyDecision, PolicyOutcome
 
-from .idempotency import IdempotencyClaim, IdempotencyClaimStatus, IdempotencyStore
+from .idempotency import (
+    IdempotencyClaim,
+    IdempotencyClaimStatus,
+    IdempotencyStore,
+    is_safe_idempotency_trace_id,
+    sanitize_idempotency_tool_output,
+)
 from .registry import ToolDefinition, ToolRegistry, ToolRegistryError
 
 
@@ -173,16 +179,17 @@ class ToolBroker:
 
         request_digest = _request_digest(definition, args, principal, context)
         claim = self._begin_idempotency(
-            definition, principal, idempotency_key, request_digest
+            definition, principal, context, idempotency_key, request_digest
         )
         if claim is not None:
             if claim.status is IdempotencyClaimStatus.COMPLETED:
-                if not isinstance(claim.result, ToolResult):
+                stored_result = _restore_idempotency_result(claim.result)
+                if stored_result is None:
                     raise ToolExecutionError(
                         "IDEMPOTENCY_RESULT_INVALID",
                         "Stored Tool result is invalid",
                     )
-                return claim.result
+                return stored_result
             if claim.status is IdempotencyClaimStatus.CONFLICT:
                 raise ToolExecutionError(
                     "IDEMPOTENCY_KEY_CONFLICT",
@@ -193,6 +200,11 @@ class ToolBroker:
                     "IDEMPOTENCY_IN_PROGRESS",
                     "An identical Tool call is still in progress",
                 )
+            if claim.status is IdempotencyClaimStatus.RECONCILIATION_REQUIRED:
+                raise ToolExecutionError(
+                    "RECONCILIATION_REQUIRED",
+                    "A prior Tool dispatch has an unknown result and must be reconciled",
+                )
 
         if decision.decision is PolicyOutcome.REQUIRE_APPROVAL:
             assert approval_id is not None
@@ -202,12 +214,12 @@ class ToolBroker:
                 self._approvals.consume(approval_id, approval_context)
             except ApprovalError as error:
                 self._release_idempotency(
-                    definition, principal, idempotency_key, request_digest
+                    definition, principal, context, idempotency_key, request_digest
                 )
                 raise ToolExecutionError(error.code, str(error)) from error
             except Exception as error:
                 self._release_idempotency(
-                    definition, principal, idempotency_key, request_digest
+                    definition, principal, context, idempotency_key, request_digest
                 )
                 raise ToolExecutionError(
                     "APPROVAL_UNAVAILABLE", "Approval service failed closed"
@@ -219,9 +231,15 @@ class ToolBroker:
         # Executor resource/session ownership must use the authenticated identity,
         # never a caller-controlled identity field in the request context.
         safe_context["_principal"] = principal
+        self._mark_idempotency_dispatched(
+            definition, principal, context, idempotency_key, request_digest
+        )
         try:
             output = executor.execute(tool_id, safe_args, safe_context, idempotency_key)
         except Exception as error:
+            self._mark_idempotency_indeterminate(
+                definition, principal, context, idempotency_key, request_digest
+            )
             self._emit_execution_error_event(
                 definition,
                 principal,
@@ -244,6 +262,29 @@ class ToolBroker:
             )
         except Exception:  # noqa: BLE001 - verifier failures must fail closed
             verified = False
+        if definition.idempotency_required:
+            if not isinstance(output, Mapping):
+                safe_output = None
+            else:
+                safe_output = sanitize_idempotency_tool_output(output)
+            if safe_output is None or not self._registry.validate_output(
+                tool_id, safe_output
+            ):
+                self._mark_idempotency_indeterminate(
+                    definition, principal, context, idempotency_key, request_digest
+                )
+                self._emit_execution_error_event(
+                    definition,
+                    principal,
+                    context,
+                    decision,
+                    "TOOL_EXECUTION_UNKNOWN",
+                )
+                raise ToolExecutionError(
+                    "IDEMPOTENCY_RESULT_INVALID",
+                    "A safe, schema-valid result reference could not be recorded",
+                )
+            output = safe_output
         result = ToolResult(
             tool_id=definition.name,
             tool_version=definition.version,
@@ -279,12 +320,15 @@ class ToolBroker:
                 )
             )
         except Exception as error:
+            self._mark_idempotency_indeterminate(
+                definition, principal, context, idempotency_key, request_digest
+            )
             raise ToolExecutionError(
                 "TOOL_AUDIT_FAILED",
                 "Execution result could not be recorded; do not retry automatically",
             ) from error
         self._complete_idempotency(
-            definition, principal, idempotency_key, request_digest, result
+            definition, principal, context, idempotency_key, request_digest, result
         )
         return result
 
@@ -407,6 +451,10 @@ class ToolBroker:
         if (
             not _non_empty(context.get("organization_id"))
             or not _non_empty(context.get("trace_id"))
+            or (
+                definition.idempotency_required
+                and not is_safe_idempotency_trace_id(context.get("trace_id"))
+            )
             or not _non_empty(context.get("privacy"))
         ):
             raise ToolExecutionError(
@@ -494,6 +542,7 @@ class ToolBroker:
         self,
         definition: ToolDefinition,
         principal: IdentityPrincipal,
+        context: Mapping[str, object],
         key: str | None,
         request_digest: str,
     ) -> IdempotencyClaim | None:
@@ -511,11 +560,7 @@ class ToolBroker:
         assert key is not None
         try:
             claim = self._idempotency_store.begin(
-                scope=(
-                    principal.organization_id,
-                    principal.subject_id,
-                    definition.name,
-                ),
+                scope=_idempotency_scope(definition, principal, context),
                 key=key,
                 request_digest=request_digest,
             )
@@ -529,10 +574,11 @@ class ToolBroker:
             )
         return claim
 
-    def _release_idempotency(
+    def _mark_idempotency_dispatched(
         self,
         definition: ToolDefinition,
         principal: IdentityPrincipal,
+        context: Mapping[str, object],
         key: str | None,
         request_digest: str,
     ) -> None:
@@ -543,12 +589,57 @@ class ToolBroker:
                 "IDEMPOTENCY_UNAVAILABLE", "Idempotency store is unavailable"
             )
         try:
-            self._idempotency_store.release(
-                scope=(
-                    principal.organization_id,
-                    principal.subject_id,
-                    definition.name,
-                ),
+            self._idempotency_store.mark_dispatched(
+                scope=_idempotency_scope(definition, principal, context),
+                key=key,
+                request_digest=request_digest,
+            )
+        except Exception as error:
+            # The external executor must not run without a durable dispatch marker.
+            raise ToolExecutionError(
+                "IDEMPOTENCY_UNAVAILABLE",
+                "Tool dispatch was blocked because its state could not be recorded",
+            ) from error
+
+    def _mark_idempotency_indeterminate(
+        self,
+        definition: ToolDefinition,
+        principal: IdentityPrincipal,
+        context: Mapping[str, object],
+        key: str | None,
+        request_digest: str,
+    ) -> None:
+        if not definition.idempotency_required or key is None:
+            return
+        if self._idempotency_store is None:
+            return
+        try:
+            self._idempotency_store.mark_indeterminate(
+                scope=_idempotency_scope(definition, principal, context),
+                key=key,
+                request_digest=request_digest,
+            )
+        except Exception:
+            # DISPATCHED remains durable and already prevents automatic replay.
+            return
+
+    def _release_idempotency(
+        self,
+        definition: ToolDefinition,
+        principal: IdentityPrincipal,
+        context: Mapping[str, object],
+        key: str | None,
+        request_digest: str,
+    ) -> None:
+        if not definition.idempotency_required or key is None:
+            return
+        if self._idempotency_store is None:
+            raise ToolExecutionError(
+                "IDEMPOTENCY_UNAVAILABLE", "Idempotency store is unavailable"
+            )
+        try:
+            self._idempotency_store.release_before_dispatch(
+                scope=_idempotency_scope(definition, principal, context),
                 key=key,
                 request_digest=request_digest,
             )
@@ -561,6 +652,7 @@ class ToolBroker:
         self,
         definition: ToolDefinition,
         principal: IdentityPrincipal,
+        context: Mapping[str, object],
         key: str | None,
         request_digest: str,
         result: ToolResult,
@@ -573,16 +665,15 @@ class ToolBroker:
             )
         try:
             self._idempotency_store.complete(
-                scope=(
-                    principal.organization_id,
-                    principal.subject_id,
-                    definition.name,
-                ),
+                scope=_idempotency_scope(definition, principal, context),
                 key=key,
                 request_digest=request_digest,
                 result=result,
             )
         except Exception as error:
+            self._mark_idempotency_indeterminate(
+                definition, principal, context, key, request_digest
+            )
             raise ToolExecutionError(
                 "IDEMPOTENCY_UNAVAILABLE",
                 "Execution completed but idempotency result was not recorded",
@@ -722,6 +813,82 @@ def _request_digest(
             "TOOL_CONTEXT_INVALID", "Tool request cannot be canonicalized"
         ) from error
     return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _idempotency_scope(
+    definition: ToolDefinition,
+    principal: IdentityPrincipal,
+    context: Mapping[str, object],
+) -> tuple[str, ...]:
+    workflow_run_id = _optional_text(context.get("workflow_run_id"))
+    workflow_step_id = _optional_text(context.get("workflow_step_id"))
+    explicit_operation_id = _optional_text(context.get("operation_id"))
+    if workflow_run_id is not None and workflow_step_id is not None:
+        operation_identity = ["workflow", workflow_run_id, workflow_step_id]
+    elif explicit_operation_id is not None:
+        operation_identity = ["operation", explicit_operation_id]
+    else:
+        operation_identity = ["direct"]
+    operation_id = sha256(
+        json.dumps(
+            operation_identity,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return (
+        principal.organization_id,
+        definition.name,
+        operation_id,
+    )
+
+
+def _restore_idempotency_result(value: object) -> ToolResult | None:
+    if isinstance(value, ToolResult):
+        return value
+    if not isinstance(value, Mapping):
+        return None
+    expected = {
+        "tool_id",
+        "tool_version",
+        "execution_status",
+        "verification_status",
+        "output",
+        "error_code",
+        "policy_decision",
+        "policy_version",
+        "policy_rule_id",
+    }
+    if set(value) != expected or not _is_json_value(value.get("output")):
+        return None
+    try:
+        tool_id = value["tool_id"]
+        tool_version = value["tool_version"]
+        error_code = value["error_code"]
+        policy_version = value["policy_version"]
+        policy_rule_id = value["policy_rule_id"]
+        if not all(
+            isinstance(item, str) and item.strip()
+            for item in (tool_id, tool_version, policy_version)
+        ):
+            return None
+        if error_code is not None and not isinstance(error_code, str):
+            return None
+        if policy_rule_id is not None and not isinstance(policy_rule_id, str):
+            return None
+        return ToolResult(
+            tool_id=tool_id,
+            tool_version=tool_version,
+            execution_status=ToolExecutionStatus(str(value["execution_status"])),
+            verification_status=VerificationStatus(str(value["verification_status"])),
+            output=value["output"],
+            error_code=error_code,
+            policy_decision=PolicyOutcome(str(value["policy_decision"])),
+            policy_version=policy_version,
+            policy_rule_id=policy_rule_id,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _tool_event(

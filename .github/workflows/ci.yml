@@ -119,6 +119,8 @@ jobs:
       - run: pnpm test:migration
       - name: Run durable model usage and budget integration tests
         run: uv run --locked --all-packages pytest tests/integration/test_model_usage_persistence.py -q
+      - name: Run durable Tool idempotency restart and concurrency integration tests
+        run: uv run --locked --all-packages pytest tests/integration/test_postgres_tool_idempotency.py tests/integration/test_tool_idempotency_crash.py -q
       - name: Run PostgreSQL Knowledge unit and revocation tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
       - name: Run PostgreSQL Knowledge ACL integration tests

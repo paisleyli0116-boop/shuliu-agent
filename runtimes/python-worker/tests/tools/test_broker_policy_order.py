@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -48,8 +49,16 @@ def _definition(
         },
         output_schema={
             "type": "object",
-            "properties": {"ok": {"type": "boolean"}},
-            "required": ["ok"],
+            "properties": {
+                "ok": {"type": "boolean"},
+                "evidence_ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(?![\s\S])",
+                },
+            },
+            "required": ["ok", "evidence_ref"],
             "additionalProperties": False,
         },
         permissions=("foundation.document.write",),
@@ -145,11 +154,12 @@ def _broker(
     idempotency_store: object | None = None,
     policy: object | None = None,
     identity: object | None = None,
+    definition: ToolDefinition | None = None,
 ):
     order = order if order is not None else []
     registry = ToolRegistry()
     executor = executor or FakeExecutor(order=order)
-    registry.register(_definition(risk=risk), executor)
+    registry.register(definition or _definition(risk=risk), executor)
     policy = policy or RecordingPolicy(decision, order)
     events = []
     broker = ToolBroker(
@@ -554,6 +564,401 @@ def test_registry_rejects_non_idempotent_write_definition():
     assert rejected.value.code == "TOOL_DEFINITION_INVALID"
 
 
+@pytest.mark.parametrize(
+    "output_schema",
+    [
+        {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "ok": {"type": "boolean"},
+                "evidence_ref": {"type": "string", "minLength": 1},
+            },
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+    ],
+)
+def test_registry_rejects_idempotent_output_without_required_safe_result_reference(
+    output_schema,
+):
+    definition = replace(
+        _definition(),
+        output_schema=output_schema,
+    )
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_nested_requirement_outside_safe_replay_projection():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "allOf": [{"required": ["private_body"]}],
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_min_properties_only_satisfied_by_dropped_output():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {
+            **base.output_schema["properties"],
+            "observation": {"type": "string"},
+        },
+        "minProperties": 3,
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_oneof_that_depends_on_dropped_output_properties():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {
+            **base.output_schema["properties"],
+            "observation": {"type": "string"},
+        },
+        "oneOf": [
+            {"properties": {"observation": {"const": "first"}}},
+            {"properties": {"observation": {"const": "second"}}},
+        ],
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_result_reference_schema_broader_than_safe_projection():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {
+            **base.output_schema["properties"],
+            "evidence_ref": {"type": "string", "minLength": 1},
+        },
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_idempotent_output_schema_accepts_only_persistable_reference_values():
+    registry = ToolRegistry()
+    registry.register(_definition(), FakeExecutor())
+
+    assert registry.validate_output(
+        "foundation.document.write",
+        {"ok": True, "evidence_ref": "evidence-1:result"},
+    )
+    assert not registry.validate_output(
+        "foundation.document.write",
+        {"ok": True, "evidence_ref": "https://host.example/evidence"},
+    )
+    assert not registry.validate_output(
+        "foundation.document.write",
+        {"ok": True, "evidence_ref": "evidence-1\n"},
+    )
+
+
+def test_registry_rejects_applicator_that_makes_required_reference_impossible():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "allOf": [
+            {"properties": {"evidence_ref": {"maxLength": 0}}},
+        ],
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_nested_applicator_inside_required_reference_schema():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {
+            **base.output_schema["properties"],
+            "evidence_ref": {
+                **base.output_schema["properties"]["evidence_ref"],
+                "allOf": [{"maxLength": 0}],
+            },
+        },
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+@pytest.mark.parametrize(
+    "keyword,constraint",
+    [
+        ("patternProperties", {"^evidence_ref$": {"maxLength": 0}}),
+        ("propertyNames", {"pattern": "^x$"}),
+    ],
+)
+def test_registry_rejects_root_schema_that_invalidates_safe_replay_fields(
+    keyword, constraint
+):
+    base = _definition()
+    unsafe_schema = {**base.output_schema, keyword: constraint}
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+@pytest.mark.parametrize(
+    "placement",
+    ["root", "all_of"],
+)
+def test_registry_rejects_max_properties_below_required_replay_fields(placement):
+    base = _definition()
+    unsafe_schema = dict(base.output_schema)
+    if placement == "root":
+        unsafe_schema["maxProperties"] = 0
+    else:
+        unsafe_schema["allOf"] = [{"maxProperties": 0}]
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_required_status_value_dropped_by_replay_projection():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {
+            **base.output_schema["properties"],
+            "status": {"const": "CUSTOM"},
+        },
+        "required": [*base.output_schema["required"], "status"],
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_optional_projected_status_outside_replay_domain():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {
+            **base.output_schema["properties"],
+            "status": {"enum": ["VERIFIED", "CUSTOM"]},
+        },
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+@pytest.mark.parametrize("placement", ["root", "all_of"])
+def test_registry_rejects_empty_safe_error_code_length_range(placement):
+    base = _definition()
+    error_code = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": r"^[A-Z][A-Z0-9_]{0,127}(?![\s\S])",
+    }
+    if placement == "root":
+        error_code.update(minLength=129, maxLength=128)
+    else:
+        error_code["allOf"] = [{"minLength": 129}, {"maxLength": 128}]
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {**base.output_schema["properties"], "error_code": error_code},
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+@pytest.mark.parametrize("placement", ["root_all_of", "nested_all_of"])
+def test_registry_rejects_root_applicator_that_invalidates_optional_error_code(
+    placement,
+):
+    base = _definition()
+    error_code = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": r"^[A-Z][A-Z0-9_]{0,127}(?![\s\S])",
+    }
+    unsafe_branch = {"properties": {"error_code": {"minLength": 129}}}
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {**base.output_schema["properties"], "error_code": error_code},
+        "allOf": [
+            unsafe_branch
+            if placement == "root_all_of"
+            else {"allOf": [unsafe_branch]}
+        ],
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_condition_whose_property_count_changes_after_projection():
+    base = _definition()
+    safe_properties = base.output_schema["properties"]
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {
+            **safe_properties,
+            "status": {
+                "enum": ["VERIFIED", "UNVERIFIED", "FAILED", "OBSERVED", "UNAVAILABLE", "READY", "SUCCEEDED"]
+            },
+            "private_body": {"type": "string"},
+        },
+        "required": ["evidence_ref"],
+        "if": {"maxProperties": 2},
+        "then": {"properties": {"status": {"const": "FAILED"}}},
+        "else": {"properties": {"status": {"const": "VERIFIED"}}},
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_condition_dependent_schema_on_projected_away_property():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {
+            **base.output_schema["properties"],
+            "status": {
+                "enum": ["VERIFIED", "UNVERIFIED", "FAILED", "OBSERVED", "UNAVAILABLE", "READY", "SUCCEEDED"]
+            },
+            "private_body": {"type": "string"},
+        },
+        "required": ["evidence_ref"],
+        "if": {"dependentSchemas": {"private_body": False}},
+        "then": {"properties": {"status": {"const": "FAILED"}}},
+        "else": {"properties": {"status": {"const": "VERIFIED"}}},
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+def test_registry_rejects_nested_if_then_condition_that_changes_after_projection():
+    base = _definition()
+    unsafe_schema = {
+        **base.output_schema,
+        "properties": {
+            **base.output_schema["properties"],
+            "status": {
+                "enum": ["VERIFIED", "UNVERIFIED", "FAILED", "OBSERVED", "UNAVAILABLE", "READY", "SUCCEEDED"]
+            },
+            "private_body": {"type": "string"},
+        },
+        "if": {
+            "if": {},
+            "then": {"maxProperties": 3},
+        },
+        "then": {"properties": {"status": {"const": "FAILED"}}},
+        "else": {"properties": {"status": {"const": "VERIFIED"}}},
+    }
+    definition = replace(base, output_schema=unsafe_schema)
+
+    with pytest.raises(ToolRegistryError) as rejected:
+        ToolRegistry().register(definition, FakeExecutor())
+
+    assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
+@pytest.mark.parametrize(
+    "keyword,constraint,accepted",
+    [
+        ("const", "session-1", True),
+        ("enum", ["session-1"], True),
+        ("const", "session/1", False),
+        ("enum", ["session-1", "session/1"], False),
+    ],
+)
+def test_registry_validates_session_id_const_and_enum_safely(
+    keyword, constraint, accepted
+):
+    base = _definition()
+    session_id = {
+        "type": ["string", "null"],
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\s\S])",
+        "allOf": [{keyword: constraint}],
+    }
+    output_schema = {
+        **base.output_schema,
+        "properties": {**base.output_schema["properties"], "session_id": session_id},
+    }
+    definition = replace(base, output_schema=output_schema)
+
+    if accepted:
+        ToolRegistry().register(definition, FakeExecutor())
+    else:
+        with pytest.raises(ToolRegistryError) as rejected:
+            ToolRegistry().register(definition, FakeExecutor())
+        assert rejected.value.code == "TOOL_DEFINITION_INVALID"
+
+
 def test_unverified_execution_is_not_reported_as_verified_success():
     broker, _, _, events, _ = _broker(executor=FakeExecutor(verified=False))
 
@@ -571,7 +976,11 @@ def test_unverified_execution_is_not_reported_as_verified_success():
 
 
 def test_output_schema_failure_is_not_reported_as_verified_success():
-    broker, _, _, events, _ = _broker(executor=FakeExecutor(output={"ok": "yes"}))
+    broker, _, _, events, _ = _broker(
+        executor=FakeExecutor(
+            output={"ok": True, "unexpected": "not in contract", "evidence_ref": "evidence-invalid"}
+        )
+    )
 
     result = broker.execute(
         "foundation.document.write",
@@ -585,6 +994,62 @@ def test_output_schema_failure_is_not_reported_as_verified_success():
     assert result.verification_status is VerificationStatus.FAILED
     assert result.error_code == "TOOL_OUTPUT_INVALID"
     assert events[0].event_type == "TOOL_EXECUTION_UNVERIFIED"
+
+
+def test_unsafe_trace_id_is_rejected_before_idempotent_side_effect():
+    base = _definition()
+    output_schema = {
+        **base.output_schema,
+        "properties": {
+            **base.output_schema["properties"],
+            "trace_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\s\S])",
+            },
+        },
+        "required": [*base.output_schema["required"], "trace_id"],
+    }
+    definition = replace(base, output_schema=output_schema)
+    executor = FakeExecutor(
+        output={"ok": True, "evidence_ref": "evidence-1", "trace_id": "trace/a"}
+    )
+    broker, executor, _, _, _ = _broker(executor=executor, definition=definition)
+
+    with pytest.raises(ToolExecutionError) as rejected:
+        broker.execute(
+            "foundation.document.write",
+            {"document_id": "doc-1"},
+            _actor(),
+            _context(trace_id="trace/a"),
+            idempotency_key="unsafe-trace",
+        )
+
+    assert rejected.value.code == "TOOL_CONTEXT_INVALID"
+    assert not executor.calls
+
+
+def test_non_idempotent_read_tool_keeps_existing_nonempty_trace_id_contract():
+    definition = _definition(
+        risk=RiskLevel.LOW,
+        idempotency_required=False,
+    )
+    broker, executor, _, _, _ = _broker(
+        risk=RiskLevel.LOW,
+        definition=definition,
+    )
+
+    result = broker.execute(
+        "foundation.document.write",
+        {"document_id": "doc-1"},
+        _actor(),
+        _context(trace_id="trace/a"),
+        idempotency_key=None,
+    )
+
+    assert result.execution_status is ToolExecutionStatus.SUCCEEDED
+    assert len(executor.calls) == 1
 
 
 def test_policy_exception_fails_closed_before_executor():
