@@ -1,0 +1,53 @@
+# Task 31 progress — PDF / Word / Excel Knowledge Ingestion
+
+**Status: IN_PROGRESS; acceptance BLOCKED. Task 32 has not started.**
+
+## Scope
+
+Implement bounded PDF, DOCX, and XLSX parsing into citation-bearing generic knowledge chunks, then route parsed input through the existing Task 30 `ingest_document` path. OCR and role-specific extraction remain out of scope. Task 30 is still recorded as BLOCKED in `docs/evidence/task-30-progress.md`; this Task 31 work does not change that status.
+
+## Worktree checkpoint
+
+- Branch: `feat/foundation-v0.1`
+- HEAD at this checkpoint: `916d25515ee5bd203d951393482e227356297978` (two owner-approval evidence commits were added after the earlier checkpoint).
+- Task 31 work remains uncommitted. Existing Desktop UI work, Task 30 changes/evidence, and untracked `scripts/` are preserved and excluded from Task 31 scope.
+- No main-branch operation, commit, push, real Provider request, or customer-document processing was performed.
+
+## Implementation and security controls
+
+- Added independent PDF, DOCX, and XLSX parser adapters, a common parser contract, bounded stream/archive/XML processing, MIME/extension checks, page/sheet/row/cell/text/chunk limits, and source references (PDF page, DOCX part/paragraph/table row, XLSX sheet/row/cells).
+- Rejects encrypted, malformed, macro-enabled, DTD/entity-bearing, externally referenced, or over-limit inputs with stable safe error codes. Formula expressions are never evaluated; only a file-provided cached value may be included.
+- Added `ingest_file`, which validates trusted server-computed authorization context and requested scope/classification/knowledge permissions before parsing, normalizes and chunks text with source offsets, and calls the existing Task 30 ingestion function only after parsing succeeds. Parser code itself does not access the database, provider gateway, secret store, or operating system.
+- Added locked dependencies `pypdf==6.21.2` and `defusedxml==0.7.1`, with an engineering SPDX/security allowlist at `tests/release/dependency-license-policy.yaml`. The machine-readable policy is now `APPROVED` and links `docs/evidence/task-31-dependency-approval.md`, which records approval of these exact pins, their use for uploaded-document parsing, and the advisory-driven upgrade policy. The pins entered the uncommitted implementation before the required approval; the user explicitly approved them on 2026-10-25, after which the policy was reconciled. No commit or release has included these Task 31 changes. `defusedxml` release cadence remains a recorded maintenance and supply-chain risk; approval does not remove that risk.
+- Dependency review evidence checked on 2026-10-25: [PyPI pypdf 6.21.2](https://pypi.org/project/pypdf/6.21.2/) lists BSD-3-Clause and release provenance; upstream [release notes](https://github.com/py-pdf/pypdf/releases) and the ten currently published [pypdf advisories](https://github.com/py-pdf/pypdf/security/advisories) show fixes no newer than 6.21.2. The code uses read-only `PdfReader` text extraction, and Pillow is absent from the lockfile. [PyPI defusedxml 0.7.1](https://pypi.org/project/defusedxml/0.7.1/) and [upstream releases](https://github.com/tiran/defusedxml/releases) list 2021-03-08 as the latest stable release, one PyPI maintainer, and no artifact provenance; its [GitHub advisory page](https://github.com/tiran/defusedxml/security/advisories) lists no published advisories. This leaves a material maintenance/supply-chain risk. The application owner and knowledge owner approved the pins, uploaded-document parsing use, and advisory-driven upgrade policy on 2026-10-25; the machine-readable policy links that approval record. The pins remain uncommitted and are not a release approval.
+- Parser test documents are constructed deterministically in memory. The fixture directory explicitly prohibits real customer documents and secrets.
+
+## TDD and local verification evidence
+
+- Initial RED: the four planned parser/ingestion test modules failed collection because `app.knowledge.parsers` did not exist.
+- Follow-up RED: new encrypted-Office and authorization-context cases failed against the first implementation (`DOCUMENT_MALFORMED` for OLE-encrypted Office input, and an incomplete trusted context reached the parser). Both defects were corrected with narrow changes.
+- Additional RED: a DOCX with a corrupt DEFLATE stream raised raw `zlib.error` rather than a stable parser error. `read_xml_part` now maps decompression exceptions to `DOCUMENT_MALFORMED` without exposing exception text.
+- Additional RED: a legal binary stream that returned three bytes per `read()` call was truncated to its first read. `read_bounded_stream` now collects short reads until EOF while stopping at `max_bytes + 1`; the regression test is GREEN (**1 passed**).
+- Previously recorded baseline before the XLSX resource-bound regression: planned Task 31 tests **19 passed, 1 skipped**; full Cloud API Knowledge suite **31 passed, 3 skipped**; `pnpm test:security` **4 files passed, 10 tests passed**; Python in-memory syntax compilation **10 files passed**. The skips required PostgreSQL and were not counted as passes.
+- Fresh locked dependency check for this continuation: `uv lock --check --offline --cache-dir <task temp cache>` resolved 98 packages and passed.
+- After the offline attempts above, a task-specific temporary environment was successfully prepared from the locked Cloud API package and root `dev` group; the protected repository `.venv` was not changed. The current code ran the focused parser suite with the new approval assertion excluded: **19 passed, 1 skipped, 1 deselected**. The skipped case needs PostgreSQL; the deselected case is the approval-policy consistency test described below. The complete Cloud API Knowledge suite under the same exclusion was **31 passed, 3 skipped, 1 deselected**. `pnpm test:security` was **4 files passed, 10 tests passed**.
+- New XLSX resource-bound regression: RED reproduced that an over-limit first cell followed by an invalid shared-string cell returned `DOCUMENT_MALFORMED`, because the parser continued through the row before checking the text bound. The fix incrementally accounts projected row text before retaining each cell. `test_xlsx_parser.py` is now **5 passed**, including the regression. The focused four-file suite and Knowledge suite above include this fix.
+- A test-first approval-consistency assertion requires an approved policy status and a linked approval record. RED reproduced the mismatch while policy status was `PENDING_KNOWLEDGE_OWNER_AND_REPOSITORY_OWNER_APPROVAL`. After the user explicitly approved the dependency policy, the allowlist was updated to `APPROVED` with the approval-record link; the exact consistency test is GREEN (**1 passed**). After the short-read regression fix, the complete focused parser/ingestion suite is **21 passed, 1 skipped**; the full Cloud API Knowledge suite is **33 passed, 3 skipped**. PostgreSQL-dependent tests remain skipped, not passed.
+- `pnpm test:security` rerun after the short-read fix: **4 files passed, 10 tests passed**.
+- `tests/integration -m integration` run using the project Python 3.11.9 environment and pytest 9.1.1: **8 passed, 3 skipped, 1 deselected**. The deselected test is marked `real_embedding`; no real provider call was made. The two Task 31 PostgreSQL-marked Knowledge integration tests were run separately and both skipped because `SHULIU_DATABASE_URL` is unset (**2 skipped, 34 deselected**).
+- Full workspace `python -B -m pytest -m integration -q -p no:cacheprovider` ran: **17 failed, 37 passed, 7 skipped, 609 deselected**. All 17 failures are existing real Browser Runtime tests failing during `Browser.start()` with the safe diagnostic `BROWSER_START_START_BROWSER_FAILED` at `start_browser`; no browser fix was attempted because it is outside Task 31. This means the full workspace integration gate is not green.
+- The `pnpm test:integration` wrapper's Vitest stage exited successfully with no matching test files. Its pinned `uvx --from uv==0.12.20` stage stalled downloading the 17.3 MiB uv tool and was interrupted. A direct locked all-package sync using a task-specific temporary cache stalled while downloading `litellm-core`; the default uv cache could not be initialized due Windows access denied. The Python integration tests were instead executed directly from the existing project environment as recorded above.
+- Dependency vulnerability scan attempt: `uv export --locked --package shuliu-cloud-api` resolved 98 locked packages and wrote a hashed requirements file under `%TEMP%`. `pip-audit` was installed in a temporary tool environment. Its first run could not create its default cache under `%LOCALAPPDATA%` (WinError 5); after specifying a temporary cache, the advisory query produced no result within 60 seconds and was interrupted. The scan is **NOT RUN / inconclusive**, not passed. Tool, cache, and exported requirements remained outside the repository.
+- `compileall` was attempted but could not write `__pycache__` under the protected checkout (Windows access denied); no source files were changed by that attempt. No Ruff or mypy executable is installed in this environment.
+- No PostgreSQL ingestion/retrieval result or real Embedding response was obtained. Fake embedding tests are not represented as real-provider evidence.
+- Local database availability check: `docker.exe`, `psql.exe`, and `pg_isready.exe` were not found; no PostgreSQL Windows service was listed; TCP `127.0.0.1:5432` was unreachable. Therefore the PostgreSQL integration remains skipped for a confirmed environment reason, not a passing result.
+
+## Remaining acceptance gates
+
+1. Task 30 must supply its required PostgreSQL 17/18 and approved real-Embedding closure evidence before Task 31 can pass its dependency gate.
+2. Resolve the full workspace integration failures in the Browser Runtime under its own task scope; Task 31 does not change Browser Runtime code.
+3. Run Task 31 DOCX ingestion/retrieval against a real supported PostgreSQL service and the approved Task 30 embedding gateway; the database tests are skipped and no real provider response exists.
+4. Complete a dependency vulnerability scan; the `pip-audit` advisory query did not return data. Dependency policy approval is recorded, but the scan remains a separate technical gate.
+5. Run exact-SHA CI after the scoped changes are reviewed and committed under the project's approved delivery process. No CI was started here.
+
+Until these gates have evidence, Task 31 remains **IN_PROGRESS / acceptance BLOCKED**, and Task 32 remains **not started**.

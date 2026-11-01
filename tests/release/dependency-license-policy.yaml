@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "reviewed_on": "2026-10-25",
+  "approval_status": "APPROVED",
+  "approval_record": "docs/evidence/task-31-dependency-approval.md",
+  "allowed_spdx_licenses": ["BSD-3-Clause", "PSF-2.0"],
+  "dependencies": [
+    {
+      "name": "pypdf",
+      "version": "6.21.2",
+      "license": "BSD-3-Clause",
+      "purpose": "Extract page text and page citations from PDF files.",
+      "source": "https://pypi.org/project/pypdf/6.21.2/",
+      "maintenance_review": "PyPI lists 6.21.2 as released 2026-10-21; the upstream release tag is signed and the PyPI files have provenance. The parser uses PdfReader/page text extraction only, not writer/form mutation APIs. Pillow is absent from the repository lock, so the optional image-parser path is not installed by this project.",
+      "security_review": {
+        "advisories_reviewed": [
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-5hx5-vpf9-5wcv",
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-gmh7-3g9r-mjh5",
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-6vvc-x485-93v7",
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-jr96-gvgh-j3r4",
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-39mj-jf6j-2qj3",
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-f54x-cmq8-qg57",
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-qfv9-64jg-mh7p",
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-9mx8-4j7g-633p",
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-php9-fj8v-98fj",
+          "https://github.com/py-pdf/pypdf/security/advisories/GHSA-6c7f-9265-g8fw"
+        ],
+        "selected_version_includes_known_fixes": true,
+        "optional_image_dependencies_added": false
+      },
+      "processing_controls": [
+        "Bound input bytes before parser construction.",
+        "Use strict PDF parsing; reject encrypted and malformed documents.",
+        "Check page count before extracting text and bound accumulated output.",
+        "Treat scanned PDFs without extractable text as DOCUMENT_TEXT_UNAVAILABLE."
+      ]
+    },
+    {
+      "name": "defusedxml",
+      "version": "0.7.1",
+      "license": "PSF-2.0",
+      "purpose": "Parse OOXML parts while rejecting DTDs, entity declarations, and external entities.",
+      "source": "https://pypi.org/project/defusedxml/0.7.1/",
+      "maintenance_review": "PyPI and upstream show 0.7.1 (2021-03-08) as the latest stable release; PyPI lists one maintainer and no artifact provenance. GitHub currently lists no published repository advisories. The low release frequency and unprovenanced artifacts are material maintenance/supply-chain risks requiring owner acceptance.",
+      "security_review": {
+        "repository_advisories": "https://github.com/tiran/defusedxml/security/advisories",
+        "known_published_advisories": 0,
+        "parser_flags": ["forbid_dtd", "forbid_entities", "forbid_external"]
+      },
+      "processing_controls": [
+        "Validate archive member names and reject duplicate, encrypted, macro, and unsupported entries.",
+        "Bound compressed size, total uncompressed size, member count, and per-member compression ratio before reading XML.",
+        "Parse only required workbook/document XML parts and bound element, row, cell, sheet, section, and text counts."
+      ]
+    }
+  ],
+  "approval_note": "This is technical evidence only, not legal advice or approval. The Task 31 dependency pins are present in the current uncommitted implementation but remain unapproved because the plan requires review before lockfile inclusion. Do not treat the allowlist as authorization to release; Knowledge Owner and Repository Owner must explicitly accept the licensing and defusedxml maintenance risks or request a different implementation."
+}
