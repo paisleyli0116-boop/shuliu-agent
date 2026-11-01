@@ -1,32 +1,51 @@
 import { useEffect, useState } from "react";
 import type { RendererApi, RuntimeHealth } from "../preload/api";
 import { getRendererApi } from "./api/client";
+import { Button, Card, DataNotice, PageHeader, StatusIndicator } from "./components/design-system";
 import { RuntimeHealth as RuntimeHealthCard } from "./components/runtime-health";
-import { ApprovalsRoute } from "./routes/approvals";
+import { CapabilityRoute, type CapabilityPage } from "./routes/capabilities";
 import { ProvidersRoute } from "./routes/settings/providers";
-import { TasksRoute } from "./routes/tasks";
+import { WorkbenchRoute, type WorkbenchDestination } from "./routes/workbench";
 
-type Page = "tasks" | "approvals" | "runtime" | "providers";
-const navigation: Array<{ id: Page; label: string; icon: string; section: "工作台" | "设置" }> = [
-  { id: "tasks", label: "任务", icon: "▤", section: "工作台" },
-  { id: "approvals", label: "审批", icon: "◷", section: "工作台" },
-  { id: "runtime", label: "运行状态", icon: "◉", section: "工作台" },
-  { id: "providers", label: "模型与连接", icon: "⌘", section: "设置" },
+type Page = "workbench" | CapabilityPage | "tasks" | "models" | "settings";
+type NavigationItem = { id: Page; label: string; icon: string };
+const navigation: Array<{ section: string; items: NavigationItem[] }> = [
+  { section: "工作台", items: [{ id: "workbench", label: "智能工作台", icon: "⌂" }] },
+  { section: "AI 工作空间", items: [
+    { id: "chat", label: "AI 对话", icon: "✦" },
+    { id: "agents", label: "岗位 Agent", icon: "◇" },
+    { id: "tasks", label: "任务中心", icon: "▤" },
+    { id: "workflows", label: "工作流", icon: "⑂" },
+    { id: "knowledge", label: "知识库", icon: "▧" },
+  ] },
+  { section: "能力配置", items: [
+    { id: "models", label: "模型与连接", icon: "◉" },
+    { id: "tools", label: "工具与 Skills", icon: "⌘" },
+  ] },
+  { section: "治理", items: [
+    { id: "runs", label: "审批与运行记录", icon: "◷" },
+    { id: "settings", label: "系统设置", icon: "⚙" },
+  ] },
 ];
+
 const pageTitles: Record<Page, { title: string; description: string }> = {
-  tasks: { title: "任务工作台", description: "创建和跟踪通用 Agent 任务。" },
-  approvals: { title: "人工审批", description: "查看需要人工判断的操作请求。" },
-  runtime: { title: "运行状态", description: "检查 Desktop 与 Python Runtime 的连接状态。" },
-  providers: { title: "模型与连接", description: "管理可用模型的安全凭据，并手动验证 Provider 连接。" },
+  workbench: { title: "智能工作台", description: "从真实运行状态进入当前可用的 Foundation 能力。" },
+  chat: { title: "AI 对话", description: "会话执行接口尚未接入；页面会明确展示可用模型目录和当前缺口。" },
+  agents: { title: "岗位 Agent", description: "当前 Foundation 不包含行业岗位 Agent 的产品实现。" },
+  tasks: { title: "任务中心", description: "当前没有连接真实的持久化任务与 Agent 执行服务。" },
+  workflows: { title: "工作流", description: "通用 Workflow Engine 已存在，Desktop 管理和执行接口尚未接入。" },
+  knowledge: { title: "知识库", description: "Knowledge 服务与 Desktop 身份、ACL 入口尚未闭环。" },
+  models: { title: "模型与连接", description: "查看 Python Runtime 当前 Provider Profile，并通过受控流程管理凭据。" },
+  tools: { title: "工具与 Skills", description: "当前没有 Desktop Skill 目录、权限配置或运行证据查询接口。" },
+  runs: { title: "审批与运行记录", description: "真实审批服务与持久化运行审计尚未接入桌面。" },
+  settings: { title: "系统设置", description: "查看真实 Desktop 与 Python Sidecar 健康状态。" },
 };
 
 export function App({ api: providedApi }: { api?: RendererApi }) {
   const api = providedApi ?? getRendererApi();
-  const [page, setPage] = useState<Page>("tasks");
+  const [page, setPage] = useState<Page>("workbench");
   const [health, setHealth] = useState<RuntimeHealth | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
-  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
-
   const refreshHealth = async () => {
     setHealthLoading(true);
     try {
@@ -39,15 +58,11 @@ export function App({ api: providedApi }: { api?: RendererApi }) {
   };
 
   useEffect(() => { void refreshHealth(); }, []);
-  useEffect(() => {
-    let active = true;
-    void api.approvals.list().then((approvals) => {
-      if (active) setPendingApprovalCount(approvals.filter((approval) => approval.status === "PENDING").length);
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [api]);
   const safeMode = health?.status === "safe_mode" || health?.status === "unhealthy";
   const activePage = pageTitles[page];
+  const runtimeTone = health?.status === "healthy" ? "success" : health?.status === "degraded" ? "warning" : health ? "danger" : "neutral";
+
+  const navigate = (destination: WorkbenchDestination) => setPage(destination);
 
   return (
     <div className="desktop-shell">
@@ -56,23 +71,21 @@ export function App({ api: providedApi }: { api?: RendererApi }) {
           <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
           <span><strong>ShuLiu</strong><small>AGENT FOUNDATION</small></span>
         </div>
-        <div className="workspace-chip"><span className="workspace-avatar">S</span><span><strong>Foundation Workspace</strong><small>V0.1 · 本地工作区</small></span><span className="chevron">⌄</span></div>
+        <div className="workspace-chip"><span className="workspace-avatar">S</span><span><strong>Foundation Workspace</strong><small>V0.1 · 本地工作区</small></span><span className="chevron" aria-hidden="true">⌄</span></div>
         <nav aria-label="主导航" className="sidebar-nav">
-          {(["工作台", "设置"] as const).map((section) => (
-            <div className="nav-group" key={section}>
-              <span className="nav-group__label">{section}</span>
-              {navigation.filter((item) => item.section === section).map((item) => (
+          {navigation.map((group) => (
+            <div className="nav-group" key={group.section}>
+              <span className="nav-group__label">{group.section}</span>
+              {group.items.map((item) => (
                 <button key={item.id} type="button" aria-label={item.label} className={`nav-item ${page === item.id ? "nav-item--active" : ""}`} aria-current={page === item.id ? "page" : undefined} onClick={() => setPage(item.id)}>
-                  <span className="nav-item__icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>
-                  {item.id === "approvals" && pendingApprovalCount > 0 && <span className="nav-item__count">{pendingApprovalCount}</span>}
+                  <span className={`nav-item__icon ${item.id === "chat" || item.id === "models" ? "nav-item__icon--ai" : ""}`} aria-hidden="true">{item.icon}</span><span className="nav-item__label">{item.label}</span>
                 </button>
               ))}
             </div>
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="sidebar-health"><RuntimeHealthCard health={health} compact /></div>
-          <div className="user-row"><span className="user-avatar">星</span><span><strong>本地管理员</strong><small>单公司内部版</small></span><button className="icon-button" aria-label="账户菜单" title="账户菜单" onClick={() => setPage("runtime")}>···</button></div>
+          <div className="workspace-footnote"><span className="workspace-footnote__mark">SL</span><span><strong>Foundation V0.1</strong><small>安全边界受控运行</small></span></div>
         </div>
       </aside>
 
@@ -80,60 +93,59 @@ export function App({ api: providedApi }: { api?: RendererApi }) {
         <header className="topbar">
           <div className="breadcrumb"><span>ShuLiu Agent</span><span className="breadcrumb__slash">/</span><strong>{activePage.title}</strong></div>
           <div className="topbar-actions">
-            <span className="demo-chip"><span className="demo-dot" />LOCAL DEMO</span>
-            <span className={`runtime-indicator ${health?.status === "healthy" ? "runtime-indicator--healthy" : ""}`}>
-              <span className="status-dot status-dot--healthy" />{healthLoading ? "检查中" : health?.status === "healthy" ? "Sidecar 在线" : safeMode ? "Safe Mode" : "状态待检查"}
-            </span>
+            <span className="workspace-context">本地工作区</span>
+            <StatusIndicator tone={runtimeTone} label={healthLoading ? "检查中" : health?.status === "healthy" ? "Sidecar 在线" : safeMode ? "Safe Mode" : "状态待检查"} />
           </div>
         </header>
 
         {safeMode && (
           <div className="safe-mode-banner" role="alert">
             <span className="safe-mode-icon" aria-hidden="true">!</span>
-            <div><strong>Safe Mode 已启用</strong><span>Python Runtime 不可用或状态不安全。任务执行和审批决策已暂停；你仍可查看状态并调整模型设置。</span></div>
-            <button className="text-button" onClick={() => setPage("runtime")}>查看状态</button>
+            <div><strong>Safe Mode 已启用</strong><span>Python Runtime 不可用或状态不安全。任务执行和审批决策已暂停；可继续查看状态与模型设置。</span></div>
+            <Button variant="quiet" onClick={() => setPage("settings")}>查看状态</Button>
           </div>
         )}
 
         <section className="page-content">
-          <div className="page-heading">
-            <div><span className="eyebrow">SHULIU FOUNDATION · V0.1</span><h1>{activePage.title}</h1><p>{activePage.description}</p></div>
-            <div className="page-heading__status"><RuntimeHealthCard health={health} compact /></div>
-          </div>
-          <div className="demo-banner"><span className="demo-banner__icon" aria-hidden="true">i</span><span><strong>演示工作区</strong>　任务与审批数据为当前进程内的演示数据；Provider 连接测试通过 Python Sidecar 的 Model Gateway 执行。API Key 仅通过受控 IPC 写入系统安全存储。</span></div>
+          <PageHeader eyebrow="SHULIU FOUNDATION · V0.1" title={activePage.title} description={activePage.description} />
 
-          {page === "tasks" && <TasksRoute api={api} safeMode={safeMode} />}
-          {page === "approvals" && <ApprovalsRoute api={api} safeMode={safeMode} onPendingCountChange={setPendingApprovalCount} />}
-          {page === "runtime" && <RuntimeRoute api={api} health={health} loading={healthLoading} refresh={refreshHealth} />}
-          {page === "providers" && <ProvidersRoute api={api} />}
+          {page === "workbench" && <WorkbenchRoute api={api} health={health} onNavigate={navigate} />}
+          {page === "chat" && <CapabilityRoute page="chat" api={api} />}
+          {page === "agents" && <CapabilityRoute page="agents" api={api} />}
+          {page === "tasks" && <CapabilityRoute page="tasks" api={api} />}
+          {page === "workflows" && <CapabilityRoute page="workflows" api={api} />}
+          {page === "knowledge" && <CapabilityRoute page="knowledge" api={api} />}
+          {page === "models" && <ProvidersRoute api={api} />}
+          {page === "tools" && <CapabilityRoute page="tools" api={api} />}
+          {page === "runs" && <CapabilityRoute page="runs" api={api} />}
+          {page === "settings" && <RuntimeRoute health={health} loading={healthLoading} refresh={refreshHealth} />}
 
-          <footer className="content-footer"><span>ShuLiu Agent Foundation</span><span>Protocol v1 <i /> 安全边界已启用</span></footer>
+          <footer className="content-footer"><span>ShuLiu Agent Foundation</span><span>Protocol v1 <i /> 安全策略由 Runtime 执行</span></footer>
         </section>
       </main>
     </div>
   );
 }
 
-function RuntimeRoute({ api, health, loading, refresh }: {
-  api: RendererApi;
+function RuntimeRoute({ health, loading, refresh }: {
   health: RuntimeHealth | null;
   loading: boolean;
   refresh(): Promise<void>;
 }) {
   return (
     <div className="page-stack">
-      <section className="panel runtime-panel">
+      <Card className="runtime-panel">
         <div className="panel-heading">
-          <div><span className="eyebrow">RUNTIME HEALTH</span><h2>核心组件</h2></div>
-          <button className="button button--secondary" onClick={() => void refresh()} disabled={loading}>{loading ? "检查中…" : "重新检查"}</button>
+          <div><span className="eyebrow">RUNTIME HEALTH</span><h2>桌面运行环境</h2></div>
+          <Button variant="secondary" onClick={() => void refresh()} disabled={loading}>{loading ? "检查中…" : "重新检查"}</Button>
         </div>
         <div className="runtime-primary">
           <RuntimeHealthCard health={health} />
           <div><strong>Electron ↔ Python Sidecar</strong><span>stdio + NDJSON · protocol v1</span><small>状态由真实 Python 子进程握手和 health 请求返回。</small></div>
         </div>
-        {health?.status === "safe_mode" || health?.status === "unhealthy" ? <div className="runtime-error" role="alert"><strong>Safe Mode</strong><span>新任务已暂停。检查 Python 环境或协议版本后重新检查运行状态。</span><code>{health.code ?? "RUNTIME_UNHEALTHY"}</code></div> : health?.status === "healthy" ? <div className="runtime-ok"><span className="status-dot status-dot--healthy" /><span>健康检查通过，允许继续查看工作台。</span></div> : null}
-      </section>
-      <section className="panel runtime-boundary"><span className="eyebrow">INTEGRATION STATUS</span><h3>其他 Foundation 服务</h3><p>Cloud API、Knowledge、Model Gateway、Browser Runtime 与 Worker 的桌面状态接入会随相应子系统实现逐步开放。当前页面不会用演示数据伪装这些组件已连接。</p></section>
+        {health?.status === "safe_mode" || health?.status === "unhealthy" ? <div className="runtime-error" role="alert"><strong>Safe Mode</strong><span>新任务已暂停。检查 Python 环境或协议版本后重新检查运行状态。</span><code>{health.code ?? "RUNTIME_UNHEALTHY"}</code></div> : health?.status === "healthy" ? <div className="runtime-ok"><StatusIndicator tone="success" label="健康检查通过" /><span>允许继续查看工作台。</span></div> : null}
+      </Card>
+      <Card className="runtime-boundary"><span className="eyebrow">SETTINGS STATUS</span><h3>其他设置入口</h3><p>系统偏好、用户身份、Agent 目录、知识库权限和审计记录当前没有 Desktop API。页面不会提供无法保存的设置控件。</p><DataNotice title="真实健康状态">运行状态来自 Desktop 与 Python Sidecar 的 IPC；Cloud、Knowledge、Workflow 和 Worker 的状态还没有接入桌面。</DataNotice></Card>
     </div>
   );
 }

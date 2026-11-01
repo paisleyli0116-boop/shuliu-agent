@@ -14,7 +14,7 @@ describe("runtime health workspace", () => {
     const api = createFakeApi({ runtime: { health: { get: health } } as never });
     render(<App api={api} />);
 
-    await user.click(screen.getByRole("button", { name: "运行状态" }));
+    await user.click(screen.getByRole("button", { name: "系统设置" }));
     expect(screen.getByText("Safe Mode 已启用")).toBeTruthy();
     expect(screen.getAllByText(/新任务已暂停/).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "重新检查" }));

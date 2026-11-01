@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ProviderCatalog, RendererApi } from "../../preload/api";
+import { Button, InputField, SelectField, Toast } from "./design-system";
 import { safeUiError } from "../api/client";
 import { createProviderSettingsClient } from "../api/providers";
 
@@ -222,19 +223,15 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
 
         </div>
 
-        <label className="field">
-          <span>Provider</span>
-          <select value={providerId} onChange={(event) => chooseProvider(event.currentTarget.value)} disabled={busy}>
+        <SelectField label="Provider" value={providerId} onChange={(event) => chooseProvider(event.currentTarget.value)} disabled={busy}>
             {catalog.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
-          </select>
-        </label>
+        </SelectField>
 
-        <label className="field">
-          <span>Model</span>
-          <select value={selectedModel.id} onChange={(event) => { setModelId(event.currentTarget.value); setFeedback(null); }} disabled={busy}>
-            {selectedProvider.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
-          </select>
-        </label>
+        <div className="field">
+          <span>当前 Profile 模型</span>
+          <output className="field-readonly">{selectedModel.id}</output>
+          <small>模型标识来自 Python Runtime 配置；此处不会更改系统默认路由。</small>
+        </div>
 
         <div className="capability-list" aria-label="模型能力">
           <span className="field__caption">能力</span>
@@ -250,9 +247,8 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
         )}
 
         {showCredentialInput && (
-          <label className="field">
-            <span>API Key</span>
-            <input
+          <InputField
+              label="API Key"
               type="password"
               autoComplete="new-password"
               value={apiKey}
@@ -260,23 +256,22 @@ export function ProviderProfileForm({ api }: { api: RendererApi }) {
               placeholder="仅在此处输入，不会回显已保存凭据"
               spellCheck={false}
               disabled={busy}
-            />
-            <small>密钥通过受控 IPC 写入系统安全存储；页面不会读取或回显已保存密钥。</small>
-          </label>
+              hint="密钥通过受控 IPC 写入系统安全存储；页面不会读取或回显已保存密钥。"
+          />
         )}
 
         <div className="button-row">
-          <button className="button button--secondary" onClick={() => void testConnection()} disabled={busy || selectedModel.capabilities.length === 0}>
+          <Button variant="secondary" onClick={() => void testConnection()} disabled={busy || selectedModel.capabilities.length === 0}>
             {busy ? "处理中…" : "测试连接"}
-          </button>
+          </Button>
           {showCredentialInput && (
-            <button className="button button--primary" onClick={() => void saveCredential()} disabled={busy || apiKey.trim().length < 8}>
+            <Button variant="primary" onClick={() => void saveCredential()} disabled={busy || apiKey.trim().length < 8}>
               {selectedProvider.configured ? "保存新密钥" : "保存配置"}
-            </button>
+            </Button>
           )}
         </div>
 
-        {feedback && <div className={`feedback feedback--${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</div>}
+        {feedback && <Toast tone={feedback.kind}>{feedback.message}</Toast>}
       </section>
 
       <aside className="panel provider-notice">

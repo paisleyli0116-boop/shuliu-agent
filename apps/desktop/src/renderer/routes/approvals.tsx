@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ApprovalSummary, RendererApi } from "../../preload/api";
+import { Button, DataNotice, EmptyState } from "../components/design-system";
 
 const statusLabels: Record<ApprovalSummary["status"], string> = {
   PENDING: "待处理",
@@ -53,10 +54,10 @@ export function ApprovalsRoute({ api, safeMode, onPendingCountChange }: {
         <div><span className="eyebrow">HUMAN REVIEW</span><h2>审批</h2></div>
         <span className="simulation-tag">演示审批</span>
       </div>
-      <p className="muted">以下请求用于展示人工审批界面，不会触发真实 Tool 执行。</p>
+      <DataNotice tone="warning" title="本地演示审批">列表来自 Electron 进程内演示服务；批准或拒绝只修改演示状态，不会调用 Policy、Approval Service 或 Tool。</DataNotice>
       {error && <div className="inline-error" role="alert">{error}</div>}
       {loading ? <div className="loading-state">正在读取审批…</div> : approvals.length === 0 ? (
-        <div className="empty-state"><span className="empty-state__mark" aria-hidden="true">✓</span><strong>当前没有待处理审批</strong><span>新的请求需要由 Policy Engine 判断后进入此处。</span></div>
+        <EmptyState title="当前没有演示审批" description="真实审批服务与持久化运行记录尚未接入此桌面端。" icon="✓" />
       ) : (
         <div className="approval-list">
           {approvals.map((approval) => (
@@ -69,8 +70,8 @@ export function ApprovalsRoute({ api, safeMode, onPendingCountChange }: {
                 <span className={`pill pill--${approval.status.toLowerCase()}`}>{statusLabels[approval.status]}</span>
                 {approval.status === "PENDING" && (
                   <>
-                    <button className="button button--secondary" onClick={() => void decide(approval.approval_id, "deny")} disabled={safeMode || busyId === approval.approval_id}>拒绝</button>
-                    <button className="button button--primary" onClick={() => void decide(approval.approval_id, "approve")} disabled={safeMode || busyId === approval.approval_id}>批准</button>
+                    <Button variant="secondary" onClick={() => void decide(approval.approval_id, "deny")} disabled={safeMode || busyId === approval.approval_id}>演示拒绝</Button>
+                    <Button variant="primary" onClick={() => void decide(approval.approval_id, "approve")} disabled={safeMode || busyId === approval.approval_id}>演示批准</Button>
                   </>
                 )}
               </div>

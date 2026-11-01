@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RendererApi, TaskSummary } from "../../preload/api";
+import { Button, DataNotice, EmptyState } from "../components/design-system";
 import { safeUiError } from "../api/client";
 
 const statusLabels: Record<TaskSummary["status"], string> = {
@@ -50,19 +51,17 @@ export function TasksRoute({ api, safeMode }: { api: RendererApi; safeMode: bool
   };
 
   return (
-    <div className="page-grid page-grid--tasks">
+    <div className="page-stack">
+      <DataNotice title="本地演示任务队列">这些条目仅保存在当前桌面进程中，不会启动 Agent、调用 Tool 或生成真实执行结果。真实任务运行接口尚未接入。</DataNotice>
+      <div className="page-grid page-grid--tasks">
       <section className="panel task-list-panel">
         <div className="panel-heading">
-          <div><span className="eyebrow">WORK QUEUE</span><h2>任务</h2></div>
-          <button className="button button--quiet" onClick={() => void load()} disabled={loading}>刷新</button>
+          <div><span className="eyebrow">WORK QUEUE</span><h2>任务列表</h2></div>
+          <Button variant="quiet" onClick={() => void load()} disabled={loading}>刷新队列</Button>
         </div>
         <div className="table-head"><span>任务名称</span><span>状态</span><span>创建时间</span></div>
         {loading ? <div className="loading-state">正在读取任务…</div> : tasks.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-state__mark" aria-hidden="true">＋</span>
-            <strong>还没有任务</strong>
-            <span>创建一个通用任务，体验 Foundation 工作流界面。</span>
-          </div>
+          <EmptyState title="还没有演示任务" description="创建一个本地演示项以查看列表布局；它不会进入 Agent 执行流程。" icon="＋" />
         ) : (
           <div className="task-list">
             {tasks.map((task) => (
@@ -74,7 +73,7 @@ export function TasksRoute({ api, safeMode }: { api: RendererApi; safeMode: bool
             ))}
           </div>
         )}
-        {error && <div className="inline-error" role="alert">{error}<button className="text-button" onClick={() => void load()}>重新加载</button></div>}
+        {error && <div className="inline-error" role="alert">{error}<Button variant="quiet" onClick={() => void load()}>重新加载</Button></div>}
       </section>
 
       <section className="panel create-task-panel">
@@ -88,11 +87,12 @@ export function TasksRoute({ api, safeMode }: { api: RendererApi; safeMode: bool
             <small>{title.length}/120</small>
           </label>
           {safeMode && <p className="inline-warning">Safe Mode 下暂停创建任务。</p>}
-          <button className="button button--primary button--full" type="submit" disabled={busy || safeMode || title.trim().length < 2}>
-            {busy ? "正在创建…" : "创建任务"}
-          </button>
+          <Button variant="primary" className="button--full" type="submit" disabled={busy || safeMode || title.trim().length < 2}>
+            {busy ? "正在创建…" : "创建演示任务"}
+          </Button>
         </form>
       </section>
+      </div>
     </div>
   );
 }
