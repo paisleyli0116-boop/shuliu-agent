@@ -117,3 +117,9 @@ Task 34 remains **IN_PROGRESS / acceptance BLOCKED**. The production composition
   - Worker generation / lease fencing 仍是协议与测试夹具层面的证明，未走真实 Workflow → Tool Broker → repository 路径；
   - crash-before-checkpoint 与 Tool-dispatched-before-ACK 两个窗口未在生产链路证明；
   - 无生产安装包恢复与平台矩阵证据。
+
+## Owner 批准（2026-11-02）
+
+- 所有者已确认上方「需要 owner 确认的设计决策」：**同意**「未配置 coordinator → 普通重启；配置 coordinator → 按策略恢复/等待/安全模式」的语义，放弃「无配置即 Safe Mode」的原写法。
+- 该决策已由 Windows 实机验收（IPC 契约 2/2、崩溃恢复 48/48、真实桌面冒烟）佐证。
+- 本任务剩余阻塞不变：生产 main 接入 RecoveryCoordinator、fencing 走真实链路、两个崩溃窗口的生产链路证明与安装包矩阵证据。

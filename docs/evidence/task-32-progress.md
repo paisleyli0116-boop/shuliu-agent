@@ -42,3 +42,8 @@ The plan's acceptance commands (`pnpm test:integration`, `pnpm test:security`, P
 - Windows Validation run `41310851060`：**success**，35/35 步。
 - 本任务的 PostgreSQL 集成模块 `tests/integration/test_knowledge_server_rbac.py` 之前只在无数据库的通用 job 中 skip。已将它加入 `PostgreSQL migration` job 的 Knowledge ACL 步骤并标记 `pytest.mark.postgres`，使真实 RBAC / 撤权 / 审计写入在 PG17 与 PG18 上执行。
 - 仍待完成：Cloud / Security owner 对跨组织伪造、撤权与 Trace / Audit 证据的独立审查。
+
+## Owner 批准（2026-11-02）
+
+- 所有者已审查本任务的跨组织伪造、撤权与 Trace / Audit 证据（含 CI run `41312173780` 真实 PG17/18 执行与 Windows 实机功能验收），批准通过。
+- 本任务验收状态由 BLOCKED 变更为 **PASSED**。
