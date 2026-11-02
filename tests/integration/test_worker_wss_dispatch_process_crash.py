@@ -94,6 +94,7 @@ def _worker_process(
     certificate_path: str,
     database_path: str,
     effect_path: str,
+    now_iso: str,
     *,
     expect_reconciliation: bool,
 ) -> None:
@@ -194,7 +195,11 @@ def _worker_process(
     )
     try:
         with connection:
-            WorkerTaskRunner(connection=connection, tool_broker=broker).run_next(
+            WorkerTaskRunner(
+                connection=connection,
+                tool_broker=broker,
+                clock=lambda: datetime.fromisoformat(now_iso),
+            ).run_next(
                 task_id="task-worker-crash",
                 idempotency_key="task-worker-crash-effect",
             )
@@ -294,6 +299,7 @@ def test_real_wss_worker_process_crash_after_dispatch_fences_replay(tmp_path):
                     str(cert_path),
                     str(temp / "worker.sqlite"),
                     str(effect_path),
+                    clock().isoformat(),
                 ),
                 kwargs={"expect_reconciliation": False},
             )
@@ -322,16 +328,22 @@ def test_real_wss_worker_process_crash_after_dispatch_fences_replay(tmp_path):
                 lease_row["lease_id"], decision=RecoveryDecision.OUTCOME_UNKNOWN
             )
             assert reconciled.status == "RECONCILIATION_REQUIRED"
+            refreshed = cloud.renew_session(
+                worker_id=enrolled.worker_id,
+                device_key_ref=enrolled.device_key_ref,
+                secret_store=secret_store,
+            )
 
             restarted = ctx.Process(
                 target=_worker_process,
                 args=(
                     websocket_url,
                     enrolled.worker_id,
-                    enrolled.session_credential,
+                    refreshed.session_credential,
                     str(cert_path),
                     str(temp / "worker.sqlite"),
                     str(effect_path),
+                    clock().isoformat(),
                 ),
                 kwargs={"expect_reconciliation": True},
             )
