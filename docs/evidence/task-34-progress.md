@@ -279,3 +279,20 @@ Codex 在隔离副本 `D:/Documents/ChatGPT/数流/task34-production-recovery-82
 - **状态与交付：** 当前分支 `codex/task34-production-recovery`，本轮检查时 HEAD 为 `0f8be979e1928026930354c371d371638f3daed0`；日志中其父提交 `aec68a8e879528c440620818cad4176aea2aa7f5` 已包含 Worker runner / action digest fencing 与第一版 WSS 崩溃用例，`0f8be97` 固定该测试时钟。本轮 ACK 丢失场景及本证据更新仍在工作区、尚未提交。远端 `origin` 指向本机 `C:\Dev\shuliu-agent`，本分支无 GitHub upstream；没有本轮完整 HEAD 的远端 CI、PostgreSQL 17/18 fencing、安装版 Worker/Desktop 生产端到端或独立审查证据。用户提供的 CI runs `41419030117` 和 `41427409240` 针对 `24699b5`，不验证上述提交或当前工作区差异。
 
 **Task 34 仍为 IN_PROGRESS / acceptance BLOCKED，Task 35 未开始。** 已补真实本地 WSS Worker 进程崩溃、Cloud result ACK 丢失及防重放证据；仍缺 Workflow 生产执行组合根、可启动的生产 Worker host、PostgreSQL fencing、安装版完整验收、当前差异独立审查以及最新提交 SHA 对应 CI。
+
+### 独立核实与 SHA 对应 CI 证据（2026-11-02 19:50，审查者）
+
+本节由独立审查者（非 Task 34 实现者）在 Windows 实机完成，更正前文“没有本轮完整 HEAD 的远端 CI”“Cloud ACK 提交后应答丢失场景仍未完成”两处陈述。
+
+- **提交与推送：** 实现者未提交的工作区由审查者分三次提交并推送到 GitHub `codex/task34-production-recovery`：`aec68a8`（WorkerTaskRunner、action digest fencing、dispatch/ACK 崩溃注入）、`0f8be97`（固定真实 WSS 崩溃用例时钟）、`6a5a93b`（Cloud 已提交结果但 ACK 丢失场景）。推送方式为隔离副本 → 本机 `C:/Dev/shuliu-agent` → GitHub；隔离副本的 `origin` 指向本机仓库，因此 GitHub 推送由主仓完成。
+- **CI（SHA `6a5a93b`，即当前 HEAD）：** Generic CI run `41438143417` **success**，四个 job 全部通过：`Generic tests (ubuntu-latest)`、`Generic tests (macos-latest)`、`PostgreSQL migration (PG 17)`、`PostgreSQL migration (PG 18)`。Windows Validation run `41438147882` **success**。
+- **CI（SHA `0f8be97`）：** Generic CI run `41436257429` **success**（同上四个 job），Windows Validation run `41436263540` **success**。
+- **CI（SHA `24699b5`，前序基线）：** Generic CI run `41427409240` 第 1、2 次尝试在 `tests/contract/ipc-roundtrip.test.ts` 因 ubuntu runner 上 Electron 进程 `SIGSEGV`（`signal=SIGSEGV`、`status=null`）失败，第 3 次尝试 **success**；Windows Validation run `41419030117` **success**。该失败为已记录的 runner 偶发，同一 SHA 重跑即通过，不是断言逻辑缺陷。
+- **Windows Validation 覆盖范围说明：** `.github/workflows/windows-validation.yml` 只执行 `tests/computer`、`tests/e2e/windows`、`tests/browser`、`tests/skills` 与 PyInstaller 安装包校验，**不执行** `runtimes/python-worker/tests/worker` 与通用 `tests/integration`。因此本轮 Worker runner / action digest / 崩溃注入的 Windows 覆盖仍是本机实机结果；CI 侧覆盖来自 Generic CI 的 ubuntu、macOS、PG 17、PG 18 四个 job。
+- **审查者独立复跑（Windows 实机）：** `pytest runtimes/python-worker/tests/ipc tests/recovery tests/workflow tests/worker tests/persistence services/cloud-api/tests/workers tests/integration/test_worker_wss_cloud_loop.py tests/integration/test_worker_wss_dispatch_process_crash.py -q` → **165 passed, 2 skipped**，两个 skip 仍为无 `SHULIU_DATABASE_URL` 的 PostgreSQL 注册/并发 fencing 测试。Worker protocol Vitest contract → **18 passed**。与实现者报告的 163 passed 相差 1，差异为审查者额外纳入的 `test_worker_wss_dispatch_process_crash.py`（实现者的清单未包含该文件）。
+- **代理环境注意：** 本机首次复跑真实 TLS WSS 用例时 `test_worker_wss_cloud_loop.py` 握手超时失败；清除 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY` 后 **1 passed**。原因是本机代理把 `127.0.0.1` 的 WSS 握手也转发了。该失败是环境问题，不是产品缺陷；CI runner 无此代理。
+- **审查者对代码的独立判断：** Worker 侧 `worker_action_digest` 与 Cloud 侧 `_task_action_digest` 使用同一 canonical JSON 形式（`sort_keys`、紧凑分隔符、`ensure_ascii=False`、`allow_nan=False`），摘要可对账；Cloud 的 `authorize_tool_dispatch` 先校验调用者持有该 lease（`initial["worker_id"] == principal.worker_id`）再计算并比对动作摘要，不会向非持有者泄露任务动作信息。`WorkerTaskRunner` 拒绝任务 payload 携带 `actor`、`context`、`organization_id`、`permissions`，执行身份只取自已认证 WSS 响应；ACK 状态未知时抛 `WORKER_RESULT_ACK_UNKNOWN` 且不重发。未发现可绕过授权边界的新入口。
+- **仍未完成（本轮不改变验收结论）：** `ipc/bootstrap.py` 只构造持久 `SQLiteWorkflowRepository`，`ipc/server.py` 无生产 Workflow 执行 handler；仓库无可启动的生产 Worker host；无生产可信主体 / Policy / Approval / ToolRegistry 组合根。这对应本文档 “Acceptance blockers” 第 1、3 项，仍是 Task 34 的硬门槛。
+- **合并注意：** `feat/foundation-v0.1` 与 `codex/task34-production-recovery` 双方都修改本文档，且前者多出 2 个仅文档的提交，合并时会在此文件冲突，需要人工取舍。
+
+**结论不变：Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 本轮新增的是 Worker 执行入口、动作摘要绑定、三个真实崩溃/Ack 丢失场景与 SHA 对应的平台 CI 证据；生产 Workflow→ToolBroker 组合根与可启动的生产 Worker host 仍未接通，Task 35 未开始。
