@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import timedelta
 
 import pytest
@@ -8,6 +10,17 @@ from app.workers.coordinator import WorkerCoordinator
 from app.workers.leases import LeaseConfig, RecoveryDecision, WorkerCoordinatorError
 from shuliu_runtime.worker.protocol import validate_worker_message
 from sqlalchemy import insert, select
+
+
+def _action_digest(tool_id="foundation.test", arguments=None):
+    canonical = json.dumps(
+        {"tool_id": tool_id, "arguments": arguments or {"value": "safe"}},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def test_expired_lease_requires_explicit_safe_reconciliation_and_fences_old_worker(
@@ -89,6 +102,7 @@ def test_worker_tool_dispatch_requires_live_lease_and_current_fencing_generation
         lease_id=lease.lease_id,
         fencing_token=lease.fencing_token,
         idempotency_key=lease.idempotency_key,
+        action_digest=_action_digest(),
     )
     assert permit.fencing_token == lease.fencing_token
 
@@ -100,6 +114,7 @@ def test_worker_tool_dispatch_requires_live_lease_and_current_fencing_generation
             lease_id=lease.lease_id,
             fencing_token=lease.fencing_token,
             idempotency_key=lease.idempotency_key,
+            action_digest=_action_digest(),
         )
     assert expired.value.code == "WORKER_LEASE_EXPIRED"
 
@@ -121,8 +136,26 @@ def test_worker_tool_dispatch_rejects_prior_generation_after_safe_requeue(worker
             lease_id=old.lease_id,
             fencing_token=old.fencing_token,
             idempotency_key=old.idempotency_key,
+            action_digest=_action_digest(),
         )
     assert stale.value.code == "WORKER_LEASE_FENCED"
+
+
+def test_worker_dispatch_permit_is_bound_to_the_exact_cloud_task_tool_and_arguments(worker_harness):
+    coordinator = worker_harness["coordinator"]
+    worker = worker_harness["principals"]["worker-old"]
+    lease = coordinator.lease("task-1", worker, idempotency_key="task-1-effect")
+
+    with pytest.raises(WorkerCoordinatorError) as mismatch:
+        coordinator.authorize_tool_dispatch(
+            worker,
+            task_id=lease.task_id,
+            lease_id=lease.lease_id,
+            fencing_token=lease.fencing_token,
+            idempotency_key=lease.idempotency_key,
+            action_digest=_action_digest("foundation.test", {"value": "changed"}),
+        )
+    assert mismatch.value.code == "WORKER_LEASE_ACTION_MISMATCH"
 
 
 def test_fencing_tokens_are_unique_within_each_task_and_worker_can_lease_multiple_tasks(worker_harness):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ssl
+
 import pytest
 
 from shuliu_runtime.worker.credentials import WorkerAuthenticationError
@@ -25,12 +27,66 @@ def test_worker_lease_authorization_protocol_requires_exact_lease_generation_fie
         "lease_id": "lease-1",
         "fencing_token": 2,
         "idempotency_key": "effect-1",
+        "action_digest": "a" * 64,
     }
     response = {**request, "expires_at": "2026-11-02T10:00:00+00:00"}
     validate_worker_message(_message("lease_authorize", request))
     validate_worker_message(_message("lease_authorized", response))
     with pytest.raises(WorkerProtocolError):
         validate_worker_message(_message("lease_authorize", {**request, "fencing_token": True}))
+
+
+def test_worker_v1_authentication_keeps_organization_id_optional_for_compatibility(monkeypatch):
+    authenticated = _message("authenticated", {"worker_id": "worker_01"})
+    validate_worker_message(authenticated)
+
+    class SocketContext:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr("shuliu_runtime.worker.transport.connect", lambda *_args, **_kwargs: SocketContext())
+    connection = WorkerWebSocketConnection(
+        websocket_url="wss://worker.example.test/v1/workers/ws",
+        worker_id="worker_01",
+        session_credential="test-session-credential",
+        ssl_context=ssl.create_default_context(),
+        timeout_seconds=1,
+    )
+    connection.send = lambda *_args, **_kwargs: WorkerMessage.parse(authenticated)
+
+    connection.__enter__()
+
+    assert connection.worker_id == "worker_01"
+    assert connection.organization_id is None
+    connection.close()
+
+
+def test_worker_v1_legacy_lease_authorization_frames_remain_parseable():
+    legacy_request = _message(
+        "lease_authorize",
+        {
+            "task_id": "task-1",
+            "lease_id": "lease-1",
+            "fencing_token": 2,
+            "idempotency_key": "effect-1",
+        },
+    )
+    legacy_response = _message(
+        "lease_authorized",
+        {
+            "task_id": "task-1",
+            "lease_id": "lease-1",
+            "fencing_token": 2,
+            "idempotency_key": "effect-1",
+            "expires_at": "2026-11-02T10:00:00+00:00",
+        },
+    )
+
+    validate_worker_message(legacy_request)
+    validate_worker_message(legacy_response)
 
 
 def test_worker_websocket_only_accepts_matching_cloud_dispatch_authorization():
@@ -45,6 +101,7 @@ def test_worker_websocket_only_accepts_matching_cloud_dispatch_authorization():
             "lease_id": "lease-1",
             "fencing_token": 2,
             "idempotency_key": "effect-1",
+            "action_digest": "a" * 64,
             "expires_at": "2099-11-02T10:00:00+00:00",
         },
     )
@@ -53,11 +110,13 @@ def test_worker_websocket_only_accepts_matching_cloud_dispatch_authorization():
         lease_id="lease-1",
         fencing_token=2,
         idempotency_key="effect-1",
+        action_digest="a" * 64,
     )
     assert authorization.task_id == "task-1"
     assert authorization.lease_id == "lease-1"
     assert authorization.fencing_token == 2
     assert authorization.idempotency_key == "effect-1"
+    assert authorization.action_digest == "a" * 64
     assert authorization.expires_at.year == 2099
 
     connection.send = lambda _message_type, _payload: WorkerMessage(
@@ -70,6 +129,7 @@ def test_worker_websocket_only_accepts_matching_cloud_dispatch_authorization():
             "lease_id": "lease-other",
             "fencing_token": 2,
             "idempotency_key": "effect-1",
+            "action_digest": "a" * 64,
             "expires_at": "2099-11-02T10:00:00+00:00",
         },
     )
@@ -79,7 +139,35 @@ def test_worker_websocket_only_accepts_matching_cloud_dispatch_authorization():
             lease_id="lease-1",
             fencing_token=2,
             idempotency_key="effect-1",
+            action_digest="a" * 64,
         )
+    assert error.value.code == "WORKER_LEASE_AUTHORIZATION_INVALID"
+
+
+def test_worker_websocket_rejects_legacy_unbound_permit_before_tool_dispatch():
+    connection = object.__new__(WorkerWebSocketConnection)
+    connection.send = lambda _message_type, _payload: WorkerMessage.parse(
+        _message(
+            "lease_authorized",
+            {
+                "task_id": "task-1",
+                "lease_id": "lease-1",
+                "fencing_token": 2,
+                "idempotency_key": "effect-1",
+                "expires_at": "2099-11-02T10:00:00+00:00",
+            },
+        )
+    )
+
+    with pytest.raises(WorkerAuthenticationError) as error:
+        connection.authorize_tool_dispatch(
+            task_id="task-1",
+            lease_id="lease-1",
+            fencing_token=2,
+            idempotency_key="effect-1",
+            action_digest="a" * 64,
+        )
+
     assert error.value.code == "WORKER_LEASE_AUTHORIZATION_INVALID"
 
 

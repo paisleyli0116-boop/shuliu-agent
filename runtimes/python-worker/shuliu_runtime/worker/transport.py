@@ -178,11 +178,17 @@ class WorkerWebSocketConnection:
             raise ValueError("Worker connection requires WSS")
         self._url = websocket_url
         self._worker_id = worker_id
+        self.organization_id: str | None = None
         self._credential = session_credential
         self._ssl_context = ssl_context
         self._timeout = timeout_seconds
         self._socket: ClientConnection | None = None
         self._connection_context = None
+
+    @property
+    def worker_id(self) -> str:
+        """Worker identifier verified by the Cloud authentication response."""
+        return self._worker_id
 
     def __enter__(self) -> WorkerWebSocketConnection:
         self._connection_context = connect(
@@ -194,14 +200,23 @@ class WorkerWebSocketConnection:
         response = self.send(
             "authenticate", {"session_credential": self._credential}
         )
+        organization_id = response.payload.get("organization_id")
         if (
             response.message_type != "authenticated"
             or response.payload.get("worker_id") != self._worker_id
+            or (
+                organization_id is not None
+                and (
+                    not isinstance(organization_id, str)
+                    or not organization_id.strip()
+                )
+            )
         ):
             self.close()
             raise WorkerAuthenticationError(
                 "WORKER_IDENTITY_MISMATCH", "Cloud authenticated a different Worker identity"
             )
+        self.organization_id = organization_id
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -238,6 +253,7 @@ class WorkerWebSocketConnection:
         lease_id: str,
         fencing_token: int,
         idempotency_key: str,
+        action_digest: str,
     ) -> WorkerDispatchAuthorization:
         if (
             not task_id.strip()
@@ -246,6 +262,9 @@ class WorkerWebSocketConnection:
             or not isinstance(fencing_token, int)
             or fencing_token < 1
             or not idempotency_key.strip()
+            or not isinstance(action_digest, str)
+            or len(action_digest) != 64
+            or any(character not in "0123456789abcdef" for character in action_digest)
         ):
             raise WorkerAuthenticationError(
                 "WORKER_LEASE_FENCED", "Worker lease is invalid"
@@ -257,6 +276,7 @@ class WorkerWebSocketConnection:
                 "lease_id": lease_id,
                 "fencing_token": fencing_token,
                 "idempotency_key": idempotency_key,
+                "action_digest": action_digest,
             },
         )
         payload = response.payload
@@ -275,6 +295,7 @@ class WorkerWebSocketConnection:
             or payload.get("lease_id") != lease_id
             or payload.get("fencing_token") != fencing_token
             or payload.get("idempotency_key") != idempotency_key
+            or payload.get("action_digest") != action_digest
             or not isinstance(expires_at, datetime)
             or expires_at.tzinfo is None
             or expires_at.utcoffset() is None
@@ -288,6 +309,7 @@ class WorkerWebSocketConnection:
             lease_id=lease_id,
             fencing_token=fencing_token,
             idempotency_key=idempotency_key,
+            action_digest=action_digest,
             expires_at=expires_at,
         )
 
@@ -300,9 +322,15 @@ class WorkerWebSocketConnection:
         args: Mapping[str, object],
         actor: Mapping[str, object],
         context: Mapping[str, object],
+        clock=None,
     ) -> Any:
         """Authorize the exact current lease through Cloud before Tool Broker dispatch."""
-        return WorkerToolDispatcher(self, tool_broker).execute(
+        dispatcher = (
+            WorkerToolDispatcher(self, tool_broker)
+            if clock is None
+            else WorkerToolDispatcher(self, tool_broker, clock=clock)
+        )
+        return dispatcher.execute(
             lease,
             tool_id=tool_id,
             args=args,

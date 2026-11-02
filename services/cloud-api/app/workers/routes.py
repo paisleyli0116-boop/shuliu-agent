@@ -155,7 +155,14 @@ def create_worker_router(
             )
             coordinator.heartbeat(principal)
             await websocket.send_json(
-                _envelope("authenticated", {"worker_id": principal.worker_id}, trace_id=first.trace_id)
+                _envelope(
+                    "authenticated",
+                    {
+                        "worker_id": principal.worker_id,
+                        "organization_id": principal.organization_id,
+                    },
+                    trace_id=first.trace_id,
+                )
             )
 
             while True:
@@ -188,6 +195,7 @@ def create_worker_router(
                         lease_id = payload.get("lease_id")
                         fencing_token = payload.get("fencing_token")
                         key = payload.get("idempotency_key")
+                        action_digest = payload.get("action_digest")
                         if (
                             not isinstance(task_id, str)
                             or not isinstance(lease_id, str)
@@ -197,12 +205,18 @@ def create_worker_router(
                         ):
                             await websocket.send_json(_error_message("WORKER_LEASE_REQUEST_INVALID", incoming))
                             continue
+                        if not isinstance(action_digest, str):
+                            await websocket.send_json(
+                                _error_message("WORKER_LEASE_ACTION_BINDING_REQUIRED", incoming)
+                            )
+                            continue
                         permit = coordinator.authorize_tool_dispatch(
                             principal,
                             task_id=task_id,
                             lease_id=lease_id,
                             fencing_token=fencing_token,
                             idempotency_key=key,
+                            action_digest=action_digest,
                         )
                         await websocket.send_json(
                             _envelope(
@@ -212,6 +226,7 @@ def create_worker_router(
                                     "lease_id": permit.lease_id,
                                     "fencing_token": permit.fencing_token,
                                     "idempotency_key": permit.idempotency_key,
+                                    "action_digest": permit.action_digest,
                                     "expires_at": permit.expires_at.isoformat(),
                                 },
                                 trace_id=incoming.trace_id,

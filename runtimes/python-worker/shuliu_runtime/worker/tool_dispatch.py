@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
+import json
 from typing import Any, Protocol
 
 from .credentials import WorkerAuthenticationError
@@ -14,6 +16,7 @@ class WorkerDispatchAuthorization:
     lease_id: str
     fencing_token: int
     idempotency_key: str
+    action_digest: str
     expires_at: datetime
 
 
@@ -25,6 +28,7 @@ class WorkerLeaseAuthorizer(Protocol):
         lease_id: str,
         fencing_token: int,
         idempotency_key: str,
+        action_digest: str,
     ) -> WorkerDispatchAuthorization: ...
 
 
@@ -83,18 +87,21 @@ class WorkerToolDispatcher:
             raise ValueError("Worker lease fencing token is invalid")
         if not _required_text(tool_id) or not isinstance(args, Mapping) or not isinstance(actor, Mapping) or not isinstance(context, Mapping):
             raise ValueError("Worker Tool dispatch input is invalid")
+        action_digest = worker_action_digest(tool_id, args)
 
         authorization = self._authorizer.authorize_tool_dispatch(
             task_id=task_id,
             lease_id=lease_id,
             fencing_token=fencing_token,
             idempotency_key=idempotency_key,
+            action_digest=action_digest,
         )
         if not isinstance(authorization, WorkerDispatchAuthorization) or (
             authorization.task_id != task_id
             or authorization.lease_id != lease_id
             or authorization.fencing_token != fencing_token
             or authorization.idempotency_key != idempotency_key
+            or authorization.action_digest != action_digest
             or not isinstance(authorization.expires_at, datetime)
             or authorization.expires_at.tzinfo is None
             or authorization.expires_at.utcoffset() is None
@@ -119,6 +126,7 @@ class WorkerToolDispatcher:
             "lease_id": lease_id,
             "fencing_token": fencing_token,
             "idempotency_key": idempotency_key,
+            "action_digest": action_digest,
             "authorization_expires_at": authorization.expires_at.astimezone(UTC).isoformat(),
         }
         return self._tool_broker.execute(
@@ -134,3 +142,19 @@ def _required_text(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("Worker lease identity is invalid")
     return value
+
+
+def worker_action_digest(tool_id: str, args: Mapping[str, object]) -> str:
+    if not isinstance(tool_id, str) or not tool_id.strip() or not isinstance(args, Mapping):
+        raise ValueError("Worker Tool action is invalid")
+    try:
+        canonical = json.dumps(
+            {"tool_id": tool_id, "arguments": dict(args)},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("Worker Tool action is invalid") from error
+    return sha256(canonical.encode("utf-8")).hexdigest()

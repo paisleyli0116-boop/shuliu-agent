@@ -5,7 +5,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from shuliu_runtime.worker.credentials import WorkerAuthenticationError
-from shuliu_runtime.worker.tool_dispatch import WorkerDispatchAuthorization, WorkerToolDispatcher
+from shuliu_runtime.worker.tool_dispatch import (
+    WorkerDispatchAuthorization,
+    WorkerToolDispatcher,
+    worker_action_digest,
+)
 
 
 class _Authorizer:
@@ -63,6 +67,7 @@ def test_worker_tool_dispatch_passes_verified_lease_identity_to_the_tool_broker(
         lease_id="lease-1",
         fencing_token=2,
         idempotency_key="task-1-effect",
+        action_digest=worker_action_digest("foundation.test", {"value": "safe"}),
         expires_at=datetime.now(UTC) + timedelta(minutes=1),
     )
     authorizer = _Authorizer(authorization=authorization)
@@ -79,7 +84,12 @@ def test_worker_tool_dispatch_passes_verified_lease_identity_to_the_tool_broker(
     )
 
     assert result == {"status": "executed"}
-    assert authorizer.calls == [lease]
+    assert authorizer.calls == [
+        {
+            **lease,
+            "action_digest": worker_action_digest("foundation.test", {"value": "safe"}),
+        }
+    ]
     assert len(broker.calls) == 1
     worker_lease = broker.calls[0][3]["worker_lease"]
     assert {key: worker_lease[key] for key in lease} == lease
@@ -93,6 +103,7 @@ def test_worker_tool_dispatch_rejects_authorization_that_expires_before_broker_d
         lease_id="lease-1",
         fencing_token=2,
         idempotency_key="task-1-effect",
+        action_digest=worker_action_digest("foundation.test", {"value": "safe"}),
         expires_at=datetime(2026, 11, 2, 9, 59, tzinfo=UTC),
     )
     authorizer = _Authorizer(authorization=authorization)

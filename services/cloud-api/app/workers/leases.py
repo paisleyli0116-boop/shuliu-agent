@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from hashlib import sha256
+import json
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -85,6 +87,7 @@ class WorkerDispatchPermit:
     worker_id: str
     fencing_token: int
     idempotency_key: str
+    action_digest: str
     expires_at: datetime
 
 
@@ -432,6 +435,7 @@ class PostgresLeaseRepository:
         lease_id: str,
         fencing_token: int,
         idempotency_key: str,
+        action_digest: str,
         config: LeaseConfig,
         now: datetime,
     ) -> WorkerDispatchPermit:
@@ -491,6 +495,17 @@ class PostgresLeaseRepository:
                 raise WorkerCoordinatorError(
                     "WORKER_LEASE_NOT_FOUND", "lease was not found"
                 )
+            expected_action_digest = _task_action_digest(task["payload"])
+            if (
+                not isinstance(action_digest, str)
+                or len(action_digest) != 64
+                or any(character not in "0123456789abcdef" for character in action_digest)
+                or action_digest != expected_action_digest
+            ):
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_ACTION_MISMATCH",
+                    "Tool action does not match the leased task",
+                )
             if (
                 lease["worker_id"] != principal.worker_id
                 or lease["task_id"] != task_id
@@ -549,6 +564,7 @@ class PostgresLeaseRepository:
                 worker_id=principal.worker_id,
                 fencing_token=fencing_token,
                 idempotency_key=idempotency_key,
+                action_digest=expected_action_digest,
                 expires_at=_utc(lease["expires_at"]),
             )
 
@@ -884,3 +900,34 @@ class PostgresLeaseRepository:
                 idempotency_key,
                 True,
             )
+
+
+def _task_action_digest(payload: object) -> str:
+    if not isinstance(payload, Mapping):
+        raise WorkerCoordinatorError(
+            "WORKER_TASK_ACTION_INVALID", "Task does not contain an authorized Tool action"
+        )
+    call = payload.get("tool_call")
+    if (
+        not isinstance(call, Mapping)
+        or set(call) != {"tool_id", "arguments"}
+        or not isinstance(call.get("tool_id"), str)
+        or not call["tool_id"].strip()
+        or not isinstance(call.get("arguments"), Mapping)
+    ):
+        raise WorkerCoordinatorError(
+            "WORKER_TASK_ACTION_INVALID", "Task does not contain an authorized Tool action"
+        )
+    try:
+        canonical = json.dumps(
+            {"tool_id": call["tool_id"], "arguments": dict(call["arguments"])},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        raise WorkerCoordinatorError(
+            "WORKER_TASK_ACTION_INVALID", "Task Tool action is invalid"
+        ) from None
+    return sha256(canonical.encode("utf-8")).hexdigest()

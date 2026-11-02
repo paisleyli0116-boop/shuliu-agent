@@ -109,6 +109,7 @@ class WorkerCoordinator:
         lease_id: str,
         fencing_token: int,
         idempotency_key: str,
+        action_digest: str,
     ) -> WorkerDispatchPermit:
         return self._repository.authorize_tool_dispatch(
             principal,
@@ -116,6 +117,7 @@ class WorkerCoordinator:
             lease_id=lease_id,
             fencing_token=fencing_token,
             idempotency_key=idempotency_key,
+            action_digest=action_digest,
             config=self._config,
             now=self._clock(),
         )

@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.pool import StaticPool
+from shuliu_runtime.worker.tool_dispatch import worker_action_digest
 
 
 class MutableClock:
@@ -248,7 +249,13 @@ def test_worker_must_receive_live_cloud_authorization_before_tool_dispatch(worke
                 task_id="task-fenced",
                 organization_id="org-1",
                 status="READY",
-                payload={"required_capabilities": ["worker.runtime"]},
+                payload={
+                    "required_capabilities": ["worker.runtime"],
+                    "tool_call": {
+                        "tool_id": "foundation.test",
+                        "arguments": {"value": "safe"},
+                    },
+                },
                 created_at=clock(),
             )
         )
@@ -289,6 +296,9 @@ def test_worker_must_receive_live_cloud_authorization_before_tool_dispatch(worke
                 "lease_id": lease["lease_id"],
                 "fencing_token": lease["fencing_token"],
                 "idempotency_key": lease["idempotency_key"],
+                "action_digest": worker_action_digest(
+                    "foundation.test", {"value": "safe"}
+                ),
             },
         })
         authorized = websocket.receive_json()
@@ -308,6 +318,9 @@ def test_worker_must_receive_live_cloud_authorization_before_tool_dispatch(worke
                 "lease_id": lease["lease_id"],
                 "fencing_token": lease["fencing_token"],
                 "idempotency_key": lease["idempotency_key"],
+                "action_digest": worker_action_digest(
+                    "foundation.test", {"value": "safe"}
+                ),
             },
         })
         rejected = websocket.receive_json()

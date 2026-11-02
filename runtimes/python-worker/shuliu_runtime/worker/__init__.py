@@ -6,6 +6,7 @@ from .credentials import (
 )
 from .protocol import WorkerMessage, WorkerProtocolError, validate_worker_message
 from .registration import WorkerRegistrationClient
+from .task_runner import WorkerTaskRunner
 
 __all__ = [
     "RegistrationGrant",
@@ -15,5 +16,6 @@ __all__ = [
     "WorkerProtocolError",
     "WorkerRegistrationClient",
     "WorkerRegistrationResult",
+    "WorkerTaskRunner",
     "validate_worker_message",
 ]

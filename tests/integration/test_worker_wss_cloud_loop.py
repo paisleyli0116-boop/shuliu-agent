@@ -21,8 +21,17 @@ from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 from cryptography.x509.oid import NameOID
 from shuliu_runtime.security.secret_ref import SecretRef
 from shuliu_runtime.security.secret_store import SecretStore
+from shuliu_runtime.policy.engine import PolicyEngine
+from shuliu_runtime.policy.risk import RiskLevel
+from shuliu_runtime.policy.rules import PolicyOutcome, PolicyRule
+from shuliu_runtime.tools.broker import IdentityPrincipal, ToolBroker
+from shuliu_runtime.tools.registry import ToolDefinition, ToolRegistry
 from shuliu_runtime.worker.registration import WorkerRegistrationClient
+from shuliu_runtime.worker.credentials import WorkerAuthenticationError
+from shuliu_runtime.worker.task_runner import WorkerTaskRunner
 from shuliu_runtime.worker.transport import HttpWorkerRegistrationCloud
+from shuliu_runtime.persistence.sqlite import SQLiteDatabase
+from shuliu_runtime.persistence.sqlite_idempotency import SQLiteIdempotencyStore
 from sqlalchemy import create_engine, insert, select
 
 
@@ -157,7 +166,13 @@ def test_real_wss_registration_heartbeat_lease_result_reconnect_and_unknown_leas
                             task_id=task_id,
                             organization_id="org-1",
                             status="READY",
-                            payload={"required_capabilities": ["worker.runtime"]},
+                            payload={
+                                "required_capabilities": ["worker.runtime"],
+                                "tool_call": {
+                                    "tool_id": "foundation.wss_fixture",
+                                    "arguments": {"task_id": task_id},
+                                },
+                            },
                             created_at=clock(),
                         )
                     )
@@ -173,20 +188,84 @@ def test_real_wss_registration_heartbeat_lease_result_reconnect_and_unknown_leas
                 assert heartbeat.message_type == "heartbeat"
                 assert heartbeat.payload["worker_id"] == worker_id
 
-                lease = worker.send("lease_request", {"task_id": task_ids[0], "idempotency_key": "idem-wss-result"})
-                assert lease.message_type == "lease"
-                assert lease.payload["task_id"] == task_ids[0]
+                with pytest.raises(WorkerAuthenticationError) as error:
+                    worker.send(
+                        "lease_authorize",
+                        {
+                            "task_id": task_ids[0],
+                            "lease_id": "legacy-unbound-lease",
+                            "fencing_token": 1,
+                            "idempotency_key": "legacy-unbound-effect",
+                        },
+                    )
+                assert error.value.code == "WORKER_LEASE_ACTION_BINDING_REQUIRED"
 
-                ack = worker.send("result", {
-                    "task_id": task_ids[0],
-                    "lease_id": lease.payload["lease_id"],
-                    "idempotency_key": "idem-wss-result",
-                    "fencing_token": lease.payload["fencing_token"],
-                    "status": "SUCCEEDED",
-                    "result": {"verified": True},
-                })
+                worker_database = SQLiteDatabase(temp / "worker.sqlite")
+                worker_database.migrate()
+                effect_calls = []
+
+                class Identity:
+                    def resolve(self, actor):
+                        if actor != {"subject_id": worker_id, "organization_id": "org-1"}:
+                            return None
+                        return IdentityPrincipal(worker_id, "org-1", ("worker.execute",))
+
+                class Executor:
+                    def execute(self, tool_id, args, context, idempotency_key):
+                        effect_calls.append((tool_id, dict(args), idempotency_key))
+                        return {"ok": True, "evidence_ref": "wss-result-verified"}
+
+                    def verify(self, tool_id, args, output, context):
+                        return output.get("ok") is True
+
+                registry = ToolRegistry()
+                registry.register(
+                    ToolDefinition(
+                        "foundation.wss_fixture",
+                        "1.0.0",
+                        {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"], "additionalProperties": False},
+                        {"type": "object", "properties": {"ok": {"type": "boolean"}, "evidence_ref": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}(?![\s\S])"}}, "required": ["ok", "evidence_ref"], "additionalProperties": False},
+                        ("worker.execute",),
+                        RiskLevel.MEDIUM,
+                        True,
+                    ),
+                    Executor(),
+                )
+                broker = ToolBroker(
+                    registry=registry,
+                    identity=Identity(),
+                    policy=PolicyEngine(
+                        [
+                            PolicyRule(
+                                "wss-fixture-allow",
+                                "foundation.wss_fixture",
+                                RiskLevel.MEDIUM,
+                                PolicyOutcome.ALLOW,
+                                organization_id="org-1",
+                                permission="worker.execute",
+                                resource_type="task",
+                                privacy="INTERNAL",
+                            )
+                        ],
+                        policy_version="wss-fixture-v1",
+                    ),
+                    approvals=None,
+                    event_sink=lambda _event: None,
+                    idempotency_store=SQLiteIdempotencyStore(worker_database),
+                    clock=clock,
+                )
+                ack = WorkerTaskRunner(
+                    connection=worker,
+                    tool_broker=broker,
+                    clock=clock,
+                ).run_next(task_id=task_ids[0], idempotency_key="idem-wss-result")
                 assert ack.message_type == "ack"
                 assert ack.payload["task_id"] == task_ids[0]
+                assert len(effect_calls) == 1
+                assert effect_calls[0][0:2] == (
+                    "foundation.wss_fixture",
+                    {"task_id": task_ids[0]},
+                )
 
                 unknown_lease = worker.send(
                     "lease_request", {"task_id": task_ids[1], "idempotency_key": "idem-wss-unknown"}
