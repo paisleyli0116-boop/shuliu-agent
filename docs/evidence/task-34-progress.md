@@ -266,3 +266,16 @@ Codex 在隔离副本 `D:/Documents/ChatGPT/数流/task34-production-recovery-82
 - Worker protocol Vitest contract：**18 passed**；Python `compileall`、Worker schema JSON 解析、`git diff --check` 退出码均为 0。
 - 本轮实现没有提交或推送，HEAD 仍为 `24699b5dd03707e283a7d65afe613261076cdcbd`。用户提供的 CI 只验证该基线或更早 SHA，不能覆盖本地差异；本轮没有对应 CI，也没有独立只读审查。
 - Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**：生产 Workflow→ToolBroker 组合根与 Sidecar 执行 IPC 缺少可信身份、Policy、Approval 和注册工具配置；没有生产 Worker host 调用 runner；Cloud PostgreSQL 并发 fencing、Cloud 已提交结果但 ACK 丢失的故障注入、当前差异审查及 SHA 对应 CI 尚未完成。Task 35 未开始。
+
+## 真实 WSS Worker 子进程故障注入补充（2026-11-02）
+
+本轮继续验证可安全独立完成的 dispatch 崩溃场景，没有修改产品执行策略，也没有提交或推送。
+
+- 新增 `tests/integration/test_worker_wss_dispatch_process_crash.py`：本机启动带临时 TLS 证书的真实 Cloud WSS 服务和独立 Windows Worker 子进程。子进程使用真实 `WorkerWebSocketConnection`、Cloud 注册/认证、lease、动作摘要 fencing、`WorkerTaskRunner`、`ToolBroker`、Policy 与 SQLite durable idempotency。Executor 写入一次外部效果标记后阻塞；测试对 Worker 子进程调用 `Process.terminate()` 模拟进程突然终止。Cloud lease 超时后经 `OUTCOME_UNKNOWN` reconciliation 进入 `RECONCILIATION_REQUIRED / INDETERMINATE`。Worker 经设备密钥安全续期会话后重启并尝试领取同一 task，Cloud 返回 `TASK_NOT_READY`；效果标记仍只有一条。
+- **定向验收：** 两个真实 WSS 子进程故障注入（副作用开始后强制终止；Cloud 已持久化成功结果但 ACK 被网络层丢弃）与既有 WSS 成功、Cloud ACK 幂等、Worker runner / fencing 测试合并运行 **15 passed**。其后两个故障用例顺序重复 **3 轮，每轮 2 passed，共 6/6 passed**。真实 ACK 丢失场景确认 Worker 返回 `WORKER_RESULT_ACK_UNKNOWN`，Cloud task 为 `SUCCEEDED`、lease 为 `COMPLETED`、Cloud 仅有一条结果事件、副作用标记仅一条；重启 Worker 时任务不能再次领取。另一场景在副作用执行后强制终止 Worker，Cloud 将结果未知 lease 标记为 `INDETERMINATE` 并阻止任务重领。运行使用真实本地 TLS/WSS、Windows 子进程和 SQLite；不是 PostgreSQL 或生产 Cloud 环境证据。
+- 试验中出现的首轮失败是测试夹具问题：未导入 `multiprocessing.dummy`、Worker 与 Cloud 测试时钟不一致，以及进程重启后一次性 session credential 已被消费。已通过使用 `threading.Thread`、注入同一测试时钟、并通过设备密钥续期短期会话修正；没有延长产品超时或放宽断言。
+- **生产 Worker host 状态：** WSS 集成现在从独立进程真实执行 `WorkerTaskRunner` 并经过 Cloud lease fencing → ToolBroker → Cloud result ACK；静态入口核对仍未找到已部署/可启动的 Worker 服务命令或生产 ToolBroker 注册组合根。当前验证在测试中构造生产类，不是已安装 Worker 服务实机运行。
+- **Workflow→ToolBroker 状态：** `ipc/bootstrap.py` 持久化构造 `SQLiteWorkflowRepository`；`ipc/server.py` 只注册 Provider 与 Recovery handlers；Desktop task / approval 服务仍由 `createDemoDesktopServices()` 提供，Workflow UI 明确标示执行接口尚未接入。仓库没有可复用的可信本地用户/组织主体、实时 Policy / Approval 服务和正式工具注册表。由 Renderer 或 Sidecar 请求提供 actor、permission、tool definition 或审批结果会跨越信任边界，因此本轮没有开放该入口。生产 Workflow→ToolBroker 执行组合根仍阻塞，需先提供可信主体和正式 Tool / Policy / Approval 组合。
+- **状态与交付：** 当前分支 `codex/task34-production-recovery`，本轮检查时 HEAD 为 `0f8be979e1928026930354c371d371638f3daed0`；日志中其父提交 `aec68a8e879528c440620818cad4176aea2aa7f5` 已包含 Worker runner / action digest fencing 与第一版 WSS 崩溃用例，`0f8be97` 固定该测试时钟。本轮 ACK 丢失场景及本证据更新仍在工作区、尚未提交。远端 `origin` 指向本机 `C:\Dev\shuliu-agent`，本分支无 GitHub upstream；没有本轮完整 HEAD 的远端 CI、PostgreSQL 17/18 fencing、安装版 Worker/Desktop 生产端到端或独立审查证据。用户提供的 CI runs `41419030117` 和 `41427409240` 针对 `24699b5`，不验证上述提交或当前工作区差异。
+
+**Task 34 仍为 IN_PROGRESS / acceptance BLOCKED，Task 35 未开始。** 已补真实本地 WSS Worker 进程崩溃、Cloud result ACK 丢失及防重放证据；仍缺 Workflow 生产执行组合根、可启动的生产 Worker host、PostgreSQL fencing、安装版完整验收、当前差异独立审查以及最新提交 SHA 对应 CI。
