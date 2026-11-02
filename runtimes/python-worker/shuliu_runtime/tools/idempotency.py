@@ -62,6 +62,37 @@ class IdempotencyClaimStatus(str, Enum):
     CONFLICT = "CONFLICT"
 
 
+class IdempotencyRecordStatus(str, Enum):
+    """Read-only durable state used to reconcile a previous process attempt."""
+
+    ABSENT = "ABSENT"
+    CLAIMED = "CLAIMED"
+    DISPATCHED = "DISPATCHED"
+    INDETERMINATE = "INDETERMINATE"
+    COMPLETED = "COMPLETED"
+    CONFLICT = "CONFLICT"
+
+
+@dataclass(frozen=True)
+class IdempotencyRecord:
+    status: IdempotencyRecordStatus
+    result: object | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, IdempotencyRecordStatus):
+            raise TypeError("idempotency record status is invalid")
+        if (self.status is IdempotencyRecordStatus.COMPLETED) != (self.result is not None):
+            raise ValueError("only completed idempotency records may contain a result")
+
+
+class IdempotencyInspector(Protocol):
+    """Read-only view of a durable idempotency claim for recovery decisions."""
+
+    def inspect(
+        self, *, scope: tuple[str, ...], key: str, request_digest: str
+    ) -> IdempotencyRecord: ...
+
+
 @dataclass(frozen=True)
 class IdempotencyClaim:
     status: IdempotencyClaimStatus

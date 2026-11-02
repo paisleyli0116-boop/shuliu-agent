@@ -132,3 +132,17 @@ Codex 在隔离副本 `D:/Documents/ChatGPT/数流/task34-production-recovery-82
 - **审查员对 ABSENT 的保留意见确认有效**：`ABSENT→未执行` 的安全解释依赖两个前提——旧进程已被真实 fencing（不可能继续运行并在事后派发），以及派发状态在外部操作之前已持久记录。这两个前提目前都只在测试夹具层面成立（见下方生产接线阻塞），生产链路接线前 `ABSENT` 的语义不能视为已证明。
 - **测试复跑（本会话执行）**：recovery + tools + persistence + 两个 PG 集成模块共 **137 passed、5 skipped**（skip 均为无 `SHULIU_DATABASE_URL` 的 PG 门控），超出报告声明的 61/4 范围，全部通过。
 - 生产接线缺口不变：生产 Workflow Repository、Electron Main → RecoveryCoordinator、Sidecar 生产恢复 IPC、真实 Worker lease/generation fencing。补齐前 Task 34 保持 **IN_PROGRESS / BLOCKED**。
+
+## Task 33 幂等状态与崩溃恢复桥接增量（2026-11-02）
+
+本轮在隔离工作副本 `D:\Documents\ChatGPT\数流\task34-production-recovery-827fdda`（分支 `codex/task34-production-recovery`，起始 HEAD `827fddabc1859a58a1bbf7f8280b92dd04bd638d`）实现 Task 34 的一个受限增量；没有修改主 checkout、`main`、Task 33 工作副本或其他会话文件。
+
+- 为 SQLite 与 PostgreSQL 幂等存储增加只读 `inspect` 能力和状态记录类型。读取不会创建、释放、锁定或推进 claim；摘要冲突不返回既有结果。
+- 新增 `IdempotencyExternalStateReader`，只在记录缺失时报告 `NOT_APPLIED`；`CLAIMED`、`DISPATCHED`、`INDETERMINATE`、冲突、格式错误、存储错误及未验证的完成结果均映射为 `UNKNOWN`。只有已完成、已验证且含安全引用的结果可作为 `APPLIED`。该读取器不派发工具、不自动重试，也不释放 claim。
+- RecoveryCoordinator 将组织范围取自已验证 checkpoint，覆盖 pending action 中不可信的组织字段。新增进程恢复测试确认派发后状态未知会 `WAIT / SIDE_EFFECT_STATE_UNKNOWN` 且不推进 checkpoint；已验证完成结果可推进 checkpoint，而不重放副作用。
+- 独立白名单复投影测试先以 RED 复现了恢复输出将携带额外 `private_payload` 的问题；修复后读取器在写回 checkpoint 前再次调用幂等结果安全投影。
+- **定向验证：61 passed、4 skipped**。命令覆盖 Python recovery、SQLite 幂等重启、durable idempotency 与 PostgreSQL 幂等集成测试。4 项 PostgreSQL 集成用例因本机未配置 `SHULIU_DATABASE_URL` 而按测试门控跳过；PG17/18 结果仍只能引用之前 run `41310851081`，不能作为本轮新代码的 CI 证据。另有 1 条旧 Browser Runtime 临时目录清理 `WinError 5` 警告；测试进程退出码为 0，未影响断言结果。
+- 对所有改动 Python 文件执行 `compileall`，退出码 0；`git diff --check` 退出码 0。本仓库未发现可用的本地 `ruff` 命令，因此本轮未声称通过 Ruff。
+- RED/GREEN 增量：恢复输出重投影测试先失败（多出 `private_payload`），最小修复后该测试 **1 passed**；随后的相关回归为 **61 passed / 4 skipped**。
+
+**仍然不能验收 Task 34：** 此读取桥接尚未连接到生产 Electron Main / Sidecar / Workflow→ToolBroker 执行组合根，也没有生产 Worker lease/generation fencing。crash-before-checkpoint、dispatch-before-ACK 的真实生产路径故障注入未完成。PostgreSQL 变更测试在本机 skipped，本轮没有新的 GitHub Windows Validation、PG CI、安装包恢复验证或独立审查结果。Task 34 继续 **IN_PROGRESS / acceptance BLOCKED**；Task 35 未开始。

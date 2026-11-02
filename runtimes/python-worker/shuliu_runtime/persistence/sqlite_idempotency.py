@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from shuliu_runtime.tools.idempotency import (
     IdempotencyClaim,
     IdempotencyClaimStatus,
+    IdempotencyRecord,
+    IdempotencyRecordStatus,
     decode_idempotency_result,
     encode_idempotency_result,
     validate_idempotency_values,
@@ -66,6 +68,38 @@ class SQLiteIdempotencyStore:
                     decode_idempotency_result(row["result_json"]),
                 )
             raise ValueError("idempotency state is invalid")
+
+    def inspect(
+        self, *, scope: tuple[str, ...], key: str, request_digest: str
+    ) -> IdempotencyRecord:
+        """Read a durable claim without creating, releasing, or changing it."""
+        _validate_call(scope, key, request_digest)
+        organization_id, tool_id, operation_id = _scope_values(scope)
+        with self._database.connect() as connection:
+            row = connection.execute(
+                "SELECT request_digest, status, result_json FROM tool_idempotency "
+                "WHERE organization_id = ? AND tool_id = ? "
+                "AND operation_id = ? AND idempotency_key = ?",
+                (organization_id, tool_id, operation_id, key),
+            ).fetchone()
+        if row is None:
+            return IdempotencyRecord(IdempotencyRecordStatus.ABSENT)
+        if row["request_digest"] != request_digest:
+            return IdempotencyRecord(IdempotencyRecordStatus.CONFLICT)
+        if row["status"] == "COMPLETED" and row["result_json"] is not None:
+            return IdempotencyRecord(
+                IdempotencyRecordStatus.COMPLETED,
+                decode_idempotency_result(row["result_json"]),
+            )
+        statuses = {
+            "CLAIMED": IdempotencyRecordStatus.CLAIMED,
+            "DISPATCHED": IdempotencyRecordStatus.DISPATCHED,
+            "INDETERMINATE": IdempotencyRecordStatus.INDETERMINATE,
+        }
+        status = statuses.get(row["status"])
+        if status is None or row["result_json"] is not None:
+            raise ValueError("idempotency record state is invalid")
+        return IdempotencyRecord(status)
 
     def mark_dispatched(
         self, *, scope: tuple[str, ...], key: str, request_digest: str

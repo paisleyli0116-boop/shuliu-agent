@@ -85,7 +85,9 @@ def test_unknown_external_side_effect_waits_and_never_replays_tool(tmp_path):
 
     assert result.status is RecoveryStatus.WAIT
     assert result.error_code == "SIDE_EFFECT_STATE_UNKNOWN"
-    assert verifier.calls == [("run-unknown", action)]
+    assert verifier.calls == [
+        ("run-unknown", {**action, "organization_id": "org-1"})
+    ]
     assert result.checkpoint.pending_action == action
     with database.connect() as connection:
         event_payloads = [

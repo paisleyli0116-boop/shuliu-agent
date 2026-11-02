@@ -24,6 +24,8 @@ from sqlalchemy.engine import Engine
 from .idempotency import (
     IdempotencyClaim,
     IdempotencyClaimStatus,
+    IdempotencyRecord,
+    IdempotencyRecordStatus,
     decode_idempotency_result,
     encode_idempotency_result,
     validate_idempotency_values,
@@ -118,6 +120,37 @@ class PostgresIdempotencyStore:
             if row is None:
                 raise RuntimeError("idempotency claim could not be loaded")
             return _claim_for_row(row, request_digest)
+
+    def inspect(
+        self, *, scope: tuple[str, ...], key: str, request_digest: str
+    ) -> IdempotencyRecord:
+        """Read durable claim state without locking or mutating the claim."""
+        values = _row_scope(scope, key, request_digest)
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                select(tool_idempotency).where(*_scope_predicates(values, key))
+            ).mappings().first()
+        if row is None:
+            return IdempotencyRecord(IdempotencyRecordStatus.ABSENT)
+        if row["request_digest"] != request_digest:
+            return IdempotencyRecord(IdempotencyRecordStatus.CONFLICT)
+        if row["status"] == "COMPLETED" and row["result_json"] is not None:
+            encoded = json.dumps(
+                row["result_json"], ensure_ascii=False, separators=(",", ":")
+            )
+            return IdempotencyRecord(
+                IdempotencyRecordStatus.COMPLETED,
+                decode_idempotency_result(encoded),
+            )
+        statuses = {
+            "CLAIMED": IdempotencyRecordStatus.CLAIMED,
+            "DISPATCHED": IdempotencyRecordStatus.DISPATCHED,
+            "INDETERMINATE": IdempotencyRecordStatus.INDETERMINATE,
+        }
+        status = statuses.get(row["status"])
+        if status is None or row["result_json"] is not None:
+            raise ValueError("idempotency record state is invalid")
+        return IdempotencyRecord(status)
 
     def mark_dispatched(
         self, *, scope: tuple[str, ...], key: str, request_digest: str
