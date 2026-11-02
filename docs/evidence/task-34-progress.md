@@ -123,3 +123,12 @@ Task 34 remains **IN_PROGRESS / acceptance BLOCKED**. The production composition
 - 所有者已确认上方「需要 owner 确认的设计决策」：**同意**「未配置 coordinator → 普通重启；配置 coordinator → 按策略恢复/等待/安全模式」的语义，放弃「无配置即 Safe Mode」的原写法。
 - 该决策已由 Windows 实机验收（IPC 契约 2/2、崩溃恢复 48/48、真实桌面冒烟）佐证。
 - 本任务剩余阻塞不变：生产 main 接入 RecoveryCoordinator、fencing 走真实链路、两个崩溃窗口的生产链路证明与安装包矩阵证据。
+
+## 独立核实：恢复器只读幂等检查增量（2026-11-02）
+
+Codex 在隔离副本 `D:/Documents/ChatGPT/数流/task34-production-recovery-827fdda`（分支 `codex/task34-production-recovery`，基线 `827fdda`，9 文件，未提交未推送）完成的只读幂等检查增量，已由本会话独立核实：
+
+- **代码审查结论**：`IdempotencyExternalStateReader` 全程只读，不释放 claim、不派发 Tool；组织范围强制取自持久化 checkpoint 而非 Tool 自带字段（`reconciler.py` 的 `trusted_action` 改写）；仅 `ABSENT` 判 NOT_APPLIED，`CLAIMED/DISPATCHED/INDETERMINATE/CONFLICT` 与一切异常均判 `UNKNOWN→WAIT`；`COMPLETED` 必须 `SUCCEEDED + VERIFIED` 且输出再次过白名单（`sanitize_idempotency_tool_output`）才判 APPLIED。SQLite 与 PostgreSQL 两个 inspect 实现语义一致（digest 冲突→CONFLICT，非 COMPLETED 行 result_json 非空→抛错）。无确定性缺陷。
+- **审查员对 ABSENT 的保留意见确认有效**：`ABSENT→未执行` 的安全解释依赖两个前提——旧进程已被真实 fencing（不可能继续运行并在事后派发），以及派发状态在外部操作之前已持久记录。这两个前提目前都只在测试夹具层面成立（见下方生产接线阻塞），生产链路接线前 `ABSENT` 的语义不能视为已证明。
+- **测试复跑（本会话执行）**：recovery + tools + persistence + 两个 PG 集成模块共 **137 passed、5 skipped**（skip 均为无 `SHULIU_DATABASE_URL` 的 PG 门控），超出报告声明的 61/4 范围，全部通过。
+- 生产接线缺口不变：生产 Workflow Repository、Electron Main → RecoveryCoordinator、Sidecar 生产恢复 IPC、真实 Worker lease/generation fencing。补齐前 Task 34 保持 **IN_PROGRESS / BLOCKED**。
