@@ -7,11 +7,52 @@ import type { NdjsonChannel } from "../../src/main/runtime/ndjson-channel";
 import { SidecarSupervisor } from "../../src/main/runtime/supervisor";
 
 describe("Sidecar process restart recovery policy", () => {
+  it("runs persisted recovery on the first production Sidecar launch before exposing it as ready", async () => {
+    const child = [
+      'const readline = require("node:readline");',
+      'const input = readline.createInterface({ input: process.stdin });',
+      'input.on("line", (line) => {',
+      '  const request = JSON.parse(line);',
+      '  let result = { status: "healthy" };',
+      '  if (request.payload.method === "runtime.handshake") result = { protocol_version: 1, status: "ready" };',
+      '  if (request.payload.method === "runtime.recovery.begin") result = { status: "RESUME", error_code: null, previous_generation: 0, current_generation: 1, transition_id: request.payload.params.transition_id };',
+      '  if (request.payload.method === "runtime.recovery.checkpoints") result = { checkpoints: [] };',
+      '  process.stdout.write(JSON.stringify({ protocol_name: "runtime-ipc", protocol_version: 1, message_id: "reply", request_id: request.request_id, trace_id: request.trace_id, message_type: "response", payload: { result } }) + "\\n");',
+      '});',
+    ].join("");
+    let recoveryCalls = 0;
+    const recovery = new RuntimeRecoveryCoordinator(
+      { max_restarts: 1, backoff: [0], health_timeout: 2 },
+      async (_channel, context) => {
+        recoveryCalls += 1;
+        expect(context.previous_generation).toBe(0);
+        expect(context.transition_id).toMatch(/^[0-9a-f-]{36}$/);
+        return { status: "RESUME" };
+      },
+    );
+    const sidecar = new SidecarSupervisor({
+      command: process.execPath,
+      args: ["-e", child],
+      cwd: process.cwd(),
+      recovery,
+      recoverOnStart: true,
+    });
+
+    try {
+      await sidecar.start();
+      expect(recoveryCalls).toBe(1);
+      expect(sidecar.state).toBe("ready");
+    } finally {
+      await sidecar.close();
+    }
+  });
+
   it("keeps recovery diagnostics allowlisted and distinguishes invalid results", async () => {
     const channel = {} as NdjsonChannel;
     const context = {
       previous_generation: 1,
       current_generation: 2,
+      transition_id: "77777777-7777-4777-8777-777777777777",
       previous_exit_code: 17,
       previous_exit_kind: "process_crash",
       previous_error_code: null,
@@ -43,6 +84,7 @@ describe("Sidecar process restart recovery policy", () => {
     const outcome = await recovery.recoverAfterRestart({} as NdjsonChannel, {
       previous_generation: 1,
       current_generation: 2,
+      transition_id: "88888888-8888-4888-8888-888888888888",
       previous_exit_code: 17,
       previous_exit_kind: "process_crash",
       previous_error_code: null,

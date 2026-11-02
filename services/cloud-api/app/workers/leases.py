@@ -79,6 +79,16 @@ class WorkerResultAck:
 
 
 @dataclass(frozen=True)
+class WorkerDispatchPermit:
+    task_id: str
+    lease_id: str
+    worker_id: str
+    fencing_token: int
+    idempotency_key: str
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
 class ReconciliationResult:
     lease_id: str
     task_id: str
@@ -413,6 +423,134 @@ class PostgresLeaseRepository:
             )
         assert renewed is not None
         return renewed
+
+    def authorize_tool_dispatch(
+        self,
+        principal: WorkerPrincipal,
+        *,
+        task_id: str,
+        lease_id: str,
+        fencing_token: int,
+        idempotency_key: str,
+        config: LeaseConfig,
+        now: datetime,
+    ) -> WorkerDispatchPermit:
+        """Revalidate the active lease immediately before a Worker dispatches a Tool."""
+        if (
+            not task_id.strip()
+            or not lease_id.strip()
+            or not idempotency_key.strip()
+            or isinstance(fencing_token, bool)
+            or not isinstance(fencing_token, int)
+            or fencing_token < 1
+        ):
+            raise WorkerCoordinatorError(
+                "WORKER_LEASE_FENCED", "Worker lease dispatch authorization is invalid"
+            )
+        with self._engine.begin() as connection:
+            initial = (
+                connection.execute(
+                    select(worker_leases).where(
+                        worker_leases.c.lease_id == lease_id,
+                        worker_leases.c.organization_id == principal.organization_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if initial is None or initial["worker_id"] != principal.worker_id:
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_NOT_FOUND", "lease was not found"
+                )
+            if initial["task_id"] != task_id:
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_FENCED", "lease does not authorize this task"
+                )
+            task = (
+                connection.execute(
+                    select(tasks)
+                    .where(
+                        tasks.c.task_id == task_id,
+                        tasks.c.organization_id == principal.organization_id,
+                    )
+                    .with_for_update()
+                )
+                .mappings()
+                .first()
+            )
+            lease = (
+                connection.execute(
+                    select(worker_leases)
+                    .where(worker_leases.c.lease_id == lease_id)
+                    .with_for_update()
+                )
+                .mappings()
+                .first()
+            )
+            if task is None or lease is None:
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_NOT_FOUND", "lease was not found"
+                )
+            if (
+                lease["worker_id"] != principal.worker_id
+                or lease["task_id"] != task_id
+                or lease["fencing_token"] != fencing_token
+                or lease["idempotency_key"] != idempotency_key
+                or lease["status"] != "ACTIVE"
+            ):
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_FENCED", "lease token is stale"
+                )
+            if _utc(lease["expires_at"]) <= _utc(now):
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_EXPIRED", "lease has expired"
+                )
+            if task["status"] != "LEASED":
+                raise WorkerCoordinatorError(
+                    "TASK_NOT_LEASED", "task is not currently leased"
+                )
+            latest_fencing_token = connection.execute(
+                select(func.max(worker_leases.c.fencing_token)).where(
+                    worker_leases.c.organization_id == principal.organization_id,
+                    worker_leases.c.task_id == task_id,
+                )
+            ).scalar_one_or_none()
+            if latest_fencing_token != fencing_token:
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_FENCED", "lease generation is stale"
+                )
+            worker = (
+                connection.execute(
+                    select(workers).where(
+                        workers.c.worker_id == principal.worker_id,
+                        workers.c.organization_id == principal.organization_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if worker is None or worker["status"] in {"REVOKED", "DISABLED"}:
+                raise WorkerCoordinatorError(
+                    "WORKER_NOT_ACTIVE", "Worker cannot dispatch Tools"
+                )
+            last_heartbeat = worker["last_heartbeat_at"]
+            if (
+                worker["status"] != "ONLINE"
+                or last_heartbeat is None
+                or _utc(now) - _utc(last_heartbeat)
+                > config.heartbeat_interval + config.grace_period
+            ):
+                raise WorkerCoordinatorError(
+                    "WORKER_HEARTBEAT_STALE", "Worker heartbeat is outside its grace window"
+                )
+            return WorkerDispatchPermit(
+                task_id=task_id,
+                lease_id=lease_id,
+                worker_id=principal.worker_id,
+                fencing_token=fencing_token,
+                idempotency_key=idempotency_key,
+                expires_at=_utc(lease["expires_at"]),
+            )
 
     def reconcile_expired(
         self,

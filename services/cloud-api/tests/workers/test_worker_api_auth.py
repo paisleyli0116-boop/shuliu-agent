@@ -5,13 +5,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.main import create_app
-from app.persistence.postgres import metadata
+from app.persistence.postgres import metadata, tasks
 from app.workers.auth import registration_proof_bytes
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, insert, select
 from sqlalchemy.pool import StaticPool
 
 
@@ -233,3 +233,84 @@ def test_session_expiry_and_single_use_are_enforced_at_websocket_handshake(worke
             })
             websocket.receive_json()
     assert expired.value.code == 4401
+
+
+def test_worker_must_receive_live_cloud_authorization_before_tool_dispatch(worker_api):
+    client, app, engine, clock = worker_api
+    token = app.state.worker_auth.issue_registration_token(
+        organization_id="org-1", expires_at=clock() + timedelta(minutes=1)
+    )
+    body, _ = _registration_request(token)
+    registered = client.post("/v1/workers/registrations", json=body).json()
+    with engine.begin() as connection:
+        connection.execute(
+            insert(tasks).values(
+                task_id="task-fenced",
+                organization_id="org-1",
+                status="READY",
+                payload={"required_capabilities": ["worker.runtime"]},
+                created_at=clock(),
+            )
+        )
+
+    with client.websocket_connect("/v1/workers/ws") as websocket:
+        websocket.send_json({
+            "protocol_name": "worker",
+            "protocol_version": 1,
+            "message_id": "auth-fenced",
+            "request_id": "req-auth-fenced",
+            "trace_id": "trace-fenced",
+            "message_type": "authenticate",
+            "payload": {"session_credential": registered["session_credential"]},
+        })
+        assert websocket.receive_json()["message_type"] == "authenticated"
+        websocket.send_json({
+            "protocol_name": "worker",
+            "protocol_version": 1,
+            "message_id": "lease-fenced",
+            "request_id": "req-lease-fenced",
+            "trace_id": "trace-fenced",
+            "message_type": "lease_request",
+            "payload": {"task_id": "task-fenced", "idempotency_key": "effect-fenced"},
+        })
+        lease_message = websocket.receive_json()
+        assert lease_message["message_type"] == "lease"
+        lease = lease_message["payload"]
+
+        websocket.send_json({
+            "protocol_name": "worker",
+            "protocol_version": 1,
+            "message_id": "authorize-fenced",
+            "request_id": "req-authorize-fenced",
+            "trace_id": "trace-fenced",
+            "message_type": "lease_authorize",
+            "payload": {
+                "task_id": lease["task_id"],
+                "lease_id": lease["lease_id"],
+                "fencing_token": lease["fencing_token"],
+                "idempotency_key": lease["idempotency_key"],
+            },
+        })
+        authorized = websocket.receive_json()
+        assert authorized["message_type"] == "lease_authorized"
+        assert authorized["payload"]["fencing_token"] == lease["fencing_token"]
+
+        clock.value += timedelta(seconds=31)
+        websocket.send_json({
+            "protocol_name": "worker",
+            "protocol_version": 1,
+            "message_id": "authorize-expired",
+            "request_id": "req-authorize-expired",
+            "trace_id": "trace-expired",
+            "message_type": "lease_authorize",
+            "payload": {
+                "task_id": lease["task_id"],
+                "lease_id": lease["lease_id"],
+                "fencing_token": lease["fencing_token"],
+                "idempotency_key": lease["idempotency_key"],
+            },
+        })
+        rejected = websocket.receive_json()
+
+    assert rejected["message_type"] == "error"
+    assert rejected["payload"]["code"] == "WORKER_LEASE_EXPIRED"

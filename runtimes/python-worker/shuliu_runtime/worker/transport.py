@@ -5,6 +5,7 @@ import json
 import ssl
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -20,6 +21,7 @@ from .credentials import (
     session_proof_bytes,
 )
 from .protocol import WorkerMessage, WorkerProtocolError
+from .tool_dispatch import WorkerDispatchAuthorization, WorkerToolBroker, WorkerToolDispatcher
 
 
 def _b64(value: bytes) -> str:
@@ -228,6 +230,85 @@ class WorkerWebSocketConnection:
                 "Cloud rejected the Worker request",
             )
         return response
+
+    def authorize_tool_dispatch(
+        self,
+        *,
+        task_id: str,
+        lease_id: str,
+        fencing_token: int,
+        idempotency_key: str,
+    ) -> WorkerDispatchAuthorization:
+        if (
+            not task_id.strip()
+            or not lease_id.strip()
+            or isinstance(fencing_token, bool)
+            or not isinstance(fencing_token, int)
+            or fencing_token < 1
+            or not idempotency_key.strip()
+        ):
+            raise WorkerAuthenticationError(
+                "WORKER_LEASE_FENCED", "Worker lease is invalid"
+            )
+        response = self.send(
+            "lease_authorize",
+            {
+                "task_id": task_id,
+                "lease_id": lease_id,
+                "fencing_token": fencing_token,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        payload = response.payload
+        expires_at_value = payload.get("expires_at")
+        try:
+            expires_at = (
+                datetime.fromisoformat(expires_at_value.replace("Z", "+00:00"))
+                if isinstance(expires_at_value, str) and len(expires_at_value) <= 64
+                else None
+            )
+        except ValueError:
+            expires_at = None
+        if (
+            response.message_type != "lease_authorized"
+            or payload.get("task_id") != task_id
+            or payload.get("lease_id") != lease_id
+            or payload.get("fencing_token") != fencing_token
+            or payload.get("idempotency_key") != idempotency_key
+            or not isinstance(expires_at, datetime)
+            or expires_at.tzinfo is None
+            or expires_at.utcoffset() is None
+        ):
+            raise WorkerAuthenticationError(
+                "WORKER_LEASE_AUTHORIZATION_INVALID",
+                "Cloud returned an invalid lease authorization",
+            )
+        return WorkerDispatchAuthorization(
+            task_id=task_id,
+            lease_id=lease_id,
+            fencing_token=fencing_token,
+            idempotency_key=idempotency_key,
+            expires_at=expires_at,
+        )
+
+    def dispatch_tool(
+        self,
+        lease: Mapping[str, object],
+        tool_broker: WorkerToolBroker,
+        *,
+        tool_id: str,
+        args: Mapping[str, object],
+        actor: Mapping[str, object],
+        context: Mapping[str, object],
+    ) -> Any:
+        """Authorize the exact current lease through Cloud before Tool Broker dispatch."""
+        return WorkerToolDispatcher(self, tool_broker).execute(
+            lease,
+            tool_id=tool_id,
+            args=args,
+            actor=actor,
+            context=context,
+        )
 
     def close(self) -> None:
         if self._connection_context is not None:

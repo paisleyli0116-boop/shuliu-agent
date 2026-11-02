@@ -78,6 +78,53 @@ def test_lease_renewal_rejects_a_stale_fencing_token(worker_harness):
     assert error.value.code == "WORKER_LEASE_FENCED"
 
 
+def test_worker_tool_dispatch_requires_live_lease_and_current_fencing_generation(worker_harness):
+    coordinator = worker_harness["coordinator"]
+    worker = worker_harness["principals"]["worker-old"]
+    lease = coordinator.lease("task-1", worker, idempotency_key="task-1-effect")
+
+    permit = coordinator.authorize_tool_dispatch(
+        worker,
+        task_id=lease.task_id,
+        lease_id=lease.lease_id,
+        fencing_token=lease.fencing_token,
+        idempotency_key=lease.idempotency_key,
+    )
+    assert permit.fencing_token == lease.fencing_token
+
+    worker_harness["clock"].advance(timedelta(seconds=31))
+    with pytest.raises(WorkerCoordinatorError) as expired:
+        coordinator.authorize_tool_dispatch(
+            worker,
+            task_id=lease.task_id,
+            lease_id=lease.lease_id,
+            fencing_token=lease.fencing_token,
+            idempotency_key=lease.idempotency_key,
+        )
+    assert expired.value.code == "WORKER_LEASE_EXPIRED"
+
+
+def test_worker_tool_dispatch_rejects_prior_generation_after_safe_requeue(worker_harness):
+    coordinator = worker_harness["coordinator"]
+    old_worker = worker_harness["principals"]["worker-old"]
+    new_worker = worker_harness["principals"]["worker-new"]
+    old = coordinator.lease("task-1", old_worker, idempotency_key="task-1-effect")
+    worker_harness["clock"].advance(timedelta(seconds=41))
+    coordinator.reconcile_expired(old.lease_id, decision=RecoveryDecision.RETRY_SAFE)
+    coordinator.heartbeat(new_worker)
+    coordinator.lease("task-1", new_worker, idempotency_key="task-1-effect")
+
+    with pytest.raises(WorkerCoordinatorError) as stale:
+        coordinator.authorize_tool_dispatch(
+            old_worker,
+            task_id=old.task_id,
+            lease_id=old.lease_id,
+            fencing_token=old.fencing_token,
+            idempotency_key=old.idempotency_key,
+        )
+    assert stale.value.code == "WORKER_LEASE_FENCED"
+
+
 def test_fencing_tokens_are_unique_within_each_task_and_worker_can_lease_multiple_tasks(worker_harness):
     coordinator = worker_harness["coordinator"]
     worker = worker_harness["principals"]["worker-old"]

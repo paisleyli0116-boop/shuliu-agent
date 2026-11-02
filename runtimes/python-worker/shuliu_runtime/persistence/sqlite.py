@@ -21,7 +21,7 @@ class UnknownMigrationError(MigrationError):
     """The database contains a migration not known to this runtime."""
 
 
-DATABASE_SCHEMA_VERSION = "1.0.0"
+DATABASE_SCHEMA_VERSION = "1.2.0"
 
 
 class IdempotencyConflictError(RuntimeError):
@@ -85,6 +85,27 @@ LOCAL_MIGRATIONS = (
             "(organization_id, tool_id, operation_id, idempotency_key)",
             "CREATE INDEX ix_tool_idempotency_status_updated "
             "ON tool_idempotency(status, updated_at)",
+        ),
+    ),
+    LocalMigration(
+        migration_id="0003_workflow_runs",
+        statements=(
+            "CREATE TABLE workflow_runs ("
+            "run_id TEXT PRIMARY KEY, revision INTEGER NOT NULL CHECK (revision >= 0), "
+            "payload_json TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        ),
+    ),
+    LocalMigration(
+        migration_id="0004_runtime_generation",
+        statements=(
+            "CREATE TABLE runtime_generation ("
+            "runtime_id TEXT PRIMARY KEY, generation INTEGER NOT NULL CHECK (generation >= 1))",
+        ),
+    ),
+    LocalMigration(
+        migration_id="0005_runtime_generation_transition",
+        statements=(
+            "ALTER TABLE runtime_generation ADD COLUMN transition_id TEXT",
         ),
     ),
 )

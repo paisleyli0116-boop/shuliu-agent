@@ -18,6 +18,8 @@ describe("Worker protocol v1", () => {
     ["heartbeat", { worker_id: "worker_01", sent_at: "2026-10-18T00:00:00Z" }],
     ["lease_request", { task_id: "task_01", idempotency_key: "idem_01" }],
     ["lease", { task_id: "task_01", lease_id: "lease_01", fencing_token: 1, idempotency_key: "idem_01", expires_at: "2026-10-18T00:01:00Z", task: { required_capabilities: ["worker.runtime"], payload: {} } }],
+    ["lease_authorize", { task_id: "task_01", lease_id: "lease_01", fencing_token: 1, idempotency_key: "idem_01" }],
+    ["lease_authorized", { task_id: "task_01", lease_id: "lease_01", fencing_token: 1, idempotency_key: "idem_01", expires_at: "2026-10-18T00:01:00Z" }],
     ["ack", { task_id: "task_01", lease_id: "lease_01", idempotency_key: "idem_01" }],
     ["progress", { task_id: "task_01", lease_id: "lease_01", idempotency_key: "idem_01", progress: { completed: 1, total: 2 } }],
     ["cancel", { task_id: "task_01", lease_id: "lease_01", reason_code: "USER_CANCELLED" }],

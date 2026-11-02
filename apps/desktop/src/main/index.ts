@@ -6,6 +6,7 @@ import { runHealthProbe } from "./health-probe.js";
 import type { RuntimeHealth } from "../preload/api.js";
 import { registerRuntimeIpc } from "./runtime/ipc.js";
 import { SidecarSupervisor } from "./runtime/supervisor.js";
+import { createRuntimeRecoveryCoordinator } from "./runtime/recovery-ipc.js";
 import { createSidecarLaunchOptions } from "./runtime/launch-options.js";
 import { consumeProviderCanarySession } from "./runtime/canary-session.js";
 import { appendProviderConnectionDiagnostic, appendRuntimeDiagnostic } from "./runtime/diagnostic-journal.js";
@@ -56,6 +57,7 @@ const sidecarLaunchOptions = createSidecarLaunchOptions(
     userDataPath,
   },
 );
+const recoveryCoordinator = createRuntimeRecoveryCoordinator();
 recordStartup({
   stage: "resource_resolution",
   status: "observed",
@@ -68,6 +70,8 @@ recordStartup({
 const supervisor = new SidecarSupervisor({
   ...sidecarLaunchOptions,
   maxRestarts: 1,
+  recovery: recoveryCoordinator,
+  recoverOnStart: true,
   onDiagnostic: (diagnostics) => {
     void appendRuntimeDiagnostic(userDataPath, diagnostics).catch(() => undefined);
   },

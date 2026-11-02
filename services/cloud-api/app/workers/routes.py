@@ -183,6 +183,40 @@ def create_worker_router(
                             idempotency_key=key,
                             trace_id=incoming.trace_id,
                         )
+                    elif incoming.message_type == "lease_authorize":
+                        task_id = payload.get("task_id")
+                        lease_id = payload.get("lease_id")
+                        fencing_token = payload.get("fencing_token")
+                        key = payload.get("idempotency_key")
+                        if (
+                            not isinstance(task_id, str)
+                            or not isinstance(lease_id, str)
+                            or isinstance(fencing_token, bool)
+                            or not isinstance(fencing_token, int)
+                            or not isinstance(key, str)
+                        ):
+                            await websocket.send_json(_error_message("WORKER_LEASE_REQUEST_INVALID", incoming))
+                            continue
+                        permit = coordinator.authorize_tool_dispatch(
+                            principal,
+                            task_id=task_id,
+                            lease_id=lease_id,
+                            fencing_token=fencing_token,
+                            idempotency_key=key,
+                        )
+                        await websocket.send_json(
+                            _envelope(
+                                "lease_authorized",
+                                {
+                                    "task_id": permit.task_id,
+                                    "lease_id": permit.lease_id,
+                                    "fencing_token": permit.fencing_token,
+                                    "idempotency_key": permit.idempotency_key,
+                                    "expires_at": permit.expires_at.isoformat(),
+                                },
+                                trace_id=incoming.trace_id,
+                            )
+                        )
                     elif incoming.message_type == "result":
                         coordinator.commit_result(
                             principal,

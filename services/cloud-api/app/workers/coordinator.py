@@ -18,6 +18,7 @@ from app.workers.leases import (
     ReconciliationResult,
     RecoveryDecision,
     WorkerCoordinatorError,
+    WorkerDispatchPermit,
     WorkerPrincipal,
     WorkerResultAck,
 )
@@ -96,6 +97,25 @@ class WorkerCoordinator:
             lease_id,
             principal,
             fencing_token=fencing_token,
+            config=self._config,
+            now=self._clock(),
+        )
+
+    def authorize_tool_dispatch(
+        self,
+        principal: WorkerPrincipal,
+        *,
+        task_id: str,
+        lease_id: str,
+        fencing_token: int,
+        idempotency_key: str,
+    ) -> WorkerDispatchPermit:
+        return self._repository.authorize_tool_dispatch(
+            principal,
+            task_id=task_id,
+            lease_id=lease_id,
+            fencing_token=fencing_token,
+            idempotency_key=idempotency_key,
             config=self._config,
             now=self._clock(),
         )

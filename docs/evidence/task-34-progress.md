@@ -146,3 +146,100 @@ Codex 在隔离副本 `D:/Documents/ChatGPT/数流/task34-production-recovery-82
 - RED/GREEN 增量：恢复输出重投影测试先失败（多出 `private_payload`），最小修复后该测试 **1 passed**；随后的相关回归为 **61 passed / 4 skipped**。
 
 **仍然不能验收 Task 34：** 此读取桥接尚未连接到生产 Electron Main / Sidecar / Workflow→ToolBroker 执行组合根，也没有生产 Worker lease/generation fencing。crash-before-checkpoint、dispatch-before-ACK 的真实生产路径故障注入未完成。PostgreSQL 变更测试在本机 skipped，本轮没有新的 GitHub Windows Validation、PG CI、安装包恢复验证或独立审查结果。Task 34 继续 **IN_PROGRESS / acceptance BLOCKED**；Task 35 未开始。
+
+## 生产恢复接线与 Windows 本地验收（2026-11-02）
+
+本节记录从基线 `b342a974dae8e6c45cfaae965a895593d39c7a0a` 继续完成的未提交增量。用户提供的基线 CI 证据为 Generic CI run `41385069236` 与 Windows Validation run `41385069133`，两者目标 SHA 均为 `b342a97` 且成功；这些结果不验证本节的新增改动。
+
+- **Workflow 持久化组合根：** `bootstrap_runtime()` 现在实例化并返回 SQLite `WorkflowRepository`；`WorkflowEngine` 使用该 Repository 的本地测试覆盖创建、事件 outbox 原子提交、进程重开恢复、重复创建和 revision 冲突。这里验证的是组合根返回的持久化 Repository，不代表 Sidecar 已暴露 Workflow 执行 API，也不代表生产 ToolBroker 已接入 Workflow Engine。
+- **Electron Main → RecoveryCoordinator：** Main 构造 `RuntimeRecoveryCoordinator` 并启用 `recoverOnStart`。初次启动和 supervisor 重启各自生成唯一 transition ID；Recovery bridge 通过 Sidecar 查询检查点并提交恢复决议。等待与 Safe Mode 结果保持 fail-closed。
+- **Sidecar 生产恢复 IPC：** Sidecar 通过正式 handler 注册 `runtime.recovery.begin`、`runtime.recovery.checkpoints` 与 `runtime.recovery.recover_run`。SQLite 保存单调 runtime generation / transition；恢复决议使用 Task 33 的只读 durable idempotency 状态读取器。持久化 Safe Mode 会在冷启动时恢复，并在处理普通工作请求前拒绝请求。按用户级数据目录持有 singleton lock，避免第二个 Sidecar 并发服务同一数据库；本轮 RED 测试确认旧顺序会先 bootstrap/migrate 再拿锁，修复后启动锁在数据库 bootstrap 之前取得。
+- **Worker lease / fencing：** Cloud 的 `lease_authorize` 路由在数据库事务中重新核验 Worker、task、lease、expiry、心跳和当前 fencing token；Python `WorkerWebSocketConnection.dispatch_tool()` 在 Broker 调用前要求匹配的 Cloud permit 并再次检查有效期，且将 lease 身份及 generation 传入 Broker context。Cloud 对旧 generation / 过期 lease 的拒绝与 Python 侧 Broker 未被调用均有测试。当前仓库没有 Worker job runner 调用 `dispatch_tool()`；因此这些接线尚未证明生产任务执行器实际走该入口，生产 Worker→Tool 的完整执行路径仍为阻塞项。
+- **故障注入：** Windows Python 子进程测试真实启动 Sidecar、写入 dispatched checkpoint / idempotency 状态后强制终止，再以新 Sidecar 进程恢复。结果为 `WAIT / SIDE_EFFECT_STATE_UNKNOWN`，checkpoint 序号不前移、状态仍为 `DISPATCHED`，没有重复派发。该用例使用人工写入的 durable 状态，不是在实际 Workflow→ToolBroker 执行链的 dispatch/ACK 窗口杀进程。另验证 persisted Safe Mode 冷启动拒绝 Provider handler，以及同一数据目录第二个 Sidecar 被 singleton lock 拒绝、首个退出后第三个可启动。
+
+**本机定向测试实际结果（Windows）：**
+
+- Python recovery / IPC / workflow / worker / persistence：**118 passed**（包含启动锁先于数据库迁移的顺序回归）。
+- Desktop IPC：**52 passed**；Desktop typecheck、生产构建通过。
+- Cloud Worker tests：**24 passed、2 skipped**；跳过项分别要求 `SHULIU_DATABASE_URL` 的 PostgreSQL 并发与 Worker Auth 集成测试。
+- Worker 协议 contract：**18 passed**；Security suite：**10 passed**。
+- 根 TypeScript typecheck、Python `compileall`、`git diff --check`：通过。
+- 根 `pnpm test:contract` **未通过/未完成**：`event-roundtrip` 子测试无法由 `uvx` 在受限网络下解析锁定的 `uv==0.12.20`（真实错误为 cache miss 且 network disabled）；该全量命令曾因 uvx 等待而中断。本地已安装的全局 `uv` 版本为 `0.12.20`，但本节没有把手动替代命令记作该 Contract suite 通过。
+- Windows Electron IPC tests 通过；当前环境未进行真实安装版 Electron Main 启动。此前记录的 AppContainer ACL 限制仍适用，本轮没有修改 ACL。Linux/macOS、本地 PG17/18、安装包重启/升级验证均未在本轮执行。
+
+**独立审查前状态：** 工作树位于 `codex/task34-production-recovery`，HEAD 仍为 `b342a974dae8e6c45cfaae965a895593d39c7a0a`；以上实现与证据均未提交、未推送。工作树 `origin` 指向本机 `C:\Dev\shuliu-agent`，不是可直接用于 GitHub 对账的 URL；未对该本地 remote 执行 push。Task 28–33 文件未因本轮测试而清理；本轮代码仅在隔离 Task34 worktree。最新 SHA 的 GitHub CI 尚无证据。
+
+**结论：Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 生产 Main→Sidecar 恢复和 Sidecar 恢复 IPC 已接线；持久 Workflow Repository 已在生产 bootstrap 构造，但 Workflow 执行/ToolBroker 组合根尚未接入；Worker 的 Cloud lease 校验及 Python Broker 前置 adapter 已实现，尚无生产 Worker runner 调用点。真实 Workflow→ToolBroker 进程故障注入、Worker 执行链路、完整 contract suite、安装版 Windows 验收以及本轮 SHA 的远端 CI 与独立审查仍待完成。Task 35 未开始。
+
+## Safe Mode 受控恢复补齐（2026-11-02）
+
+上一轮独立审查指出持久 Safe Mode 没有退出路径。本轮按 RED→GREEN 补上仅供 Main 启动恢复流程使用的受控出口：Sidecar 在 Safe Mode 时继续拒绝普通能力，只放行 generation begin、checkpoint 查询、recover_run 和 recovery.complete；Main 仅在当前代际确认有效、所有 checkpoint 都得到 RESUME、SQLite `quick_check` 成功且迁移版本完整时发送 complete。Sidecar 在同一事务写入 `RUNTIME_SAFE_MODE_RELEASED` outbox 事件并清除已恢复 run 的 Safe Mode 标记，然后才将健康状态切为 healthy。未恢复的 marker、未知副作用、等待审批、无效 checkpoint、旧 transition、数据库不健康或在 release 事务准入检查前被观察到的取消均保持 Safe Mode；准入检查通过后的迟到取消由原子 release 提交胜出。
+
+- **RED：** Windows 真实 Sidecar 子进程测试先复现冷启动 Safe Mode 下 `runtime.recovery.begin` 被拒绝，恢复状态没有到达生产 coordinator。
+- **GREEN：** 新路径用两个真实 Sidecar 子进程建立并切换 generation；未完成 checkpoint 恢复时 `complete` 返回 `SAFE_MODE_RELEASE_NOT_READY` 且 marker 仍存在；当前代际成功恢复后，marker 清除、outbox 审计事件存在、health 转为 healthy。随后 Provider 测试只返回 `MODEL_CONNECTION_TEST_DISABLED` 且 `request_status=not_sent`，未触发任何外部请求。定向用例 **1 passed**。
+- **本轮回归（Windows 本地）：** Python recovery / IPC / workflow / worker / persistence **119 passed**；Desktop IPC **52 passed**；Cloud Worker **24 passed、2 skipped**（PostgreSQL 并发与 Worker Auth 两项需要 `SHULIU_DATABASE_URL`）；worker protocol contract + security **28 passed**；Desktop 与根 TypeScript typecheck、Desktop production build、Python compileall、`git diff --check` 均通过。
+- 用户给出的 PG17/18 Generic CI `41385069236` 和 Windows Validation `41385069133` 均针对基线 SHA `b342a974dae8e6c45cfaae965a895593d39c7a0a`，不验证本轮未提交改动。当前 HEAD 仍为该基线，本轮工作未提交、未推送、没有对应 GitHub Actions 运行。
+
+**独立审查复核后的未关闭阻塞：** Safe Mode 不再因“没有任何受控退出路径”而永久锁死，但整项 Task 34 仍不能验收。生产 bootstrap 目前持久化构造 `SQLiteWorkflowRepository`，但全仓没有生产 `WorkflowEngine` 实例或 Sidecar workflow 执行 IPC；Recovery 扫描的是独立 `CheckpointStore`，没有从 `workflow_runs` 恢复实际 WorkflowRun。Worker lease authorize / Python `dispatch_tool()` 已各自实现并有本地/测试证据，但仓库没有 Worker job runner 调用该方法，且目前 permit 未把批准的 tool/参数范围绑定到 dispatch。现有子进程故障测试仍预置 checkpoint 和 DISPATCHED 状态后杀进程，没有从 WorkflowEngine → ToolBroker → durable idempotency 的真实 dispatch/ACK 窗口注入故障。
+
+本轮也没有启动已安装 Electron Desktop；Windows 实机证据限于真实 Sidecar 子进程和 Electron IPC 单元测试。完整 contract suite 先前因 `uvx` 在受限网络缺少锁定工具缓存而未完成，尚未复跑；本轮没有安装包恢复、跨平台 subprocess 矩阵、PG17/18 当前 SHA 或远端 Windows CI 证据。独立审查员已复核上一轮差异并指出上述阻塞；本轮 Safe Mode 修复等待再次只读复审。Task 34 维持 **IN_PROGRESS / acceptance BLOCKED**，Task 35 未开始。
+
+## Safe Mode 释放与迟到取消竞态（2026-11-02）
+
+独立只读复审确认：`runtime.recovery.complete` 在入口检查取消后，会在 SQLite 事务中同时追加 release audit 并删除 Safe Mode marker。若 IPC 取消在该提交期间或提交后到达，旧版 `IpcServer.respond()` 会丢弃已经提交的成功结果、返回 `IPC_REQUEST_CANCELLED`，并保持进程内 `_safe_mode=True`。这造成持久 marker 已删除、进程仍拒绝普通请求的状态不一致；复审未发现普通请求因此提前放行。
+
+- **RED：** `test_safe_mode_release_commits_before_a_late_ipc_cancellation` 通过 handler 在成功 release 返回前置位取消事件，复现旧 server 把成功结果改成取消错误（定向测试 **1 failed**，响应缺少 `result`）。
+- **GREEN（初始版本，后由复审补充）：** `IpcServer.respond()` 将 `runtime.recovery.complete` 返回白名单成功状态作为 durable commit 点。该实现最初只在 handler 入口检查取消，没有覆盖入口检查后、事务准入前的取消；下方“Safe Mode 事务准入取消边界”记录了复审发现与修复。准入检查通过后的迟到取消仍由原子 release 提交胜出，其他 IPC 取消行为未改变。
+- **定向结果（Windows 本地）：** 取消竞态与 SQLite IPC release 定向测试通过；Python IPC / recovery / workflow / worker / persistence **123 passed**；Desktop IPC **52 passed**；Cloud Worker **24 passed、2 skipped**（需本地 `SHULIU_DATABASE_URL` 的 PostgreSQL 用例）。`compileall` 与 `git diff --check` 通过。
+- **RED/GREEN 证据（初始版本，入口后准入前的窗口由下方复审补测）：** 第一个定向测试先以 **1 failed** 复现 server 丢弃成功结果，再在修复后通过。随后新增真实 SQLite recovery handler + `IpcServer` 测试，在 release transaction 执行 marker `DELETE`、事务尚未返回提交时注入取消；实际事务提交后，marker 已清除、release outbox 事件存在、IPC 返回 `RESUME` 且内存 health 为 healthy。既有真实 Sidecar subprocess 测试另验证进程重启后的 marker/outbox/health 状态。本轮仍未在已安装 Electron Desktop 中验证取消时序。
+- **远端状态：** 基线 `b342a974dae8e6c45cfaae965a895593d39c7a0a` 的 CI 绿色结果不覆盖本轮差异。本轮未产生提交或新 SHA，未推送，也没有对应 Windows Validation。
+- **独立复审：** 复审确认了初始迟到取消竞态，并未发现普通 IPC Safe Mode bypass；复审后又发现事务开始前的窗口，详见后续记录。
+
+**Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 生产 `WorkflowEngine` / ToolBroker 组合根和 WorkflowRun 恢复缺失；Worker job runner 没有调用 fencing dispatcher，且授权 permit 尚未绑定获批 Tool/参数/可信 actor scope；进程故障注入仍未覆盖真实 dispatch→ACK 窗口。还缺当前差异的新 SHA Windows CI、安装版 Windows 恢复验收及最终独立复审。Task 35 未开始。
+
+## Workflow 对未知 Tool 结果的等待状态（2026-11-02）
+
+新增 RED 测试发现：`WorkflowEngine._run_tool_step()` 原先只把 approval 未消费映射为 `WAITING`；来自 durable Tool Broker 的 `RECONCILIATION_REQUIRED`（已派发、结果未知）和 `TOOL_EXECUTION_UNKNOWN`（执行器异常、状态未知）会落入普通失败终态。修复后这两种错误进入 `WAITING / EXTERNAL`，保存原错误码和单次 resume token。恢复后继续使用同一个 Workflow step idempotency key；不会生成新的副作用标识。测试用 Fake Broker 模拟外部状态已完成后的返回，因此它验证 Workflow 状态和 key 连续性，不代表真实 Tool Broker/外部副作用已完成端到端测试。
+
+- **RED：** 参数化测试针对两个安全错误码均复现 `FAILED` 而非 `WAITING`（**2 failed**）。
+- **GREEN：** 两个用例均进入 `WAITING / EXTERNAL`；显式 resume 后使用相同幂等键并完成（**2 passed**）。
+- **相关回归：** Python IPC / recovery / workflow / worker / persistence **123 passed**。
+
+这项状态映射改善了未知副作用的恢复处理，但没有补上生产 WorkflowEngine/ToolBroker 组合根，也没有证明 WorkflowRun 可从数据库自动重建。Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**。
+
+## Safe Mode 事务准入取消边界（2026-11-02）
+
+独立复审发现：`runtime.recovery.complete` 的入口取消检查与 SQLite `BEGIN IMMEDIATE` 之间还会读取 checkpoint、Safe Mode 状态、`quick_check` 和 migration 记录。此前取消若在入口检查后、事务开始前到达，release 仍会清除 marker 并写入 outbox。此前提交期间迟到取消测试只在 marker `DELETE` 时置位，未覆盖该事务准入窗口。
+
+- **RED：** 新测试用 SQLite trace 在 `BEGIN IMMEDIATE` 执行前置位 `IpcServer` 当前请求的真实取消事件。旧实现仍返回 `RESUME`，导致持久 marker 被清除且 release event 被写入；测试以 **1 failed** 复现。
+- **GREEN：** `SQLiteSafeModeController.release_after_verified_recovery()` 在取得 `BEGIN IMMEDIATE` 写事务后立即检查请求取消标记。取消已到达时不读取或删除 Safe Mode marker、不写 release outbox；handler 保持 Safe Mode，IPC 返回 `IPC_REQUEST_CANCELLED`。这次准入检查通过后，事务成为 release 的线性化阶段：后续迟到取消仍由 marker 删除与 audit outbox 的原子提交胜出，避免持久状态和进程内 health 分裂。
+- **定向验证：** `test_recovery_release_rejects_cancel_at_transaction_admission`、`test_recovery_release_commit_wins_over_cancel_during_sqlite_transaction` 与 `tests/ipc/test_real_process_recovery.py` 一起运行，**6 passed in 1.79s**（Windows）。此前 Python IPC / recovery / workflow / worker / persistence **123 passed** 来自一次聚合命令，在前面两个小节重复引用，并非两次或可累加结果，也不包含本次新增准入测试。
+- **受影响回归（Windows）：** `.venv\Scripts\python.exe -m pytest -q runtimes/python-worker/tests/ipc runtimes/python-worker/tests/recovery runtimes/python-worker/tests/workflow runtimes/python-worker/tests/worker runtimes/python-worker/tests/persistence`，**124 passed in 3.77s**。同轮 `compileall -q runtimes/python-worker/shuliu_runtime` 退出码 0，`git diff --check` 退出码 0（仅有 Markdown 文件换行格式提示）。
+- **独立复审：** 复审者确认本次限定范围内的准入取消缺口已关闭，未发现由此导致的 Safe Mode 绕过或 marker / outbox / health 状态分裂。复审为只读且没有独立重跑测试；124 项回归结果仍以本机命令输出为证。当前差异仍未提交、未推送，没有新 SHA 的 Windows Validation 或 PG CI。
+
+**Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 生产 Workflow Engine / ToolBroker 组合根与 WorkflowRun 恢复、Worker job runner 调用 fencing dispatcher 且 permit 绑定授权范围、真实 Workflow→ToolBroker dispatch/ACK 窗口故障注入、完整 contract suite、安装版 Windows 验收及当前差异的 CI 仍未完成。Task 35 未开始。
+
+## 未结束 Workflow 缺少 Checkpoint 时的 fail-closed 保护（2026-11-02）
+
+复核代码发现一个可复现缺口：生产 recovery `begin` 原先只用 `CheckpointStore.latest_all()` 判断是否有上一代状态；SQLite `workflow_runs` 中若存在 `RUNNING` / `WAITING` 记录但没有 checkpoint，会被当作空白首次启动而允许建立新 generation。`complete` 也只核对 checkpoint 与既有 Safe Mode marker，因此该 run 可能被遗漏并让 Sidecar 报 healthy。IpcServer 还没有在 recovery handler 返回 `SAFE_MODE` 后更新当前进程的内存请求门禁。
+
+- **RED：** 新增 `test_unfinished_workflow_without_checkpoint_keeps_sidecar_in_safe_mode`，通过生产 `SQLiteWorkflowRepository` 保存一个真实非终态 WorkflowRun（没有 checkpoint），再走 Sidecar Recovery IPC。旧代码返回 `RESUME`，测试以 **1 failed** 复现。
+- **GREEN：** `SQLiteWorkflowRepository.list_unfinished()` 读取并验证持久化的 `RUNNING` / `WAITING` runs；recovery begin 在 generation 变更前检查每个非终态 run 均有 checkpoint，否则为该 run 持久化 `CHECKPOINT_UNAVAILABLE` Safe Mode marker 并返回 `CHECKPOINT_NOT_FOUND`。Recovery complete 再次确认所有非终态 runs 都属于当前 transition 已恢复集合。IpcServer 在 recovery 返回 `WAIT` / `SAFE_MODE` / `DEAD_LETTER` 时，将当前进程同步切到 Safe Mode，拒绝后续普通 IPC。定向测试 **1 passed**。
+- **相关 Windows 本地回归：** `pytest runtimes/python-worker/tests/ipc runtimes/python-worker/tests/recovery runtimes/python-worker/tests/workflow runtimes/python-worker/tests/worker runtimes/python-worker/tests/persistence`，**125 passed in 4.15s**；Python `compileall` 退出码 0；`git diff --check` 退出码 0（仅有 evidence Markdown LF→CRLF 提示）。
+- **独立复核：** 尚待本轮代码冻结后的只读复审；本节记录的是实现与本机测试输出，不构成审查结论。
+- **未覆盖事项：** 这项保护防止漏掉没有 checkpoint 的未结束 WorkflowRun 并误报健康，但不会自动恢复该 run。实际生产 WorkflowEngine / ToolBroker 组合根、Sidecar workflow 执行入口及恢复已有 WorkflowRun 的能力仍不存在。当前 Worker WebSocket / lease authorize 与 Python `dispatch_tool()` 没有生产 job runner 串接，授权 permit 尚未绑定获批的 tool、参数摘要和可信 actor scope。现有进程故障注入仍是预置 checkpoint / durable idempotency 状态后重启，没有从真实 WorkflowEngine → ToolBroker dispatch 到 ACK 窗口杀进程。本轮未运行安装版 Desktop、未生成新 SHA、未提交或推送、也没有本轮差异对应的 GitHub CI。
+
+**Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 本地回归不替代计划要求的真实执行链路、故障注入、Windows 安装版验收、独立复审及新 SHA CI。Task 35 未开始。
+
+## 启动恢复门禁回归收口（2026-11-02）
+
+新增的启动安全门要求 Sidecar 在 Main 完成恢复协议前维持 `safe_mode`。第一次相关回归运行中，两个既有进程测试仍断言 Sidecar 一启动就为 `healthy`，因此失败；这反映测试没有执行生产启动所需的恢复握手。已更新测试：崩溃恢复场景先完成空 checkpoint 的初始恢复后才断言健康；实例锁场景则只验证新 Sidecar 在 Safe Mode 下持锁，并且不会因 Safe Mode 释放实例锁。产品健康门槛没有降低。
+
+- **定向回归：** `test_forced_sidecar_restart_recovers_dispatched_action_without_replay` 与 `test_second_sidecar_for_same_user_data_fails_closed_until_first_exits`：**2 passed**。
+- **受影响 Python 回归：** Windows 本机运行 IPC、Recovery、Workflow、Worker、Persistence 测试目录，**127 passed in 3.25s**。
+- **Desktop 验证：** `pnpm --filter @shuliu/desktop test:ipc`：**52 passed**；`pnpm --filter @shuliu/desktop typecheck`：退出码 0。
+- Python `compileall` 退出码 0；`git diff --check` 退出码 0（仅显示 evidence Markdown 的 LF/CRLF 提示）。
+- 此次变更尚未提交或推送。基线 `b342a974dae8e6c45cfaae965a895593d39c7a0a` 的既有 CI 不覆盖当前差异；当前差异没有新 SHA 或 GitHub CI 结果。
+- 本节的状态门和测试更新仍待独立审查者核验。
+
+**Task 34 继续 IN_PROGRESS / acceptance BLOCKED。** 当前实现仍未接上生产 WorkflowEngine→ToolBroker 执行组合根与 WorkflowRun 自动重建；Worker job runner 尚未调用 fencing dispatcher，且授权 permit 未绑定获批工具、参数摘要与可信 actor scope；故障注入未在真实 Workflow→ToolBroker dispatch/ACK 窗口杀进程；未完成安装版 Windows 验收和当前差异的新 SHA CI。Task 35 未开始。

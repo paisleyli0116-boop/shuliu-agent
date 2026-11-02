@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from shuliu_runtime.persistence.sqlite import (
+    LOCAL_MIGRATIONS,
     MigrationChecksumError,
     SQLiteDatabase,
     UnknownMigrationError,
@@ -47,7 +48,7 @@ def test_sqlite_migrations_create_only_approved_local_tables(tmp_path):
         "worker_leases",
         "knowledge_documents",
     } & tables
-    assert migration_count == 2
+    assert migration_count == len(LOCAL_MIGRATIONS)
 
 
 @pytest.mark.migration
