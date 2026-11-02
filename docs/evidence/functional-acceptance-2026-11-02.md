@@ -44,3 +44,9 @@
 1. Task 32：Cloud/Security owner 独立审查跨组织伪造、撤权与 Trace/Audit 证据（材料已在 `task-32-progress.md`）。
 2. Task 34：生产 main 尚未实例化 RecoveryCoordinator、fencing 未走真实链路 —— 验收保持 BLOCKED（详见 `task-34-progress.md` 的行为决策记录）。
 3. 上方观察项 4：确认 Sidecar 子进程派生是否应固定 `sys.executable`。
+
+## Owner 实机复核 — DeepSeek 真实连接（2026-11-02 09:40）
+
+- 所有者本人操作：桌面应用带一次性授权门（`SHULIU_MODEL_CONNECTION_TEST=1`）启动后，在「模型与连接」页点击一次「测试连接」。
+- 结果：绿色「真实 Provider 连接成功（4812 ms；Trace `3a81d800-7eeb-43ea-8ad6-d81861cefc83`）」。一键只发一次真实 HTTP 请求，与 Task 28 的保证一致。
+- 结论：Task 28 的 DeepSeek 真实连接验收由所有者在 Windows 实机亲手复核通过。
