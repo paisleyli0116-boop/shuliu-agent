@@ -132,3 +132,10 @@ Codex 在隔离副本 `D:/Documents/ChatGPT/数流/task34-production-recovery-82
 - **审查员对 ABSENT 的保留意见确认有效**：`ABSENT→未执行` 的安全解释依赖两个前提——旧进程已被真实 fencing（不可能继续运行并在事后派发），以及派发状态在外部操作之前已持久记录。这两个前提目前都只在测试夹具层面成立（见下方生产接线阻塞），生产链路接线前 `ABSENT` 的语义不能视为已证明。
 - **测试复跑（本会话执行）**：recovery + tools + persistence + 两个 PG 集成模块共 **137 passed、5 skipped**（skip 均为无 `SHULIU_DATABASE_URL` 的 PG 门控），超出报告声明的 61/4 范围，全部通过。
 - 生产接线缺口不变：生产 Workflow Repository、Electron Main → RecoveryCoordinator、Sidecar 生产恢复 IPC、真实 Worker lease/generation fencing。补齐前 Task 34 保持 **IN_PROGRESS / BLOCKED**。
+
+## 草稿 PR CI 证据（2026-11-02，SHA b342a97）
+
+- 草稿 PR #1（`feat/foundation-v0.1` ← `codex/task34-production-recovery`，仅用于 CI 证据，不合并）：https://github.com/paisleyli0116-boop/shuliu-agent/pull/1
+- Generic CI run `41385069236`：**success**（PG17、PG18、macOS、Ubuntu 四 job 全过）。PG17 实测：durable Tool idempotency 重启/并发集成 **9 passed**（含新增 inspect 快照用例）、Knowledge 单元与撤销 **48 passed**、Knowledge ACL 集成 **3 passed**、Worker lease 并发 **2 passed**；PG18 同构全过。
+- Windows Validation run `41385069133`：**success**，35/35 步。
+- 结论：只读幂等恢复增量在真实 PostgreSQL 17/18 与 Windows 实机全部通过；"新 SHA 无 CI 证据"的阻塞已解除。Task 34 剩余缺口仅为生产接线四项（生产 Workflow Repository、Electron Main 接 RecoveryCoordinator、Sidecar 生产恢复 IPC、真实 Worker lease/generation fencing）与生产崩溃故障注入验收。
