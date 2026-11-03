@@ -296,3 +296,14 @@ Codex 在隔离副本 `D:/Documents/ChatGPT/数流/task34-production-recovery-82
 - **合并注意：** `feat/foundation-v0.1` 与 `codex/task34-production-recovery` 双方都修改本文档，且前者多出 2 个仅文档的提交，合并时会在此文件冲突，需要人工取舍。
 
 **结论不变：Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 本轮新增的是 Worker 执行入口、动作摘要绑定、三个真实崩溃/Ack 丢失场景与 SHA 对应的平台 CI 证据；生产 Workflow→ToolBroker 组合根与可启动的生产 Worker host 仍未接通，Task 35 未开始。
+
+## 9be5bb7 后续核验：本机安装 smoke 的 ACL 环境差异（2026-11-03）
+
+- **Git 状态：** `codex/task34-production-recovery`，HEAD `9be5bb7b38730ed0dfebc071d3d11cb3954e8c0d`；核验开始时工作区干净。用户提供的 Generic CI `41438143417` 与 Windows Validation `41438147882` 均对应该 SHA 且成功。本机未重跑 CI 或 Worker/Integration 全量测试。
+- **本机构建：** Desktop build 成功；PyInstaller 首次因默认 uv 缓存目录 ACL 拒绝而失败，改用仅当前进程的 `%TEMP%` 缓存后构建成功，未修改系统 ACL。NSIS 产物版本 `0.1.0-task34.9be5bb7`，SHA-256 `E3D4B8D34DFDB6A5380F3D3201866406782A74600B6A6736DC70F9D36F02E3C3`。
+- **本机安装 smoke：** 在全新 `%TEMP%` 根运行仓库现有 `test_installer_smoke.ps1`，首次健康检查失败，Electron 退出码 `-2147483645`（`0x80000003`），Sidecar 未启动，未取得 IPC 握手。脱敏 Electron stderr 给出直接根因：Chromium sandbox 在 `electron/shell/browser/win/install_dir_access.cc:52` 拒绝读取安装目录，因为目录 ACL 有 AppContainer package SID 条目，却没有 `ALL APPLICATION PACKAGES`；其提示要求对该安装目录具备 RX 权限。故障发生在 `safe_storage` 诊断阶段之前，日志只有 `electron_main` 与 `resource_resolution` 两项。
+- **交叉核对：** 本次临时安装目录及 `%LOCALAPPDATA%\Programs` 父目录均无 `ALL APPLICATION PACKAGES` 条目；现存 `C:\Program Files\ShuLiu Foundation Current Session` 有继承的读取/执行条目。Windows Application 日志未找到该次匹配事件，也没有对应 CrashDumps 文件。stderr 的 Electron FATAL 行是本次根因证据；它说明本机临时安装路径的继承 ACL 不满足 Chromium sandbox 要求，不能据此否定用户提供的 Windows Validation 成功结果。
+- **安全与数据：** 未修改任何 ACL、未使用管理员权限、未触碰已有 Program Files 安装、旧用户安装目录或其凭据；本次 smoke 仅产生独立临时安装/测试数据。未点击 Provider 测试，也未访问 API Key。
+- **验收影响：** Windows Validation #41438147882 是 SHA 绑定的远端安装验收通过证据；本机当前用户目录的独立安装 smoke 为 **failed**，不能记作本机安装通过。若要在该机器复验，需为一个全新、专用的安装目录提供 Electron 所需的 AppContainer 读取/执行 ACL；本轮既有“不得修改 ACL”限制，因此未实施。PG17/18 并发 fencing 由 Generic CI #41438143417 真实执行通过；Windows Validation 不运行 Worker / 通用 Integration。
+
+**当前结论：Task 34 继续 IN_PROGRESS / acceptance BLOCKED，Task 35 未开始。** 最新 SHA 的远端 PG17/18 与 Windows Validation 证据齐全；本机安装路径存在已证实的 ACL 条件阻塞；另外生产 Workflow→ToolBroker 组合根和可启动 Worker host 仍缺可信生产身份、Policy/Approval、工具注册与任务领取配置，不能由本地测试身份代替。
