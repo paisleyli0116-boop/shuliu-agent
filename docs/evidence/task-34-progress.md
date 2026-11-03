@@ -363,3 +363,39 @@ Owner 批准对新建专用测试安装目录授予 Electron 要求的 AppContai
 - **审查者独立复跑（Windows 实机）：** `pytest runtimes/python-worker/tests/worker tests/workflow services/cloud-api/tests/workers services/cloud-api/tests/api/test_task_assignment.py services/cloud-api/tests/persistence/test_postgres_migrations.py tests/integration/test_worker_wss_cloud_loop.py tests/integration/test_worker_wss_dispatch_process_crash.py` → **101 passed, 3 skipped**（3 个 skip 均为无 `SHULIU_DATABASE_URL` 的 PG 用例）。全量非 PG 套件（排除 `tools/shuliu-dev-autopilot`）**687 passed, 11 skipped**。Worker 协议契约 **21 passed**。
 - **另一类已知偶发：** `tests/contract/ipc-roundtrip.test.ts` 在 ubuntu runner 上 Electron 进程 `SIGSEGV`（`signal=SIGSEGV`、`status=null`），与断言无关，重跑通过；本轮 `41583837145` 第 1 次尝试即因此失败、第 2 次通过。该问题跨 Task 反复出现，建议单独立项处理（如 runner 侧加 `xvfb`/禁用 sandbox 或拆分该用例），不计入 Task 34 功能缺陷。
 - **结论不变：** 上述四项修复让代码与 CI 成立，但**没有**把 Workflow 组合根或 Worker host 接入默认产品启动路径——`server.main()` 仍不注入可信依赖，仓库仍无生产 Worker 部署配置。Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**，Task 35 未开始。
+
+## 生产组合根与 Worker 服务接入（2026-11-03 14:00，审查者代实现）
+
+上一轮结论第 1、2 条（默认启动不注入可信依赖、无生产 Worker 部署配置）在本轮由审查者直接实现，不是由实现者补测。基线 HEAD `da63012`，代码 SHA `7e7cd74`。
+
+### 实现内容
+
+- **可信身份（`production/identity.py`）：** `EnvironmentIdentityProvider` 从进程环境读取 `SHULIU_ACTOR_ID` / `SHULIU_ORGANIZATION_ID` / `SHULIU_ACTOR_PERMISSIONS` / `SHULIU_CONTEXT_PRIVACY`。四个变量缺任一即 `RUNTIME_IDENTITY_UNAVAILABLE`，**没有** `"local"` 之类的默认主体；权限重复、格式不符为 `RUNTIME_IDENTITY_INVALID`；空权限不等于"全部权限"。`TrustedIdentityResolver` 只在请求 actor 的 subject 与 organization 都等于可信身份时返回 principal，权限恒取自可信身份，请求体无法扩权。
+- **Policy（`production/policy.py`）：** bundle 的未知顶层字段与未知规则字段一律拒绝加载（拼写错误不能变成"看起来已配置"）；`rules` 为空合法，效果是拒绝全部动作。
+- **审批（`production/approvals.py`）：** `ApprovalRepository` 此前只有 Protocol，本轮补 SQLite 实现。`transition` 是按读取状态的 compare-and-set，被拒绝的转换不写审计事件；审计事件与 outbox 在同一事务内落盘，审批状态与待同步事件不会分叉。新增迁移 `0006_approval_requests`，`DATABASE_SCHEMA_VERSION` 由 `1.2.0` 升至 `1.3.0`。
+- **Workflow 目录（`production/catalog.py`）：** 仓库此前没有任何 workflow 定义文件与加载器。`FileWorkflowCatalog` 启动时一次性加载 `*.json`，按 schema 校验，按 `(workflow_id, workflow_version_id)` 精确索引；空目录、任一非法定义、重复版本都使加载失败；未发布的版本不会被替换成别的版本。
+- **工具注册（`production/tools.py`）：** `ToolRegistry` 新增只读 `bindings()`；`compose_tool_registries` 对同名工具报 `TOOL_REGISTRY_CONFLICT` 而不是按顺序覆盖。未部署任何 provider 时注册表为空，任何工具调用都被拒绝。
+- **组合根（`production/composition.py`）：** 顺序为身份 → 审批窗口 → Policy → Workflow 目录，任一步失败即不装配并返回具体错误码。`attach_workflow_runtime` 复用已迁移的数据库，不重复 bootstrap。
+- **启动路径（`ipc/server.py`）：** `main()` 在 bootstrap 后调用 `_attach_production_workflow`；缺依赖时 Sidecar 照常启动，`health.components.workflow` 返回 `not_configured` 加具体 `error_code`，不打开 permissive 通路也不让应用起不来。`RuntimeBootstrapResult` 新增 `workflow_unavailable_code` 字段承载该原因。
+- **Worker 服务（`worker/service.py`）：** 端点、版本、能力、工具权限全部来自环境；WSS 端点省略时按 Cloud 固定路由 `/v1/workers/ws` 推导，`http://` / `ws://` 一律拒绝。首次用一次性 token 注册，之后走设备密钥挑战应答续期；落盘的 `worker-registration.json` 只含 `worker_id` 与 `device_key_ref`，会话凭据不写盘。`WorkerIdentityResolver` 拒绝带 `permissions` 等额外字段的 actor，权限由 `SHULIU_WORKER_TOOL_PERMISSIONS` 提供，默认空。入口为 `python -m shuliu_runtime.worker.service`（该包 `package = false`，无 console script）。
+- **跨端同步：** `supervisor.ts` 的 `SIDECAR_ENV_KEYS` 白名单补齐 6 个新变量，否则 Desktop 启动 Sidecar 时会被过滤掉；`test_installer_smoke.ps1` 的 `database_schema` 断言由 `1.2.0` 改为 `1.3.0`。
+
+### 边界声明
+
+`EnvironmentIdentityProvider` 是**候选实现**，不是已确认的安全事实。ADR-018 把"具体身份 Provider"列为上线前配置项，本轮没有改写该结论；抽象接口保持不变，未来可替换为 OIDC 或 Cloud 下发令牌。Sidecar 与 Worker 都尚未部署任何真实 Tool provider（Browser / Computer / MCP 需各自任务接入），因此"组合根可用"不等于"生产能力就绪"。
+
+### 验证
+
+- **本机（Windows 实机）：** Worker 全量 `645 passed, 19 skipped`（新增 `tests/production` 89 项）；Desktop `113 passed`；Desktop typecheck 通过；`git diff --check` 退出码 0。
+- **端到端（不依赖 CI）：** `test_a_started_workflow_executes_its_tool_through_the_real_broker` 用真实 SQLite repository、真实 ToolBroker、真实身份与 Policy 启动 `foundation.noop`，断言 `status=SUCCEEDED` 且 `organization_id` 来自可信身份；`test_a_policy_without_a_matching_rule_denies_the_tool` 断言无匹配规则时同一工作流不成功。
+- **CI（SHA `7e7cd74`）：** Generic CI run `41586651534` **success**（`Generic tests (ubuntu-latest)`、`Generic tests (macos-latest)`、`PostgreSQL migration (PG 17)`、`PostgreSQL migration (PG 18)` 四 job 全绿）；Windows Validation run `41586664556` **success**（含安装包 smoke，`database_schema=1.3.0` 在真实安装版上通过）。
+- **触发方式：** `codex/*` 分支的 push 不匹配 workflow 的 `branches: [main, "feat/**"]`，且 draft PR 未自动触发，两个 run 由 `workflow_dispatch` 在 `7e7cd74` 上手动触发。
+
+### 本轮 CI 暴露的既有偶发（非本轮代码缺陷）
+
+- **ubuntu `ipc-roundtrip.test.ts` SIGSEGV：** 第 1 次失败、重跑通过，与上一轮 `41583837145` 的表现一致，仍建议单独立项。
+- **macOS 本地 WSS 握手超时：** 第 1 次 `test_real_wss_cloud_commit_then_lost_ack_...` 在**首次**连接即超时（非重启竞态）；第 2 次换成 `test_real_wss_worker_process_crash_after_dispatch_fences_replay` 的重启段超时；第 3 次全绿。同一 SHA、同一代码三种结果，确认是 macOS runner 上本地 TLS/WSS 握手不稳，不是产品分支逻辑错误。macOS 侧目前只有 `lost_ack` 用例带"等待 disconnect + 3 次有界重启"，`fences_replay` 只有单次重启，建议后续统一。
+
+### Task 34 状态
+
+默认启动路径与 Worker 服务入口已接入，两项代码阻塞关闭。**Task 34 仍不能标记完成**：真实 Tool provider 未部署、生产身份 Provider 未定、Worker 进程守护与部署编排不在本仓库，验收需在真实 Cloud + 真实工具环境下重新执行。Task 35 未开始。
