@@ -307,3 +307,14 @@ Codex 在隔离副本 `D:/Documents/ChatGPT/数流/task34-production-recovery-82
 - **验收影响：** Windows Validation #41438147882 是 SHA 绑定的远端安装验收通过证据；本机当前用户目录的独立安装 smoke 为 **failed**，不能记作本机安装通过。若要在该机器复验，需为一个全新、专用的安装目录提供 Electron 所需的 AppContainer 读取/执行 ACL；本轮既有“不得修改 ACL”限制，因此未实施。PG17/18 并发 fencing 由 Generic CI #41438143417 真实执行通过；Windows Validation 不运行 Worker / 通用 Integration。
 
 **当前结论：Task 34 继续 IN_PROGRESS / acceptance BLOCKED，Task 35 未开始。** 最新 SHA 的远端 PG17/18 与 Windows Validation 证据齐全；本机安装路径存在已证实的 ACL 条件阻塞；另外生产 Workflow→ToolBroker 组合根和可启动 Worker host 仍缺可信生产身份、Policy/Approval、工具注册与任务领取配置，不能由本地测试身份代替。
+
+### ACL 授权后的本机安装验证与根因收口（2026-11-03 11:10，审查者）
+
+Owner 批准对新建专用测试安装目录授予 Electron 要求的 AppContainer ACL，并同步排查安装器。本节记录执行结果。
+
+- **smoke 脚本授权改动：** `tests/e2e/windows/test_installer_smoke.ps1` 在创建安装目录后、安装前执行 `icacls "<install>" /grant *S-1-15-2-1:(OI)(CI)(RX)`，即 Electron `install_dir_access.cc` 的 FATAL 消息官方建议的命令；授予仅限 install 子目录，`user-data` 目录保持默认 ACL，沙盒进程仍不能读取用户数据。授予失败会显式抛错而不是静默继续。CI 干净 runner 上该授予为冗余但无害。
+- **本机核心路径验证（全部通过）：** 安装器静默安装退出码 0，`ShuLiu Agent.exe` 与 `resources\python\ShuLiuRuntime.exe` 均存在；健康检查退出码 **0**，报告 `status=healthy`、`electron_version=44.9.0`、`node_version=24.22.0`、`preload_available=true`、`database_schema=1.2.0`、`ipc_handshake_status=succeeded`、`failure_stage=none`。**前一轮的 0x80000003 完全消失**，证实缺少 ALL APPLICATION PACKAGES 读/执行条目是唯一根因，产品本身无缺陷。验证后已静默卸载（退出码 0）并删除临时目录，标准安装位置无残留。
+- **根因收口（升级为环境问题）：** 本机 `C:\Users` 与 `C:\Users\Administrator` 的 DACL 各有一条**非继承的** capability SID 条目（`S-1-15-3-65536-…`，ExecuteFile），这是 Windows 默认不写的显式 ACE；本机装有 OpenAI Codex 桌面/CLI。该现象与 openai/codex#53272 描述的故障模式一致：沙箱安装向用户 profile 放置孤立的 AppContainer/capability ACE 且缺少 ALL APPLICATION PACKAGES，导致装在 profile 下任何位置（含 %TEMP%、%LOCALAPPDATA%\Programs）的 Electron 应用触发 `install_dir_access.cc` 检查失败。`C:\Program Files` 不在 profile 下、自带 ALL APPLICATION PACKAGES RX，因此既有安装不受影响；GitHub runner 的用户 profile 无此污染，因此 SHA 绑定的 Windows Validation smoke 一直通过。**结论：本机 smoke 失败是本机 profile ACL 环境问题，不是产品安装器缺陷；不建议为此修改 NSIS 安装器。** 如需本机根治，可评估对 profile 根授予 `*S-1-15-2-1:(OI)(CI)(RX)`（openai/codex#53272 的 workaround），该动作影响面大于本轮授权范围，未执行。
+- **执行环境注意：** 本机实际未安装 PowerShell 7（`pwsh` 不存在），完整 smoke 脚本使用 `ProcessStartInfo.ArgumentList` 与 `Process.Kill($true)`，只能在 pwsh 7 下运行；本轮核心路径验证由审查者以 Windows PowerShell 5.1 等价步骤（`Arguments` 字符串、`Kill()`）手工执行。另外启动安装版应用前必须清除 `ELECTRON_RUN_AS_NODE`，否则 Electron 降级为纯 Node 并以 `bad option: --shuliu-health-check` 退出（退出码 9）。完整 smoke（含安全模式与卸载保留断言）仍由 CI 的 Windows Validation 执行。
+- **打包注意：** electron-builder 下载 Electron/nsis 二进制在本机直连 GitHub 超时，设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 与 `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/` 后构建成功；产物 `ShuLiu Agent-Setup-0.1.0-task34-x64.exe`。
+- **状态影响：** 本机安装验证从 failed 改为 **passed（核心路径）**；Task 34 剩余阻塞仅剩生产 Workflow→ToolBroker 组合根与可启动的生产 Worker host。Task 35 未开始。
