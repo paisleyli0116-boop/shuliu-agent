@@ -25,6 +25,10 @@ const SIDECAR_ENV_KEYS = new Set([
   "PATH", "Path", "SystemRoot", "WINDIR", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR",
   "SHULIU_DATA_DIR", "SHULIU_MODEL_PROFILES_JSON", "SHULIU_ORGANIZATION_ID",
   "SHULIU_MODEL_CONNECTION_TEST",
+  // Trusted Runtime identity and Workflow composition. Only this process sets
+  // them, so a Renderer cannot promote itself by writing a request body.
+  "SHULIU_ACTOR_ID", "SHULIU_ACTOR_PERMISSIONS", "SHULIU_CONTEXT_PRIVACY",
+  "SHULIU_POLICY_BUNDLE", "SHULIU_WORKFLOW_CATALOG", "SHULIU_APPROVAL_TTL_SECONDS",
   "LANG", "LC_ALL", "PYTHONPATH", "PYTHONUTF8", "PYTHONIOENCODING", "VIRTUAL_ENV",
 ]);
 

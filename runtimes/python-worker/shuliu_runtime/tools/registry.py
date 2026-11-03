@@ -143,6 +143,18 @@ class ToolRegistry:
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._registrations))
 
+    def bindings(self) -> tuple[tuple[ToolDefinition, ToolExecutor], ...]:
+        """Expose reviewed definitions with their executors for composition.
+
+        The executor stays bound to its own definition; callers that compose
+        several registries cannot rebind a definition to a foreign executor
+        because the pair is returned together.
+        """
+        return tuple(
+            (deepcopy(registration.definition), registration.executor)
+            for _, registration in sorted(self._registrations.items())
+        )
+
     def validate_input(self, name: str, value: object) -> bool:
         return not next(
             self._registration(name).input_validator.iter_errors(value), None

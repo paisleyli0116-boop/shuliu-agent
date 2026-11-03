@@ -28,6 +28,9 @@ class RuntimeBootstrapResult:
     database: SQLiteDatabase
     workflow_repository: SQLiteWorkflowRepository
     workflow_runtime: ProductionWorkflowRuntime | None = None
+    # Set when the trusted Workflow composition could not be built, so health can
+    # report why Workflow is off instead of a bare `not_configured`.
+    workflow_unavailable_code: str | None = None
 
 
 def bootstrap_runtime(

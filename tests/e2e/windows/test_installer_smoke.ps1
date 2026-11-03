@@ -89,7 +89,7 @@ try {
   if ($healthy.Report.electron_version -ne '44.9.0' -or $healthy.Report.node_version -ne '24.22.0') {
     throw 'PACKAGED_ELECTRON_VERSION_MISMATCH'
   }
-  if ($healthy.Report.preload_available -ne $true -or $healthy.Report.database_schema -ne '1.2.0') {
+  if ($healthy.Report.preload_available -ne $true -or $healthy.Report.database_schema -ne '1.3.0') {
     throw 'PACKAGED_RUNTIME_HEALTH_INCOMPLETE'
   }
   $markerPath = Join-Path $userDataDirectory 'task26-preservation.marker'

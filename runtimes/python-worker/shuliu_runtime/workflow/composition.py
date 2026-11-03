@@ -45,10 +45,17 @@ class ProductionWorkflowRuntime:
         self,
         *,
         engine: WorkflowEngine,
+        broker: ToolBroker,
         dependencies: ProductionWorkflowDependencies,
     ) -> None:
         self.engine = engine
+        self._broker = broker
         self._dependencies = dependencies
+
+    @property
+    def tool_broker(self) -> ToolBroker:
+        """The single gated path a Worker uses to execute Cloud-assigned Tools."""
+        return self._broker
 
     @classmethod
     def build(
@@ -94,6 +101,7 @@ class ProductionWorkflowRuntime:
         )
         return cls(
             engine=WorkflowEngine(repository=repository, tool_broker=broker),
+            broker=broker,
             dependencies=dependencies,
         )
 

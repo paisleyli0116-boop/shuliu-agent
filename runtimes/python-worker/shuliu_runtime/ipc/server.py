@@ -7,6 +7,7 @@ import sys
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO
 
@@ -16,6 +17,10 @@ from shuliu_runtime.ipc.runtime_instance_lock import RuntimeInstanceAlreadyActiv
 from shuliu_runtime.models.config import ProviderConfigurationError
 from shuliu_runtime.models.connection import create_provider_ipc_handlers, create_provider_runtime_from_environment
 from shuliu_runtime.persistence.sqlite import SQLiteDatabase
+from shuliu_runtime.production.composition import (
+    attach_workflow_runtime,
+    compose_production_dependencies,
+)
 from shuliu_runtime.recovery.sqlite_safe_mode import SQLiteSafeModeController
 
 from jsonschema import Draft202012Validator
@@ -278,6 +283,7 @@ def _isolate_protocol_output() -> TextIO:
 
 
 def _serve_bootstrapped_runtime(bootstrap: Any) -> int:
+    workflow_unavailable_code = getattr(bootstrap, "workflow_unavailable_code", None)
     persisted_safe_mode = SQLiteSafeModeController(bootstrap.database).status()
 
     health_state = {
@@ -316,7 +322,8 @@ def _serve_bootstrapped_runtime(bootstrap: Any) -> int:
         else:
             health_state["components"]["workflow"] = {
                 "status": "not_configured",
-                "error_code": "WORKFLOW_RUNTIME_NOT_CONFIGURED",
+                "error_code": workflow_unavailable_code
+                or "WORKFLOW_RUNTIME_NOT_CONFIGURED",
             }
         IpcServer(
             handlers=handlers,
@@ -348,9 +355,36 @@ def main() -> int:
         except RuntimeBootstrapError as error:
             logger.error("event=runtime_bootstrap_failed code=%s", error.code)
             return 1
+        bootstrap = _attach_production_workflow(bootstrap)
         return _serve_bootstrapped_runtime(bootstrap)
     finally:
         lock.close()
+
+
+def _attach_production_workflow(bootstrap: Any) -> Any:
+    """Compose the trusted Workflow runtime from deployment configuration.
+
+    The Sidecar starts either way: a missing or invalid trusted dependency keeps
+    Workflow switched off and reported as `not_configured`, rather than opening a
+    permissive path or failing the whole application.
+    """
+    try:
+        outcome = compose_production_dependencies(bootstrap.database, os.environ)
+        return attach_workflow_runtime(
+            bootstrap, outcome.dependencies, outcome.unavailable_code
+        )
+    except Exception:
+        # 依赖已配置但装配失败时同样保持关闭，并留下稳定错误码供排障。
+        logger.error("event=workflow_composition_failed code=WORKFLOW_COMPOSITION_FAILED")
+        return _mark_workflow_unavailable(bootstrap, "WORKFLOW_COMPOSITION_FAILED")
+
+
+def _mark_workflow_unavailable(bootstrap: Any, code: str) -> Any:
+    try:
+        return replace(bootstrap, workflow_unavailable_code=code)
+    except Exception:
+        # 非标准引导结果（测试替身）没有可替换字段，保持原样即可。
+        return bootstrap
 
 
 if __name__ == "__main__":
