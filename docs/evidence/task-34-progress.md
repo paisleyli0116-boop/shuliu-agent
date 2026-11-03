@@ -350,3 +350,16 @@ Owner 批准对新建专用测试安装目录授予 Electron 要求的 AppContai
 - **修复（RED→GREEN）：** 新增 `test_every_migration_revision_fits_the_alembic_version_column`，扫描 `migrations/versions/*.py` 的 `revision` 并断言长度 ≤ 32；在改名前该测试 RED（明确指出 `0011_worker_task_assignment_permission.py`），把 revision 改为 `0011_worker_task_assignment`（27 字符）并同步文件名后 GREEN。迁移套件由 13 passed / 1 skipped 变为 **14 passed / 1 skipped**（新增的 1 项即该守卫）。该守卫在 SQLite 上即可运行，不需要数据库。
 - **教训：** 迁移用例只在 SQLite 上跑通不能证明 PG 可用；revision 标识长度属于跨库约束，必须由本地守卫覆盖，不能只依赖 CI 兜底。
 
+
+### 指派边界增量的 SHA 绑定 CI 与逐项修复（2026-11-03 13:35，审查者）
+
+首次真实 CI 一共暴露四类问题，前三类是产品/测试断言的真实缺陷，第四类是测试环境余量问题。全部修复后 `c97a707` 双工作流通过。
+
+- **最终证据（SHA `c97a707a`）：** Generic CI run `41583837145` **success**（第 2 次尝试），四个 job 全绿：`Generic tests (ubuntu-latest)`、`Generic tests (macos-latest)`、`PostgreSQL migration (PG 17)`、`PostgreSQL migration (PG 18)`；Windows Validation run `41583842112` **success**。两个工作流落在同一 SHA。
+- **缺陷 1（迁移，PG 专属）：** revision `0011_worker_task_assignment_permission` 长 38 字符，超出 `alembic_version.version_num` 的 `varchar(32)`。SQLite 不校验列长，本机全绿；PG 17/18 报 `StringDataRightTruncation`。改为 `0011_worker_task_assignment` 并新增不依赖数据库的长度守卫（见上一节）。
+- **缺陷 2（并发测试前提失效）：** `test_postgres_concurrency.py` 原用两个不同 Worker 抢同一任务来证明行锁串行化。新边界下第二个 Worker 在行锁之前就被 `WORKER_TASK_NOT_ASSIGNED` 拒绝，断言 `len(grants) == 1` 变成 0。改为同一个已指派 Worker 的两个并发领取（不同幂等键），仍验证“恰好一次授予 + 一次 TASK_NOT_READY”、过期后重租 fencing token 递增、重复提交结果幂等。这是语义变更而非放宽：旧场景在新安全模型下已不可能发生。
+- **缺陷 3（WSS 夹具时序）：** 崩溃注入夹具用 `timeout_seconds=5` 做本地 TLS 握手，在共享 runner 上小于“进程启动 + 握手”的实际耗时，macOS / ubuntu 以 `TimeoutError: timed out while waiting for handshake response` 失败，重跑即过。把连接余量提到 30 秒、子进程 join 窗口提到 45 秒、本地 TLS 服务启动窗口提到 30 秒；其余断言仍然有界。
+- **缺陷 4（重启时序，macOS 偶发）：** ACK 丢失用例在重启 Worker 时，Cloud 偶尔已回调 disconnect 但尚未准备好再次服务同一 Worker，重启进程以握手超时退出（约一半概率）。夹具改为最多 3 次有界重启，只有退出码 0 才接受；“副作用只出现一次”“结果事件只有一条”“任务 SUCCEEDED / 租约 COMPLETED”三条断言在每次尝试后照旧校验，未放宽。
+- **审查者独立复跑（Windows 实机）：** `pytest runtimes/python-worker/tests/worker tests/workflow services/cloud-api/tests/workers services/cloud-api/tests/api/test_task_assignment.py services/cloud-api/tests/persistence/test_postgres_migrations.py tests/integration/test_worker_wss_cloud_loop.py tests/integration/test_worker_wss_dispatch_process_crash.py` → **101 passed, 3 skipped**（3 个 skip 均为无 `SHULIU_DATABASE_URL` 的 PG 用例）。全量非 PG 套件（排除 `tools/shuliu-dev-autopilot`）**687 passed, 11 skipped**。Worker 协议契约 **21 passed**。
+- **另一类已知偶发：** `tests/contract/ipc-roundtrip.test.ts` 在 ubuntu runner 上 Electron 进程 `SIGSEGV`（`signal=SIGSEGV`、`status=null`），与断言无关，重跑通过；本轮 `41583837145` 第 1 次尝试即因此失败、第 2 次通过。该问题跨 Task 反复出现，建议单独立项处理（如 runner 侧加 `xvfb`/禁用 sandbox 或拆分该用例），不计入 Task 34 功能缺陷。
+- **结论不变：** 上述四项修复让代码与 CI 成立，但**没有**把 Workflow 组合根或 Worker host 接入默认产品启动路径——`server.main()` 仍不注入可信依赖，仓库仍无生产 Worker 部署配置。Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**，Task 35 未开始。
