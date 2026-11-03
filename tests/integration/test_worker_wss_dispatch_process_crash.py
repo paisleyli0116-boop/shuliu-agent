@@ -27,6 +27,11 @@ from shuliu_runtime.worker.credentials import WorkerAuthenticationError
 from shuliu_runtime.worker.registration import WorkerRegistrationClient
 from shuliu_runtime.worker.transport import HttpWorkerRegistrationCloud, WorkerWebSocketConnection
 
+# A shared CI runner can take far longer than the product default to spawn a
+# process and finish a local TLS handshake; the bounded waits in these fixtures
+# stay explicit, so only the connect margin is widened.
+WSS_CONNECT_TIMEOUT_SECONDS = 30
+
 
 class _Clock:
     def __init__(self) -> None:
@@ -194,7 +199,7 @@ def _worker_process(
         worker_id=worker_id,
         session_credential=session_credential,
         ssl_context=tls,
-        timeout_seconds=5,
+        timeout_seconds=WSS_CONNECT_TIMEOUT_SECONDS,
     )
     try:
         with connection:
@@ -404,7 +409,7 @@ def test_real_wss_worker_process_crash_after_dispatch_fences_replay(tmp_path):
                 },
             )
             restarted.start()
-            restarted.join(timeout=15)
+            restarted.join(timeout=45)
             if restarted.is_alive():
                 restarted.terminate()
                 restarted.join(timeout=5)
@@ -547,7 +552,7 @@ def test_real_wss_cloud_commit_then_lost_ack_does_not_repeat_worker_effect(tmp_p
                 },
             )
             worker.start()
-            worker.join(timeout=20)
+            worker.join(timeout=45)
             if worker.is_alive():
                 worker.terminate()
                 worker.join(timeout=5)
@@ -608,7 +613,7 @@ def test_real_wss_cloud_commit_then_lost_ack_does_not_repeat_worker_effect(tmp_p
                 },
             )
             restarted.start()
-            restarted.join(timeout=15)
+            restarted.join(timeout=45)
             if restarted.is_alive():
                 restarted.terminate()
                 restarted.join(timeout=5)

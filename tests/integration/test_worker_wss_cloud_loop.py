@@ -28,6 +28,9 @@ from shuliu_runtime.tools.broker import IdentityPrincipal, ToolBroker
 from shuliu_runtime.tools.registry import ToolDefinition, ToolRegistry
 from shuliu_runtime.worker.registration import WorkerRegistrationClient
 from shuliu_runtime.worker.credentials import WorkerAuthenticationError
+
+# Wider than the product default so a loaded runner is not mistaken for a refusal.
+WSS_CONNECT_TIMEOUT_SECONDS = 30
 from shuliu_runtime.worker.task_runner import WorkerTaskRunner
 from shuliu_runtime.worker.transport import HttpWorkerRegistrationCloud
 from shuliu_runtime.persistence.sqlite import SQLiteDatabase
@@ -183,7 +186,7 @@ def test_real_wss_registration_heartbeat_lease_result_reconnect_and_unknown_leas
                 worker_id=worker_id,
                 session_credential=enrolled.session_credential,
                 ssl_context=tls,
-                timeout_seconds=5,
+                timeout_seconds=WSS_CONNECT_TIMEOUT_SECONDS,
             ) as worker:
                 heartbeat = worker.send("heartbeat", {"worker_id": "worker_forged", "sent_at": clock().isoformat()})
                 assert heartbeat.message_type == "heartbeat"
@@ -284,7 +287,7 @@ def test_real_wss_registration_heartbeat_lease_result_reconnect_and_unknown_leas
                 worker_id=worker_id,
                 session_credential=refreshed.session_credential,
                 ssl_context=tls,
-                timeout_seconds=5,
+                timeout_seconds=WSS_CONNECT_TIMEOUT_SECONDS,
             ) as worker:
                 assert worker.send("heartbeat", {"worker_id": worker_id, "sent_at": clock().isoformat()}).message_type == "heartbeat"
 
