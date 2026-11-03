@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,20 @@ def upgrade_to_head(connection):
     config = Config(str(SERVICE_ROOT / "alembic.ini"))
     config.attributes["connection"] = connection
     command.upgrade(config, "head")
+
+
+@pytest.mark.migration
+def test_every_migration_revision_fits_the_alembic_version_column():
+    """alembic_version.version_num is varchar(32); SQLite cannot catch an overflow."""
+
+    revisions = {}
+    for path in sorted((SERVICE_ROOT / "migrations" / "versions").glob("*.py")):
+        match = re.search(r'^revision = "([^"]+)"$', path.read_text(), re.MULTILINE)
+        assert match is not None, path.name
+        revisions[match.group(1)] = path.name
+
+    too_long = {name: revision for revision, name in revisions.items() if len(revision) > 32}
+    assert too_long == {}
 
 
 @pytest.mark.migration

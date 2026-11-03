@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0011_worker_task_assignment_permission"
+revision = "0011_worker_task_assignment"
 down_revision = "0010_tool_idempotency"
 branch_labels = None
 depends_on = None

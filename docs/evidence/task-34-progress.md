@@ -322,7 +322,7 @@ Owner 批准对新建专用测试安装目录授予 Electron 要求的 AppContai
 ## Cloud 显式 Worker 指派与生产组合边界（2026-11-03）
 
 - **工作区基线：** 隔离 worktree 分支 codex/task34-production-recovery，基线 HEAD 50947b5b10bbbd51ddf5c3320014ee9b471f2d5f。本轮未提交、未推送；主 checkout 与 main 未改动。
-- **Cloud 指派边界：** 创建任务时只能通过受 RBAC 控制的 assigned_worker_id 指派。Cloud 校验 Worker 属于同一组织、状态可用并具备任务能力，再由 Cloud 写入 _worker_assignment；调用方不能在 payload 伪造该字段。新迁移 0011_worker_task_assignment_permission 只定义 foundation.task.assign_worker，默认不授予任何角色。没有此权限的用户不能创建指派任务。
+- **Cloud 指派边界：** 创建任务时只能通过受 RBAC 控制的 assigned_worker_id 指派。Cloud 校验 Worker 属于同一组织、状态可用并具备任务能力，再由 Cloud 写入 _worker_assignment；调用方不能在 payload 伪造该字段。新迁移 0011_worker_task_assignment 只定义 foundation.task.assign_worker，默认不授予任何角色。没有此权限的用户不能创建指派任务。
 - **领取与 fencing：** Worker 新增 lease_request_assigned 轮询，不在请求中指定 task_id；Cloud 只选择 READY/QUEUED 且 assignment.worker_id 与已认证 Worker 相符的任务。租约事务再次校验归属、能力、心跳和 fencing token。无指派时返回 no_assignment，不会领用组织内其他 Worker 的任务。普通 task_id 请求仍受 Cloud 指派检查限制。
 - **Worker host：** WorkerHost.with_tool_broker() 组合现有 WorkerTaskRunner；运行循环仅心跳并轮询 Cloud 明确指派任务，对连接错误、未知 ACK 不自动重试或重放。该服务类和 Cloud API 已由本地真实 TLS/WSS 测试执行；当前仓库仍没有已部署服务命令、生产 Worker 配置/注册凭据或生产 ToolBroker 策略组合，因此不能称为已上线的 Worker 服务。
 - **Workflow 组合：** ProductionWorkflowRuntime 将 SQLite Workflow Repository、ToolBroker、SQLite durable idempotency 与 Outbox 接在一起，Workflow actor/context 只能由注入的可信服务端 provider 构造。Sidecar bootstrap 可显式注入依赖，未注入时 health 返回 not_configured。当前 server.main() 没有受信 Identity、Policy、Approval、Workflow definition provider 或正式 ToolRegistry 可接入，故实际桌面默认运行仍不启用 Workflow 执行；没有用 permissive/fake adapter 绕过这一边界。
@@ -340,3 +340,13 @@ Owner 批准对新建专用测试安装目录授予 Electron 要求的 AppContai
 1. 默认 Sidecar 启动没有可信 Identity / Policy / Approval / Workflow catalog / ToolRegistry 组合；工作流 handler 仍是 not_configured。要启用须由 Cloud/Security/Runtime Owner 提供并批准这些真实依赖，不能从 Renderer 请求体推导。
 2. Worker host 仍缺生产服务启动/部署配置、已注册 Worker 的安全配置、Cloud endpoint 与正式 ToolBroker / Policy 组合；本轮验证的是服务类及本机 WSS，不是已部署的生产 Worker 服务。
 3. 本轮新 SHA 尚无 GitHub Actions、PostgreSQL 17/18 fencing、安装版全链路或独立审查结果。Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**；Task 35 未开始。
+
+### 首次真实 CI 暴露并修复的迁移缺陷（2026-11-03 13:05，审查者）
+
+实现者的本机回归在 SQLite 上全绿，但 SQLite 不校验 `alembic_version.version_num` 的列长度，掩盖了一个只在 PostgreSQL 上出现的错误。
+
+- **提交与 CI：** 审查者将未提交的工作区提交为 `027fd8f` 并推送到 `codex/task34-production-recovery`，触发 Generic CI `41581255818`。
+- **失败：** `PostgreSQL migration (PG 17)` 与 `(PG 18)` 两个 job 均 failure，报 `psycopg.errors.StringDataRightTruncation: value too long for type character varying(32)`，失败语句为 `UPDATE alembic_version SET version_num='0011_worker_task_assignment_permission' …`。revision 名 38 字符，超出 `alembic_version.version_num` 的 `varchar(32)`；历史最长 revision 恰为 32 字符（`0009_knowledge_embedding_profile`），此前从未越界。
+- **修复（RED→GREEN）：** 新增 `test_every_migration_revision_fits_the_alembic_version_column`，扫描 `migrations/versions/*.py` 的 `revision` 并断言长度 ≤ 32；在改名前该测试 RED（明确指出 `0011_worker_task_assignment_permission.py`），把 revision 改为 `0011_worker_task_assignment`（27 字符）并同步文件名后 GREEN。迁移套件由 13 passed / 1 skipped 变为 **14 passed / 1 skipped**（新增的 1 项即该守卫）。该守卫在 SQLite 上即可运行，不需要数据库。
+- **教训：** 迁移用例只在 SQLite 上跑通不能证明 PG 可用；revision 标识长度属于跨库约束，必须由本地守卫覆盖，不能只依赖 CI 兜底。
+
