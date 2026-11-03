@@ -31,6 +31,12 @@ class SilentTransport(WorkerTransport):
 
 @pytest.mark.integration
 def test_postgres_serializes_task_claim_and_fencing_token_increments():
+    """Two concurrent claim attempts for one assigned task serialize on the row.
+
+    A task now belongs to the Worker Cloud assigned it to, so the race is two
+    claims by that same Worker (duplicate delivery or a second host instance)
+    rather than two different Workers competing for one task.
+    """
     database_url = os.environ.get("SHULIU_DATABASE_URL")
     if not database_url:
         pytest.skip("SHULIU_DATABASE_URL is not configured")
@@ -44,6 +50,7 @@ def test_postgres_serializes_task_claim_and_fencing_token_increments():
         WorkerPrincipal(worker_id=worker_id, organization_id=organization_id)
         for worker_id in worker_ids
     )
+    owner = principals[0]
     now = [datetime.now(UTC)]
     config = LeaseConfig(
         lease_duration=timedelta(seconds=30),
@@ -74,7 +81,10 @@ def test_postgres_serializes_task_claim_and_fencing_token_increments():
                     task_id=task_id,
                     organization_id=organization_id,
                     status="READY",
-                    payload={"required_capabilities": ["worker.runtime"]},
+                    payload={
+                        "required_capabilities": ["worker.runtime"],
+                        "_worker_assignment": {"worker_id": owner.worker_id},
+                    },
                     created_at=now[0],
                 )
             )
@@ -83,8 +93,8 @@ def test_postgres_serializes_task_claim_and_fencing_token_increments():
             try:
                 return coordinators[index].lease(
                     task_id,
-                    principals[index],
-                    idempotency_key=f"effect-{suffix}",
+                    owner,
+                    idempotency_key=f"effect-{suffix}-{index}",
                 )
             except WorkerCoordinatorError as error:
                 return error.code
@@ -101,17 +111,17 @@ def test_postgres_serializes_task_claim_and_fencing_token_increments():
         coordinators[0].reconcile_expired(
             first.lease_id, decision=RecoveryDecision.RETRY_SAFE
         )
-        coordinators[1].heartbeat(principals[1])
+        coordinators[1].heartbeat(owner)
         second = coordinators[1].lease(
             task_id,
-            principals[1],
+            owner,
             idempotency_key=f"effect-{suffix}",
         )
         assert second.fencing_token > first.fencing_token
 
         def submit_result():
             return coordinators[1].commit_result(
-                principals[1],
+                owner,
                 lease_id=second.lease_id,
                 fencing_token=second.fencing_token,
                 idempotency_key=f"effect-{suffix}",
