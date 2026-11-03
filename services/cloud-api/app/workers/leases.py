@@ -281,6 +281,16 @@ class PostgresLeaseRepository:
                 raise WorkerCoordinatorError(
                     "TASK_PAYLOAD_INVALID", "task payload is invalid"
                 )
+            assignment = payload.get("_worker_assignment")
+            if (
+                not isinstance(assignment, Mapping)
+                or set(assignment) != {"worker_id"}
+                or assignment.get("worker_id") != principal.worker_id
+            ):
+                raise WorkerCoordinatorError(
+                    "WORKER_TASK_NOT_ASSIGNED",
+                    "task is not assigned to the authenticated Worker",
+                )
             required = payload.get("required_capabilities", [])
             available = worker["capabilities"]
             if (
@@ -357,6 +367,23 @@ class PostgresLeaseRepository:
             raise failure
         assert grant is not None
         return grant
+
+    def next_assigned_task_id(self, principal: WorkerPrincipal) -> str | None:
+        """Return the oldest ready task explicitly assigned to this Worker."""
+        statement = (
+            select(tasks.c.task_id)
+            .where(
+                tasks.c.organization_id == principal.organization_id,
+                tasks.c.status.in_(("READY", "QUEUED")),
+                tasks.c.payload["_worker_assignment"]["worker_id"].as_string()
+                == principal.worker_id,
+            )
+            .order_by(tasks.c.created_at, tasks.c.task_id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        with self._engine.connect() as connection:
+            return connection.execute(statement).scalar_one_or_none()
 
     def renew(
         self,

@@ -4,6 +4,7 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from shuliu_runtime.events.observability import redact
 from shuliu_runtime.tools.broker import (
@@ -53,6 +54,34 @@ class WorkerTaskRunner:
                 "WORKER_LEASE_RESPONSE_INVALID", "Cloud returned no valid lease"
             )
         return self.run_lease(lease)
+
+    def run_assigned(self) -> WorkerMessage:
+        """Poll Cloud for a task assigned to this authenticated Worker only."""
+        worker_id = getattr(self._connection, "worker_id", None)
+        if not _non_empty(worker_id):
+            raise WorkerAuthenticationError(
+                "WORKER_IDENTITY_MISMATCH", "authenticated Worker identity is unavailable"
+            )
+        response = self._connection.send(
+            "lease_request_assigned",
+            {"idempotency_key": f"assignment-poll:{uuid4().hex}"},
+        )
+        if not isinstance(response, WorkerMessage):
+            raise WorkerAuthenticationError(
+                "WORKER_LEASE_RESPONSE_INVALID", "Cloud returned no valid assignment response"
+            )
+        if response.message_type == "no_assignment":
+            if response.payload.get("worker_id") != worker_id:
+                raise WorkerAuthenticationError(
+                    "WORKER_IDENTITY_MISMATCH",
+                    "Cloud assignment response belongs to a different Worker",
+                )
+            return response
+        if response.message_type != "lease":
+            raise WorkerAuthenticationError(
+                "WORKER_LEASE_RESPONSE_INVALID", "Cloud returned no valid lease"
+            )
+        return self.run_lease(response)
 
     def run_lease(self, lease_message: WorkerMessage) -> WorkerMessage:
         if not isinstance(lease_message, WorkerMessage) or lease_message.message_type != "lease":

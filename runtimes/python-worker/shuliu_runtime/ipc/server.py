@@ -309,6 +309,15 @@ def _serve_bootstrapped_runtime(bootstrap: Any) -> int:
                 "SHULIU_WORKFLOW_CONTEXT_VERSION", "workflow:v1;skill:v1"
             ),
         ))
+        workflow_runtime = getattr(bootstrap, "workflow_runtime", None)
+        if workflow_runtime is not None:
+            handlers.update(workflow_runtime.create_ipc_handlers())
+            health_state["components"]["workflow"] = {"status": "healthy"}
+        else:
+            health_state["components"]["workflow"] = {
+                "status": "not_configured",
+                "error_code": "WORKFLOW_RUNTIME_NOT_CONFIGURED",
+            }
         IpcServer(
             handlers=handlers,
             health_state=health_state,

@@ -65,6 +65,7 @@ def worker_harness():
                 status="READY",
                 payload={
                     "required_capabilities": ["worker.runtime"],
+                    "_worker_assignment": {"worker_id": "worker-old"},
                     "tool_call": {
                         "tool_id": "foundation.test",
                         "arguments": {"value": "safe"},

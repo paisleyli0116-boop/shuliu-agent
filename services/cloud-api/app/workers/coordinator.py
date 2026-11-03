@@ -86,6 +86,24 @@ class WorkerCoordinator:
         )
         return grant
 
+    def lease_next_assigned(
+        self,
+        principal: WorkerPrincipal,
+        *,
+        idempotency_key: str,
+        trace_id: str | None = None,
+    ) -> LeaseGrant | None:
+        """Lease only a task assigned by Cloud to the authenticated Worker."""
+        task_id = self._repository.next_assigned_task_id(principal)
+        if task_id is None:
+            return None
+        return self.lease(
+            task_id,
+            principal,
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
+        )
+
     def renew(
         self,
         lease_id: str,

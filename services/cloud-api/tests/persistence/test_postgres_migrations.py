@@ -527,3 +527,29 @@ def test_task30_embedding_profile_check_rejects_partial_metadata(dimensions, ind
                 )
     finally:
         engine.dispose()
+
+@pytest.mark.migration
+def test_worker_assignment_permission_is_seeded_without_default_role_grants():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    permission_id = "foundation.task.assign_worker"
+    try:
+        with engine.begin() as connection:
+            upgrade_to_head(connection)
+            permission = connection.execute(
+                text(
+                    "SELECT permission_id FROM permissions "
+                    "WHERE permission_code = :permission_code"
+                ),
+                {"permission_code": permission_id},
+            ).scalar_one()
+            grant_count = connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM role_permissions "
+                    "WHERE permission_id = :permission_id"
+                ),
+                {"permission_id": permission_id},
+            ).scalar_one()
+        assert permission == permission_id
+        assert grant_count == 0
+    finally:
+        engine.dispose()

@@ -318,3 +318,25 @@ Owner 批准对新建专用测试安装目录授予 Electron 要求的 AppContai
 - **执行环境注意：** 本机实际未安装 PowerShell 7（`pwsh` 不存在），完整 smoke 脚本使用 `ProcessStartInfo.ArgumentList` 与 `Process.Kill($true)`，只能在 pwsh 7 下运行；本轮核心路径验证由审查者以 Windows PowerShell 5.1 等价步骤（`Arguments` 字符串、`Kill()`）手工执行。另外启动安装版应用前必须清除 `ELECTRON_RUN_AS_NODE`，否则 Electron 降级为纯 Node 并以 `bad option: --shuliu-health-check` 退出（退出码 9）。完整 smoke（含安全模式与卸载保留断言）仍由 CI 的 Windows Validation 执行。
 - **打包注意：** electron-builder 下载 Electron/nsis 二进制在本机直连 GitHub 超时，设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 与 `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/` 后构建成功；产物 `ShuLiu Agent-Setup-0.1.0-task34-x64.exe`。
 - **状态影响：** 本机安装验证从 failed 改为 **passed（核心路径）**；Task 34 剩余阻塞仅剩生产 Workflow→ToolBroker 组合根与可启动的生产 Worker host。Task 35 未开始。
+
+## Cloud 显式 Worker 指派与生产组合边界（2026-11-03）
+
+- **工作区基线：** 隔离 worktree 分支 codex/task34-production-recovery，基线 HEAD 50947b5b10bbbd51ddf5c3320014ee9b471f2d5f。本轮未提交、未推送；主 checkout 与 main 未改动。
+- **Cloud 指派边界：** 创建任务时只能通过受 RBAC 控制的 assigned_worker_id 指派。Cloud 校验 Worker 属于同一组织、状态可用并具备任务能力，再由 Cloud 写入 _worker_assignment；调用方不能在 payload 伪造该字段。新迁移 0011_worker_task_assignment_permission 只定义 foundation.task.assign_worker，默认不授予任何角色。没有此权限的用户不能创建指派任务。
+- **领取与 fencing：** Worker 新增 lease_request_assigned 轮询，不在请求中指定 task_id；Cloud 只选择 READY/QUEUED 且 assignment.worker_id 与已认证 Worker 相符的任务。租约事务再次校验归属、能力、心跳和 fencing token。无指派时返回 no_assignment，不会领用组织内其他 Worker 的任务。普通 task_id 请求仍受 Cloud 指派检查限制。
+- **Worker host：** WorkerHost.with_tool_broker() 组合现有 WorkerTaskRunner；运行循环仅心跳并轮询 Cloud 明确指派任务，对连接错误、未知 ACK 不自动重试或重放。该服务类和 Cloud API 已由本地真实 TLS/WSS 测试执行；当前仓库仍没有已部署服务命令、生产 Worker 配置/注册凭据或生产 ToolBroker 策略组合，因此不能称为已上线的 Worker 服务。
+- **Workflow 组合：** ProductionWorkflowRuntime 将 SQLite Workflow Repository、ToolBroker、SQLite durable idempotency 与 Outbox 接在一起，Workflow actor/context 只能由注入的可信服务端 provider 构造。Sidecar bootstrap 可显式注入依赖，未注入时 health 返回 not_configured。当前 server.main() 没有受信 Identity、Policy、Approval、Workflow definition provider 或正式 ToolRegistry 可接入，故实际桌面默认运行仍不启用 Workflow 执行；没有用 permissive/fake adapter 绕过这一边界。
+
+### 本轮 RED / GREEN 与验证
+
+- **迁移 RED：** 初版 0011 使用 sa.func.now() 作为 bulk_insert 的 DateTime 值，SQLite 迁移回归实际报 DateTime type only accepts Python datetime and date objects，共 12 项失败、1 项 PG 门控跳过。改为 datetime.now(UTC) 并新增权限种子检查后，迁移套件为 **13 passed, 1 skipped**；检查确认权限代码已定义且默认角色授权数为 0，升级/回滚路径通过。跳过项需要 SHULIU_DATABASE_URL，不是通过。
+- **Worker / Workflow / Cloud 合并定向回归：** **49 passed, 1 skipped**，覆盖 assigned polling、任务授权、lease fencing、Workflow 组合、SQLite/Alembic 迁移和真实本机 TLS/WSS Worker 故障 / ACK 丢失测试。唯一 skip 为需要配置的 PostgreSQL 用例。
+- **协议契约：** tests/contract/worker-protocol.test.ts **21 passed**；包含 lease_request_assigned 与 no_assignment 合法消息，以及拒绝 Worker 自带 task_id 的断言。
+- **WSS 故障诊断：** 初轮 3 项失败，原因均是旧测试任务未写入 Cloud assignment，Cloud 按新安全边界正确拒绝。修正夹具后，崩溃重连有一次在 Cloud 观察旧连接断开前发生 WSS 握手超时。测试随后等待 Cloud 的实际 disconnect 回调事件（有 5 秒上限）再恢复同一 Worker；单项通过，最终 WSS 子进程集成包含在上述 49 项通过内。没有改产品超时或放宽断言。
+- **差异检查：** git diff --check 退出码 0。Windows 本地结果不等于 PG17/18、安装版或 GitHub CI 证据。
+
+### 尚未关闭的 Task 34 阻塞
+
+1. 默认 Sidecar 启动没有可信 Identity / Policy / Approval / Workflow catalog / ToolRegistry 组合；工作流 handler 仍是 not_configured。要启用须由 Cloud/Security/Runtime Owner 提供并批准这些真实依赖，不能从 Renderer 请求体推导。
+2. Worker host 仍缺生产服务启动/部署配置、已注册 Worker 的安全配置、Cloud endpoint 与正式 ToolBroker / Policy 组合；本轮验证的是服务类及本机 WSS，不是已部署的生产 Worker 服务。
+3. 本轮新 SHA 尚无 GitHub Actions、PostgreSQL 17/18 fencing、安装版全链路或独立审查结果。Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**；Task 35 未开始。

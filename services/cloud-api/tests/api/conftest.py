@@ -33,6 +33,7 @@ def cloud_api():
     for permission in (
         "foundation.task.create",
         "foundation.task.read",
+        "foundation.task.assign_worker",
         "foundation.approval.read",
         "foundation.approval.decide",
     ):

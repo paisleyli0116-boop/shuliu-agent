@@ -236,6 +236,121 @@ def test_session_expiry_and_single_use_are_enforced_at_websocket_handshake(worke
     assert expired.value.code == 4401
 
 
+def test_assigned_poll_leases_only_task_assigned_to_authenticated_worker(worker_api):
+    client, app, engine, clock = worker_api
+    token = app.state.worker_auth.issue_registration_token(
+        organization_id="org-1", expires_at=clock() + timedelta(minutes=1)
+    )
+    body, _ = _registration_request(token)
+    registered = client.post("/v1/workers/registrations", json=body).json()
+    with engine.begin() as connection:
+        connection.execute(
+            insert(tasks).values(
+                task_id="task-other",
+                organization_id="org-1",
+                status="READY",
+                payload={
+                    "required_capabilities": ["worker.runtime"],
+                    "_worker_assignment": {"worker_id": "worker-other"},
+                    "tool_call": {"tool_id": "foundation.test", "arguments": {"value": "other"}},
+                },
+                created_at=clock(),
+            )
+        )
+        connection.execute(
+            insert(tasks).values(
+                task_id="task-assigned",
+                organization_id="org-1",
+                status="READY",
+                payload={
+                    "required_capabilities": ["worker.runtime"],
+                    "_worker_assignment": {"worker_id": registered["worker_id"]},
+                    "tool_call": {"tool_id": "foundation.test", "arguments": {"value": "mine"}},
+                },
+                created_at=clock(),
+            )
+        )
+
+    with client.websocket_connect("/v1/workers/ws") as websocket:
+        websocket.send_json({
+            "protocol_name": "worker",
+            "protocol_version": 1,
+            "message_id": "auth-assigned",
+            "request_id": "req-auth-assigned",
+            "trace_id": "trace-assigned",
+            "message_type": "authenticate",
+            "payload": {"session_credential": registered["session_credential"]},
+        })
+        assert websocket.receive_json()["message_type"] == "authenticated"
+        websocket.send_json({
+            "protocol_name": "worker",
+            "protocol_version": 1,
+            "message_id": "poll-assigned",
+            "request_id": "req-poll-assigned",
+            "trace_id": "trace-poll-assigned",
+            "message_type": "lease_request_assigned",
+            "payload": {"idempotency_key": "assignment-poll-1"},
+        })
+        lease = websocket.receive_json()
+
+    assert lease["message_type"] == "lease"
+    assert lease["payload"]["task_id"] == "task-assigned"
+    assert lease["payload"]["task"]["tool_call"]["arguments"] == {"value": "mine"}
+
+
+def test_assigned_poll_returns_no_assignment_without_leasing_another_workers_task(worker_api):
+    client, app, engine, clock = worker_api
+    token = app.state.worker_auth.issue_registration_token(
+        organization_id="org-1", expires_at=clock() + timedelta(minutes=1)
+    )
+    body, _ = _registration_request(token)
+    registered = client.post("/v1/workers/registrations", json=body).json()
+    with engine.begin() as connection:
+        connection.execute(
+            insert(tasks).values(
+                task_id="task-other-only",
+                organization_id="org-1",
+                status="READY",
+                payload={
+                    "required_capabilities": ["worker.runtime"],
+                    "_worker_assignment": {"worker_id": "worker-other"},
+                    "tool_call": {"tool_id": "foundation.test", "arguments": {"value": "other"}},
+                },
+                created_at=clock(),
+            )
+        )
+
+    with client.websocket_connect("/v1/workers/ws") as websocket:
+        websocket.send_json({
+            "protocol_name": "worker",
+            "protocol_version": 1,
+            "message_id": "auth-empty",
+            "request_id": "req-auth-empty",
+            "trace_id": "trace-empty",
+            "message_type": "authenticate",
+            "payload": {"session_credential": registered["session_credential"]},
+        })
+        assert websocket.receive_json()["message_type"] == "authenticated"
+        websocket.send_json({
+            "protocol_name": "worker",
+            "protocol_version": 1,
+            "message_id": "poll-empty",
+            "request_id": "req-poll-empty",
+            "trace_id": "trace-poll-empty",
+            "message_type": "lease_request_assigned",
+            "payload": {"idempotency_key": "assignment-poll-empty"},
+        })
+        response = websocket.receive_json()
+
+    assert response["message_type"] == "no_assignment"
+    assert response["payload"]["worker_id"] == registered["worker_id"]
+    with engine.connect() as connection:
+        status = connection.execute(
+            select(tasks.c.status).where(tasks.c.task_id == "task-other-only")
+        ).scalar_one()
+    assert status == "READY"
+
+
 def test_worker_must_receive_live_cloud_authorization_before_tool_dispatch(worker_api):
     client, app, engine, clock = worker_api
     token = app.state.worker_auth.issue_registration_token(
@@ -251,6 +366,7 @@ def test_worker_must_receive_live_cloud_authorization_before_tool_dispatch(worke
                 status="READY",
                 payload={
                     "required_capabilities": ["worker.runtime"],
+                    "_worker_assignment": {"worker_id": registered["worker_id"]},
                     "tool_call": {
                         "tool_id": "foundation.test",
                         "arguments": {"value": "safe"},

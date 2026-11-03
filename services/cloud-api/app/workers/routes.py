@@ -190,6 +190,26 @@ def create_worker_router(
                             idempotency_key=key,
                             trace_id=incoming.trace_id,
                         )
+                    elif incoming.message_type == "lease_request_assigned":
+                        key = payload.get("idempotency_key")
+                        if not isinstance(key, str) or not key.strip() or len(key) > 256:
+                            await websocket.send_json(
+                                _error_message("WORKER_LEASE_REQUEST_INVALID", incoming)
+                            )
+                            continue
+                        grant = coordinator.lease_next_assigned(
+                            principal,
+                            idempotency_key=key,
+                            trace_id=incoming.trace_id,
+                        )
+                        if grant is None:
+                            await websocket.send_json(
+                                _envelope(
+                                    "no_assignment",
+                                    {"worker_id": principal.worker_id},
+                                    trace_id=incoming.trace_id,
+                                )
+                            )
                     elif incoming.message_type == "lease_authorize":
                         task_id = payload.get("task_id")
                         lease_id = payload.get("lease_id")

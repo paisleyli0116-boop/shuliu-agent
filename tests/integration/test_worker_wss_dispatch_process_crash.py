@@ -310,6 +310,17 @@ def test_real_wss_worker_process_crash_after_dispatch_fences_replay(tmp_path):
                 worker_version="0.1.0",
                 capabilities=("worker.runtime",),
             ).register(registration_token)
+            disconnect_event = threading.Event()
+            active_worker_id = enrolled.worker_id
+            original_disconnect = app.state.worker_connections.disconnect
+
+            def record_worker_disconnect(worker_id):
+                original_disconnect(worker_id)
+                if worker_id == active_worker_id:
+                    disconnect_event.set()
+
+            app.state.worker_connections.disconnect = record_worker_disconnect
+
             with engine.begin() as db:
                 db.execute(
                     insert(tasks).values(
@@ -318,6 +329,7 @@ def test_real_wss_worker_process_crash_after_dispatch_fences_replay(tmp_path):
                         status="READY",
                         payload={
                             "required_capabilities": ["worker.runtime"],
+                            "_worker_assignment": {"worker_id": enrolled.worker_id},
                             "tool_call": {
                                 "tool_id": "foundation.crash_fixture",
                                 "arguments": {"task_id": "task-worker-crash"},
@@ -351,6 +363,7 @@ def test_real_wss_worker_process_crash_after_dispatch_fences_replay(tmp_path):
             process.terminate()
             process.join(timeout=10)
             assert process.exitcode is not None and process.exitcode != 0
+            assert disconnect_event.wait(timeout=5), "Cloud did not observe terminated Worker WSS disconnect"
 
             with engine.connect() as db:
                 lease_row = (
@@ -492,6 +505,7 @@ def test_real_wss_cloud_commit_then_lost_ack_does_not_repeat_worker_effect(tmp_p
                         status="READY",
                         payload={
                             "required_capabilities": ["worker.runtime"],
+                            "_worker_assignment": {"worker_id": enrolled.worker_id},
                             "tool_call": {
                                 "tool_id": "foundation.crash_fixture",
                                 "arguments": {"task_id": "task-worker-crash"},

@@ -17,6 +17,8 @@ describe("Worker protocol v1", () => {
     ["authenticated", { worker_id: "worker_01", organization_id: "org_01" }],
     ["heartbeat", { worker_id: "worker_01", sent_at: "2026-10-18T00:00:00Z" }],
     ["lease_request", { task_id: "task_01", idempotency_key: "idem_01" }],
+    ["lease_request_assigned", { idempotency_key: "idem_02" }],
+    ["no_assignment", { worker_id: "worker_01" }],
     ["lease", { task_id: "task_01", lease_id: "lease_01", fencing_token: 1, idempotency_key: "idem_01", expires_at: "2026-10-18T00:01:00Z", task: { required_capabilities: ["worker.runtime"], payload: {} } }],
     ["lease_authorize", { task_id: "task_01", lease_id: "lease_01", fencing_token: 1, idempotency_key: "idem_01", action_digest: "a".repeat(64) }],
     ["lease_authorized", { task_id: "task_01", lease_id: "lease_01", fencing_token: 1, idempotency_key: "idem_01", action_digest: "a".repeat(64), expires_at: "2026-10-18T00:01:00Z" }],
@@ -29,6 +31,15 @@ describe("Worker protocol v1", () => {
     expect(validateProtocol("worker", { ...envelope, message_type, payload }).valid).toBe(true);
   });
 
+  it("rejects caller-selected task identity in assigned polling", () => {
+    const result = validateProtocol("worker", {
+      ...envelope,
+      message_type: "lease_request_assigned",
+      payload: { idempotency_key: "idem_02", task_id: "task_01" },
+    });
+
+    expect(result.valid).toBe(false);
+  });
   it("rejects a lease that omits its fencing token", () => {
     const result = validateProtocol("worker", {
       ...envelope,

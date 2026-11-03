@@ -168,6 +168,7 @@ def test_real_wss_registration_heartbeat_lease_result_reconnect_and_unknown_leas
                             status="READY",
                             payload={
                                 "required_capabilities": ["worker.runtime"],
+                                "_worker_assignment": {"worker_id": worker_id},
                                 "tool_call": {
                                     "tool_id": "foundation.wss_fixture",
                                     "arguments": {"task_id": task_id},
