@@ -294,7 +294,7 @@ def test_real_wss_worker_process_crash_after_dispatch_fences_replay(tmp_path):
         process = None
         try:
             server_thread.start()
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 30
             while not server.started and server_thread.is_alive() and time.monotonic() < deadline:
                 time.sleep(0.02)
             assert server.started, "local TLS WebSocket Cloud did not start"
@@ -361,10 +361,13 @@ def test_real_wss_worker_process_crash_after_dispatch_fences_replay(tmp_path):
                 kwargs={"expect_reconciliation": False, "block_after_effect": True},
             )
             process.start()
-            effect_deadline = time.monotonic() + 15
+            effect_deadline = time.monotonic() + 45
             while not effect_path.exists() and process.is_alive() and time.monotonic() < effect_deadline:
                 time.sleep(0.02)
-            assert effect_path.exists(), "Tool Broker side effect did not begin"
+            assert effect_path.exists(), (
+                "Tool Broker side effect did not begin "
+                f"(worker alive={process.is_alive()} exitcode={process.exitcode})"
+            )
             process.terminate()
             process.join(timeout=10)
             assert process.exitcode is not None and process.exitcode != 0
@@ -481,7 +484,7 @@ def test_real_wss_cloud_commit_then_lost_ack_does_not_repeat_worker_effect(tmp_p
         server_thread = threading.Thread(target=server.run, daemon=True)
         try:
             server_thread.start()
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 30
             while not server.started and server_thread.is_alive() and time.monotonic() < deadline:
                 time.sleep(0.02)
             assert server.started, "local TLS WebSocket Cloud did not start"

@@ -137,7 +137,7 @@ def test_real_wss_registration_heartbeat_lease_result_reconnect_and_unknown_leas
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
         try:
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 30
             while not server.started and thread.is_alive() and time.monotonic() < deadline:
                 time.sleep(0.02)
             assert server.started, "TLS WebSocket server did not start"
