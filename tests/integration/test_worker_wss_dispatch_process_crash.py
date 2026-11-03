@@ -497,6 +497,16 @@ def test_real_wss_cloud_commit_then_lost_ack_does_not_repeat_worker_effect(tmp_p
                 worker_version="0.1.0",
                 capabilities=("worker.runtime",),
             ).register(registration_token)
+            disconnect_event = threading.Event()
+            active_worker_id = enrolled.worker_id
+            original_disconnect = app.state.worker_connections.disconnect
+
+            def record_worker_disconnect(worker_id):
+                original_disconnect(worker_id)
+                if worker_id == active_worker_id:
+                    disconnect_event.set()
+
+            app.state.worker_connections.disconnect = record_worker_disconnect
             with engine.begin() as db:
                 db.execute(
                     insert(tasks).values(
@@ -543,6 +553,9 @@ def test_real_wss_cloud_commit_then_lost_ack_does_not_repeat_worker_effect(tmp_p
                 worker.join(timeout=5)
                 pytest.fail("Worker did not resolve the lost ACK as unknown in bounded time")
             assert worker.exitcode == 0
+            assert disconnect_event.wait(
+                timeout=5
+            ), "Cloud did not observe the finished Worker WSS disconnect"
             assert drop_ack.dropped is True
             assert outcome_path.read_text(encoding="utf-8") == "WORKER_RESULT_ACK_UNKNOWN"
 
