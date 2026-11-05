@@ -31,6 +31,12 @@ class RuntimeBootstrapResult:
     # Set when the trusted Workflow composition could not be built, so health can
     # report why Workflow is off instead of a bare `not_configured`.
     workflow_unavailable_code: str | None = None
+    # Desktop runtimes are attached only when their trusted dependencies exist.
+    # A `None` runtime with a code means "off", never "unrestricted".
+    browser_runtime: object | None = None
+    computer_runtime: object | None = None
+    browser_unavailable_code: str | None = None
+    computer_unavailable_code: str | None = None
 
 
 def bootstrap_runtime(

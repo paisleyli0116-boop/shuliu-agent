@@ -213,3 +213,9 @@ PostgreSQL 集成环境补记：精简 pytest 依赖目录最初缺少 `alembic`
 
 - `durable_idempotency` 所需的三类证据（持久 adapter、重启后 key/result 对账、重复请求结果一致）在 Workflow Tool 路径与 PG 适配器层已具备，并有本 SHA 绑定的 CI 记录。
 - Task 33 仍不标记为"验收通过"：Browser / Computer 生产组合根缺失导致的 fail-closed 属功能面欠账，且文末此前记录的一轮独立只读复审尚未对最新修正给出结论。
+
+## 后续更新（2026-11-05，Task 24/25 组合根）
+
+上文“本分支没有任何生产代码构造 Browser / Computer runtime”一条已被补齐：`shuliu_runtime/production/desktop.py` 现在在 Sidecar 启动时装配两个运行时，并向它们注入 `SQLiteIdempotencyStore(database)`。证据与未覆盖面见 `docs/evidence/task-24-25-production-composition.md`。
+
+需要注意，装配完成不等于副作用可用：Browser 的执行门禁仍固定为 `None`（写操作在派发前被拒），Computer 的写操作仍要求人工审批。因此 Task 33 关于“这两条路径的持久幂等在真实副作用上得到证明”的结论依然不成立——现在缺的是可执行的副作用，而不是组合根。

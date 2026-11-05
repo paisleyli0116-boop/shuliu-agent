@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from threading import Event
 
 import pytest
@@ -214,3 +215,54 @@ def test_an_unpublished_version_is_refused(tmp_path) -> None:
         )
 
     assert getattr(error.value, "code", None) == "WORKFLOW_DEFINITION_UNAVAILABLE"
+
+
+def test_the_sidecar_keeps_desktop_runtimes_off_without_configuration(
+    clean_environment, tmp_path
+) -> None:
+    bootstrap = bootstrap_runtime(tmp_path / "data")
+
+    attached = server_module._attach_production_workflow(bootstrap)
+
+    assert attached.browser_runtime is None
+    assert attached.computer_runtime is None
+    assert attached.browser_unavailable_code == "RUNTIME_IDENTITY_UNAVAILABLE"
+    assert attached.computer_unavailable_code == "RUNTIME_IDENTITY_UNAVAILABLE"
+
+
+def test_the_sidecar_attaches_the_browser_when_origins_are_deployed(
+    clean_environment, tmp_path
+) -> None:
+    environment = deployed_environment(tmp_path, allow_tool=True)
+    environment[
+        "SHULIU_BROWSER_ALLOWED_ORIGINS"
+    ] = "http://127.0.0.1:8765,https://app.example.test"
+    for key, value in environment.items():
+        clean_environment.setenv(key, value)
+    bootstrap = bootstrap_runtime(tmp_path / "data")
+
+    attached = server_module._attach_production_workflow(bootstrap)
+
+    assert attached.browser_runtime is not None
+    assert attached.browser_unavailable_code is None
+    assert attached.workflow_runtime is not None
+    if sys.platform == "win32":
+        assert attached.computer_runtime is not None
+    else:
+        assert attached.computer_runtime is None
+        assert attached.computer_unavailable_code == "COMPUTER_RUNTIME_UNSUPPORTED"
+
+
+def test_a_desktop_component_reports_only_the_capability_it_has() -> None:
+    assert server_module._desktop_component(
+        object(), None, "BROWSER_RUNTIME_NOT_CONFIGURED", extra={"execution_gate": "closed"}
+    ) == {"status": "healthy", "execution_gate": "closed"}
+    assert server_module._desktop_component(
+        None,
+        "BROWSER_ALLOWED_ORIGINS_UNAVAILABLE",
+        "BROWSER_RUNTIME_NOT_CONFIGURED",
+        extra={"execution_gate": "closed"},
+    ) == {
+        "status": "not_configured",
+        "error_code": "BROWSER_ALLOWED_ORIGINS_UNAVAILABLE",
+    }

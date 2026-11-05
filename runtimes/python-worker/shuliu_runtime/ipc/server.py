@@ -18,8 +18,8 @@ from shuliu_runtime.models.config import ProviderConfigurationError
 from shuliu_runtime.models.connection import create_provider_ipc_handlers, create_provider_runtime_from_environment
 from shuliu_runtime.persistence.sqlite import SQLiteDatabase
 from shuliu_runtime.production.composition import (
-    attach_workflow_runtime,
-    compose_production_dependencies,
+    attach_production_runtime,
+    compose_production_runtime,
 )
 from shuliu_runtime.recovery.sqlite_safe_mode import SQLiteSafeModeController
 
@@ -325,6 +325,19 @@ def _serve_bootstrapped_runtime(bootstrap: Any) -> int:
                 "error_code": workflow_unavailable_code
                 or "WORKFLOW_RUNTIME_NOT_CONFIGURED",
             }
+        health_state["components"]["browser"] = _desktop_component(
+            getattr(bootstrap, "browser_runtime", None),
+            getattr(bootstrap, "browser_unavailable_code", None),
+            "BROWSER_RUNTIME_NOT_CONFIGURED",
+            # 生产上 Browser 的副作用门禁固定关闭：只有观察类操作可用。
+            extra={"execution_gate": "closed"},
+        )
+        health_state["components"]["computer"] = _desktop_component(
+            getattr(bootstrap, "computer_runtime", None),
+            getattr(bootstrap, "computer_unavailable_code", None),
+            "COMPUTER_RUNTIME_NOT_CONFIGURED",
+            extra={"approval_required": True},
+        )
         IpcServer(
             handlers=handlers,
             health_state=health_state,
@@ -362,21 +375,35 @@ def main() -> int:
 
 
 def _attach_production_workflow(bootstrap: Any) -> Any:
-    """Compose the trusted Workflow runtime from deployment configuration.
+    """Compose Workflow and the desktop runtimes from deployment configuration.
 
     The Sidecar starts either way: a missing or invalid trusted dependency keeps
-    Workflow switched off and reported as `not_configured`, rather than opening a
-    permissive path or failing the whole application.
+    the affected runtime switched off and reported as `not_configured`, rather
+    than opening a permissive path or failing the whole application.
     """
     try:
-        outcome = compose_production_dependencies(bootstrap.database, os.environ)
-        return attach_workflow_runtime(
-            bootstrap, outcome.dependencies, outcome.unavailable_code
+        outcome = compose_production_runtime(
+            bootstrap.database,
+            os.environ,
+            data_directory=Path(bootstrap.database_path).parent,
         )
+        return attach_production_runtime(bootstrap, outcome)
     except Exception:
         # 依赖已配置但装配失败时同样保持关闭，并留下稳定错误码供排障。
         logger.error("event=workflow_composition_failed code=WORKFLOW_COMPOSITION_FAILED")
         return _mark_workflow_unavailable(bootstrap, "WORKFLOW_COMPOSITION_FAILED")
+
+
+def _desktop_component(
+    runtime: Any, unavailable_code: Any, default_code: str, *, extra: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Describe a desktop runtime without implying more capability than it has."""
+    if runtime is not None:
+        return {"status": "healthy", **extra}
+    return {
+        "status": "not_configured",
+        "error_code": unavailable_code or default_code,
+    }
 
 
 def _mark_workflow_unavailable(bootstrap: Any, code: str) -> Any:
