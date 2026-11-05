@@ -54,6 +54,22 @@
 - **证据保留策略**：`FileEvidenceStore` 只写不删，没有轮转或保留期。Task 27 的 evidence retention 配置接管前，目录会单调增长。
 - **未改语义**：Browser 的执行门禁仍然关闭，所以本次改动**没有**让任何 Browser 写操作可在生产运行；本任务交付的是“路径存在且被正确挡住”，不是“Browser 可写”。
 
+## CI 覆盖缺口（必须知道）
+
+`runtimes/python-worker/tests/production` **不在任何 CI 工作流的收集范围内**：
+
+- `ci.yml` 的 Python 步骤逐个点名 `policy` / `approval` / `tools` / `agent` / `workflow` / `models` / `worker` / `skills`，没有 `production`；集成步骤只收集带 `integration` marker 的用例。
+- `windows-validation.yml` 覆盖 `computer`、`e2e/windows`、`browser`、`skills`、`skills/platform`，同样没有 `production`。
+
+因此本次新增的 27 项测试，以及此前 Task 34 就已存在的 `test_composition.py` / `test_sidecar_wiring.py` / `test_worker_service.py`，都只在本机执行过。两条 CI 全绿**不能**被描述为“这些测试在 CI 通过”。
+
+本次遵守“暂不改共享 CI 工作流与总门禁文件”的约束，未修改 `ci.yml`。建议在 Task 27 汇总门禁时补一条：
+
+```yaml
+- name: Run Python production composition tests
+  run: uv run --locked --package shuliu-python-runtime pytest runtimes/python-worker/tests/production -q
+```
+
 ## 最终验证
 
 本地（Windows 11，Python 3.11 `.venv`）：
