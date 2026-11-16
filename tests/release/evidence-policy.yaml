@@ -1,0 +1,50 @@
+# Evidence policy for Foundation V0.1 release gates (ADR-026 / ADR-027).
+#
+# Evidence content is separated from metadata and retention. Every gate
+# result must carry the metadata below; the aggregator refuses results
+# that substitute Fake, InMemory, or process-level substitutes for the
+# real capability the gate exists to prove.
+policy_version: 1
+
+required_metadata:
+  - gate_id
+  - status              # PASS | FAIL | NOT_RUN
+  - commit_sha          # full 40-char SHA of the verified commit
+  - platform            # linux | macos | windows
+  - runner              # workflow or machine that produced the evidence
+  - recorded_at         # ISO-8601 UTC timestamp
+  - artifacts           # log / report locations; must exist
+
+provenance_rules:
+  - id: no_fake_engines
+    description: >
+      A gate whose capability requires a real external system (security
+      scan engine, model provider, embedding provider, OS sandbox,
+      OS secure storage, PostgreSQL) fails closed when its evidence
+      declares a Fake, Mock, InMemory, or stub implementation.
+  - id: pid_is_not_sandbox
+    description: >
+      skill_sandbox_provider evidence must record enforced OS controls;
+      a separate process id alone is not sandbox evidence.
+  - id: platform_binding
+    description: >
+      Gates with a platform requirement accept only evidence recorded on
+      that platform. skill_sandbox_provider requires evidence from every
+      platform listed in the manifest.
+  - id: sha_binding
+    description: >
+      Evidence commit_sha must equal the release commit under evaluation.
+      Stale evidence from another SHA is FAIL, not PASS.
+  - id: no_secrets_in_evidence
+    description: >
+      Evidence must not contain secret values; key names and SecretRef
+      identifiers are allowed. Credential-shaped keys (password, token,
+      api_key, cookie, authorization, credential, secret) with
+      non-reference values are rejected.
+
+retention:
+  class: release-evidence
+  policy_ref: ADR-026
+  note: >
+    Retention duration and capacity are deployment configuration; this
+    file never encodes a fixed duration.

@@ -1,0 +1,66 @@
+# Foundation V0.1 Release Gate Manifest (ADR-027)
+#
+# This file is the ONLY authoritative list of required release gates.
+# The aggregator must refuse PASS unless every gate here reports PASS with
+# platform-correct evidence. Gates may be added here; the fixed ids below
+# are pinned by tests/release/test_release_gate_aggregator.py and must not
+# be renamed without updating ADR-027 and the Implementation Plan.
+manifest_version: 1
+release: foundation-v0.1
+
+required_gates:
+  # --- ADR-027 core nine ---
+  - id: unit
+    description: TypeScript and Python unit suites.
+  - id: contract
+    description: Protocol and version-compatibility suites.
+  - id: integration
+    description: Cross-module suites including failure injection.
+  - id: migration
+    description: Database migration checks on supported engines.
+  - id: security
+    description: Repository security suites (redaction, RBAC, secrets).
+  - id: ipc_handshake
+    description: Real Electron Main <-> real Python sidecar NDJSON round trip.
+  - id: windows_build
+    description: Windows build with PyInstaller and NSIS packaging.
+    platform: windows
+  - id: installer_smoke
+    description: Installed-app smoke test on a Windows runner or real device.
+    platform: windows
+  - id: runtime_health
+    description: Sidecar runtime health gate after startup.
+    platform: windows
+
+  # --- Implementation Plan Task 27 capability gates ---
+  - id: secure_storage_macos
+    description: Real Electron safeStorage round trip via macOS Keychain.
+    platform: macos
+  - id: secure_storage_windows
+    description: Real Electron safeStorage round trip via Windows DPAPI.
+    platform: windows
+  - id: real_model_provider_connection
+    description: Real configured provider connection evidence (Task 28).
+  - id: model_provider_license_security
+    description: Provider license and security review evidence (Task 28).
+  - id: model_usage_budget_persistence
+    description: Durable ModelCall / cost / budget ledger evidence (Task 29).
+  - id: real_embedding_knowledge_retrieval
+    description: Real embedding provider retrieval closure (Task 30).
+  - id: knowledge_document_ingestion_pdf_docx_xlsx
+    description: PDF / DOCX / XLSX ingestion evidence (Task 31).
+  - id: knowledge_server_rbac_trace_audit
+    description: Server-side trusted RBAC, trace and audit evidence (Task 32).
+  - id: durable_idempotency
+    description: Durable Tool idempotency restart and concurrency evidence (Task 33).
+  - id: process_crash_recovery
+    description: Full-process crash recovery evidence (Task 34).
+    platform: windows
+  - id: skill_sandbox_provider
+    description: Adversarially validated per-OS sandbox provider evidence (Task 36).
+    platforms: [linux, macos, windows]
+  - id: skill_security_scan
+    description: Real security-scan engine evidence for Skill install (Task 35).
+
+  # --- ADR-026 evidence governance ---
+evidence_policy: evidence-policy.yaml
