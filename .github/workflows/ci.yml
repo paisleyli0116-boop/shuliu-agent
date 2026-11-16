@@ -59,7 +59,14 @@ jobs:
       - name: Run TypeScript unit and Browser Fake contract tests
         run: pnpm test:unit
       - name: Run Electron ↔ Python IPC tests with real subprocesses
-        run: pnpm test:ipc
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # Real Electron needs a display server; headless Linux sporadically
+            # SIGSEGVs without one (see tests/contract/ipc-roundtrip.test.ts).
+            xvfb-run -a pnpm test:ipc
+          else
+            pnpm test:ipc
+          fi
       - name: Run Desktop UI, IPC, and security unit tests
         run: pnpm --filter @shuliu/desktop test
       - name: Typecheck Electron Main, Preload, and Renderer
@@ -68,7 +75,12 @@ jobs:
         run: pnpm --filter @shuliu/desktop build
       - name: Run Cloud API Knowledge unit tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
-      - run: pnpm test:contract
+      - run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a pnpm test:contract
+          else
+            pnpm test:contract
+          fi
       - run: pnpm test:migration
       - name: Run generic integration tests without the dedicated real-browser suite
         run: |

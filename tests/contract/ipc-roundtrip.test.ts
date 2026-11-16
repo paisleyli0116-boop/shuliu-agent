@@ -43,7 +43,10 @@ describe("runtime IPC contract", () => {
 
     const result = spawnSync(
       electronPath,
-      ["--no-sandbox", "--headless", "--disable-gpu", electronApp],
+      // --disable-dev-shm-usage: /dev/shm exhaustion on Linux CI caused
+      // intermittent SIGSEGV (run 43818777207, twice consecutively); the flag
+      // is a no-op on Windows and macOS.
+      ["--no-sandbox", "--headless", "--disable-gpu", "--disable-dev-shm-usage", electronApp],
       {
         cwd: repository,
         encoding: "utf8",
