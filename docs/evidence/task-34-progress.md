@@ -133,6 +133,22 @@ Codex 在隔离副本 `D:/Documents/ChatGPT/数流/task34-production-recovery-82
 - **测试复跑（本会话执行）**：recovery + tools + persistence + 两个 PG 集成模块共 **137 passed、5 skipped**（skip 均为无 `SHULIU_DATABASE_URL` 的 PG 门控），超出报告声明的 61/4 范围，全部通过。
 - 生产接线缺口不变：生产 Workflow Repository、Electron Main → RecoveryCoordinator、Sidecar 生产恢复 IPC、真实 Worker lease/generation fencing。补齐前 Task 34 保持 **IN_PROGRESS / BLOCKED**。
 
+## 草稿 PR CI 证据（2026-11-02，SHA b342a97）
+
+- 草稿 PR #1（`feat/foundation-v0.1` ← `codex/task34-production-recovery`，仅用于 CI 证据，不合并）：https://github.com/paisleyli0116-boop/shuliu-agent/pull/1
+- Generic CI run `41385069236`：**success**（PG17、PG18、macOS、Ubuntu 四 job 全过）。PG17 实测：durable Tool idempotency 重启/并发集成 **9 passed**（含新增 inspect 快照用例）、Knowledge 单元与撤销 **48 passed**、Knowledge ACL 集成 **3 passed**、Worker lease 并发 **2 passed**；PG18 同构全过。
+- Windows Validation run `41385069133`：**success**，35/35 步。
+- 结论：只读幂等恢复增量在真实 PostgreSQL 17/18 与 Windows 实机全部通过；"新 SHA 无 CI 证据"的阻塞已解除。Task 34 剩余缺口仅为生产接线四项（生产 Workflow Repository、Electron Main 接 RecoveryCoordinator、Sidecar 生产恢复 IPC、真实 Worker lease/generation fencing）与生产崩溃故障注入验收。
+
+## 生产接线增量的 CI 证据（2026-11-02，SHA 24699b5）
+
+Codex 第二轮增量（23 改 + 15 新文件）：Sidecar 代际围栏（SQLite `BEGIN IMMEDIATE` + CAS 原子递增，transition 幂等）、workflow SQLite repository 由 bootstrap 暴露、Worker 租约派发授权（`with_for_update` 行锁重验租约归属/任务匹配/fencing token）、tool dispatch fencing、恢复 IPC + Sidecar 实例锁、缺 checkpoint 保持 Safe Mode、桌面端 `recoverOnStart` 门禁（恢复完成才报健康）。
+
+- **独立核实（本会话执行）**：Python worker 542 passed / 19 skipped，cloud-api 98 passed / 6 skipped，Desktop IPC 52 passed（11 文件），typecheck 干净。抽查 fencing、派发顺序与冷启动门禁实现，无确定性缺陷。
+- **Generic CI run `41415811633`**：**success**（PG17、PG18、macOS、Ubuntu 四 job 全过）。首轮 ubuntu 的 `ipc-roundtrip` 报 Electron SIGSEGV（stderr 空），macOS/PG 同代码全过，判定为 Linux runner 偶发段错误，重跑失败 job 后通过。
+- **Windows Validation run `41419030117`**：**success**（SHA 24699b5）。首轮失败原因：冒烟脚本 `test_installer_smoke.ps1` 把 `database_schema` 写死为 `1.0.0`，而代际围栏表使 schema 升到 `1.2.0`——陈旧断言而非功能故障，已修（提交 `24699b5`）。教训：冒烟脚本不应硬编码 schema 版本，应改为运行时自报值比对。
+- 附带修复：`ci.yml` 补 `workflow_dispatch`，使任务分支可手动触发 CI（提交 `7d62d9a`）。
+- Task 34 剩余缺口：Workflow Engine → ToolBroker 的执行接线、Worker runner 实际调用 fencing 的生产路径、真实 dispatch→ACK 崩溃注入、Task 35 未开始。
 ## Task 33 幂等状态与崩溃恢复桥接增量（2026-11-02）
 
 本轮在隔离工作副本 `D:\Documents\ChatGPT\数流\task34-production-recovery-827fdda`（分支 `codex/task34-production-recovery`，起始 HEAD `827fddabc1859a58a1bbf7f8280b92dd04bd638d`）实现 Task 34 的一个受限增量；没有修改主 checkout、`main`、Task 33 工作副本或其他会话文件。
