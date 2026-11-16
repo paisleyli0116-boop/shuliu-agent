@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import timedelta
 
 import pytest
@@ -7,7 +9,18 @@ from app.persistence.postgres import tasks
 from app.workers.coordinator import WorkerCoordinator
 from app.workers.leases import LeaseConfig, RecoveryDecision, WorkerCoordinatorError
 from shuliu_runtime.worker.protocol import validate_worker_message
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
+
+
+def _action_digest(tool_id="foundation.test", arguments=None):
+    canonical = json.dumps(
+        {"tool_id": tool_id, "arguments": arguments or {"value": "safe"}},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def test_expired_lease_requires_explicit_safe_reconciliation_and_fences_old_worker(
@@ -33,6 +46,19 @@ def test_expired_lease_requires_explicit_safe_reconciliation_and_fences_old_work
     assert reconciled.status == "REQUEUED"
 
     coordinator.heartbeat(new_worker)
+    with worker_harness["engine"].begin() as connection:
+        connection.execute(
+            update(tasks)
+            .where(tasks.c.task_id == "task-1")
+            .values(payload={
+                "required_capabilities": ["worker.runtime"],
+                "_worker_assignment": {"worker_id": new_worker.worker_id},
+                "tool_call": {
+                    "tool_id": "foundation.test",
+                    "arguments": {"value": "safe"},
+                },
+            })
+        )
     second = coordinator.lease("task-1", new_worker, idempotency_key="task-1-effect")
     assert second.fencing_token > first.fencing_token
     with pytest.raises(WorkerCoordinatorError) as stale_result:
@@ -78,6 +104,86 @@ def test_lease_renewal_rejects_a_stale_fencing_token(worker_harness):
     assert error.value.code == "WORKER_LEASE_FENCED"
 
 
+def test_worker_tool_dispatch_requires_live_lease_and_current_fencing_generation(worker_harness):
+    coordinator = worker_harness["coordinator"]
+    worker = worker_harness["principals"]["worker-old"]
+    lease = coordinator.lease("task-1", worker, idempotency_key="task-1-effect")
+
+    permit = coordinator.authorize_tool_dispatch(
+        worker,
+        task_id=lease.task_id,
+        lease_id=lease.lease_id,
+        fencing_token=lease.fencing_token,
+        idempotency_key=lease.idempotency_key,
+        action_digest=_action_digest(),
+    )
+    assert permit.fencing_token == lease.fencing_token
+
+    worker_harness["clock"].advance(timedelta(seconds=31))
+    with pytest.raises(WorkerCoordinatorError) as expired:
+        coordinator.authorize_tool_dispatch(
+            worker,
+            task_id=lease.task_id,
+            lease_id=lease.lease_id,
+            fencing_token=lease.fencing_token,
+            idempotency_key=lease.idempotency_key,
+            action_digest=_action_digest(),
+        )
+    assert expired.value.code == "WORKER_LEASE_EXPIRED"
+
+
+def test_worker_tool_dispatch_rejects_prior_generation_after_safe_requeue(worker_harness):
+    coordinator = worker_harness["coordinator"]
+    old_worker = worker_harness["principals"]["worker-old"]
+    new_worker = worker_harness["principals"]["worker-new"]
+    old = coordinator.lease("task-1", old_worker, idempotency_key="task-1-effect")
+    worker_harness["clock"].advance(timedelta(seconds=41))
+    coordinator.reconcile_expired(old.lease_id, decision=RecoveryDecision.RETRY_SAFE)
+    coordinator.heartbeat(new_worker)
+    with worker_harness["engine"].begin() as connection:
+        connection.execute(
+            update(tasks)
+            .where(tasks.c.task_id == "task-1")
+            .values(payload={
+                "required_capabilities": ["worker.runtime"],
+                "_worker_assignment": {"worker_id": new_worker.worker_id},
+                "tool_call": {
+                    "tool_id": "foundation.test",
+                    "arguments": {"value": "safe"},
+                },
+            })
+        )
+    coordinator.lease("task-1", new_worker, idempotency_key="task-1-effect")
+
+    with pytest.raises(WorkerCoordinatorError) as stale:
+        coordinator.authorize_tool_dispatch(
+            old_worker,
+            task_id=old.task_id,
+            lease_id=old.lease_id,
+            fencing_token=old.fencing_token,
+            idempotency_key=old.idempotency_key,
+            action_digest=_action_digest(),
+        )
+    assert stale.value.code == "WORKER_LEASE_FENCED"
+
+
+def test_worker_dispatch_permit_is_bound_to_the_exact_cloud_task_tool_and_arguments(worker_harness):
+    coordinator = worker_harness["coordinator"]
+    worker = worker_harness["principals"]["worker-old"]
+    lease = coordinator.lease("task-1", worker, idempotency_key="task-1-effect")
+
+    with pytest.raises(WorkerCoordinatorError) as mismatch:
+        coordinator.authorize_tool_dispatch(
+            worker,
+            task_id=lease.task_id,
+            lease_id=lease.lease_id,
+            fencing_token=lease.fencing_token,
+            idempotency_key=lease.idempotency_key,
+            action_digest=_action_digest("foundation.test", {"value": "changed"}),
+        )
+    assert mismatch.value.code == "WORKER_LEASE_ACTION_MISMATCH"
+
+
 def test_fencing_tokens_are_unique_within_each_task_and_worker_can_lease_multiple_tasks(worker_harness):
     coordinator = worker_harness["coordinator"]
     worker = worker_harness["principals"]["worker-old"]
@@ -88,7 +194,10 @@ def test_fencing_tokens_are_unique_within_each_task_and_worker_can_lease_multipl
                 task_id="task-2",
                 organization_id="org-1",
                 status="READY",
-                payload={"required_capabilities": ["worker.runtime"]},
+                payload={
+                    "required_capabilities": ["worker.runtime"],
+                    "_worker_assignment": {"worker_id": worker.worker_id},
+                },
                 created_at=worker_harness["clock"](),
             )
         )
@@ -105,7 +214,10 @@ def test_lease_capability_matching_fails_closed(worker_harness):
         connection.execute(
             tasks.update()
             .where(tasks.c.task_id == "task-1")
-            .values(payload={"required_capabilities": ["computer.interactive"]})
+            .values(payload={
+                "required_capabilities": ["computer.interactive"],
+                "_worker_assignment": {"worker_id": worker.worker_id},
+            })
         )
 
     with pytest.raises(WorkerCoordinatorError) as error:

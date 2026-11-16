@@ -16,7 +16,7 @@
           "const": 1
         },
         "message_type": {
-          "enum": ["register", "registered", "authenticate", "authenticated", "heartbeat", "lease_request", "lease", "ack", "progress", "cancel", "result", "error"]
+          "enum": ["register", "registered", "authenticate", "authenticated", "heartbeat", "lease_request", "lease_request_assigned", "no_assignment", "lease", "lease_authorize", "lease_authorized", "ack", "progress", "cancel", "result", "error"]
         },
         "payload": {
           "type": "object"
@@ -37,7 +37,11 @@
         { "type": "object", "properties": { "message_type": { "const": "authenticated" }, "payload": { "$ref": "#/$defs/authenticated" } } },
         { "type": "object", "properties": { "message_type": { "const": "heartbeat" }, "payload": { "$ref": "#/$defs/heartbeat" } } },
         { "type": "object", "properties": { "message_type": { "const": "lease_request" }, "payload": { "$ref": "#/$defs/lease_request" } } },
+        { "type": "object", "properties": { "message_type": { "const": "lease_request_assigned" }, "payload": { "$ref": "#/$defs/lease_request_assigned" } } },
+        { "type": "object", "properties": { "message_type": { "const": "no_assignment" }, "payload": { "$ref": "#/$defs/no_assignment" } } },
         { "type": "object", "properties": { "message_type": { "const": "lease" }, "payload": { "$ref": "#/$defs/lease" } } },
+        { "type": "object", "properties": { "message_type": { "const": "lease_authorize" }, "payload": { "$ref": "#/$defs/lease_authorize" } } },
+        { "type": "object", "properties": { "message_type": { "const": "lease_authorized" }, "payload": { "$ref": "#/$defs/lease_authorized" } } },
         { "type": "object", "properties": { "message_type": { "const": "ack" }, "payload": { "$ref": "#/$defs/ack" } } },
         { "type": "object", "properties": { "message_type": { "const": "progress" }, "payload": { "$ref": "#/$defs/progress" } } },
         { "type": "object", "properties": { "message_type": { "const": "cancel" }, "payload": { "$ref": "#/$defs/cancel" } } },
@@ -76,7 +80,10 @@
     },
     "authenticated": {
       "type": "object",
-      "properties": { "worker_id": { "type": "string", "minLength": 1 } },
+      "properties": {
+        "worker_id": { "type": "string", "minLength": 1 },
+        "organization_id": { "type": "string", "minLength": 1 }
+      },
       "required": ["worker_id"]
     },
     "heartbeat": {
@@ -106,6 +113,41 @@
         "idempotency_key": { "type": "string", "minLength": 1 }
       },
       "required": ["task_id", "idempotency_key"]
+    },
+    "lease_request_assigned": {
+      "type": "object",
+      "properties": { "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 } },
+      "required": ["idempotency_key"],
+      "additionalProperties": false
+    },
+    "no_assignment": {
+      "type": "object",
+      "properties": { "worker_id": { "type": "string", "minLength": 1 } },
+      "required": ["worker_id"],
+      "additionalProperties": false
+    },
+    "lease_authorize": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "fencing_token": { "type": "integer", "minimum": 1 },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "action_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "required": ["task_id", "lease_id", "fencing_token", "idempotency_key"]
+    },
+    "lease_authorized": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "fencing_token": { "type": "integer", "minimum": 1 },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "action_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "expires_at": { "type": "string", "minLength": 1 }
+      },
+      "required": ["task_id", "lease_id", "fencing_token", "idempotency_key", "expires_at"]
     },
     "ack": {
       "type": "object",

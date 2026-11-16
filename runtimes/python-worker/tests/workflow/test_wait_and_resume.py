@@ -83,6 +83,33 @@ def test_explicit_external_pause_can_resume_with_its_one_time_token():
     assert broker.calls[0]["idempotency_key"] == broker.calls[1]["idempotency_key"]
 
 
+@pytest.mark.parametrize(
+    "error_code", ["RECONCILIATION_REQUIRED", "TOOL_EXECUTION_UNKNOWN"]
+)
+def test_unknown_dispatched_tool_result_waits_for_reconciliation(error_code):
+    engine, repository, broker = _engine(
+        ToolExecutionError(error_code, "unknown prior dispatch"),
+        _tool_result({"reconciled": True}),
+    )
+    definition = WorkflowDefinition.from_dict(
+        _definition([_tool_step()], version="workflow-v1")
+    )
+
+    waiting = engine.start_workflow(definition, {"value": "x"}, _context())
+
+    assert waiting.status is WorkflowRunStatus.WAITING
+    assert waiting.wait_reason is WorkflowWaitReason.EXTERNAL
+    assert waiting.step_runs[-1].error_code == error_code
+    assert waiting.resume_token
+    assert repository.get(waiting.run_id).status is WorkflowRunStatus.WAITING
+    assert len(broker.calls) == 1
+
+    resumed = engine.resume_workflow(waiting.run_id, waiting.resume_token)
+
+    assert resumed.status is WorkflowRunStatus.SUCCEEDED
+    assert broker.calls[0]["idempotency_key"] == broker.calls[1]["idempotency_key"]
+
+
 def test_running_workflow_keeps_its_definition_snapshot_after_new_version_exists():
     engine, _, broker = _engine(
         ToolExecutionError("APPROVAL_NOT_CONSUMABLE", "approval is pending"),

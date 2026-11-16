@@ -5,6 +5,7 @@ import json
 import ssl
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -20,6 +21,7 @@ from .credentials import (
     session_proof_bytes,
 )
 from .protocol import WorkerMessage, WorkerProtocolError
+from .tool_dispatch import WorkerDispatchAuthorization, WorkerToolBroker, WorkerToolDispatcher
 
 
 def _b64(value: bytes) -> str:
@@ -176,11 +178,17 @@ class WorkerWebSocketConnection:
             raise ValueError("Worker connection requires WSS")
         self._url = websocket_url
         self._worker_id = worker_id
+        self.organization_id: str | None = None
         self._credential = session_credential
         self._ssl_context = ssl_context
         self._timeout = timeout_seconds
         self._socket: ClientConnection | None = None
         self._connection_context = None
+
+    @property
+    def worker_id(self) -> str:
+        """Worker identifier verified by the Cloud authentication response."""
+        return self._worker_id
 
     def __enter__(self) -> WorkerWebSocketConnection:
         self._connection_context = connect(
@@ -192,14 +200,23 @@ class WorkerWebSocketConnection:
         response = self.send(
             "authenticate", {"session_credential": self._credential}
         )
+        organization_id = response.payload.get("organization_id")
         if (
             response.message_type != "authenticated"
             or response.payload.get("worker_id") != self._worker_id
+            or (
+                organization_id is not None
+                and (
+                    not isinstance(organization_id, str)
+                    or not organization_id.strip()
+                )
+            )
         ):
             self.close()
             raise WorkerAuthenticationError(
                 "WORKER_IDENTITY_MISMATCH", "Cloud authenticated a different Worker identity"
             )
+        self.organization_id = organization_id
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -228,6 +245,98 @@ class WorkerWebSocketConnection:
                 "Cloud rejected the Worker request",
             )
         return response
+
+    def authorize_tool_dispatch(
+        self,
+        *,
+        task_id: str,
+        lease_id: str,
+        fencing_token: int,
+        idempotency_key: str,
+        action_digest: str,
+    ) -> WorkerDispatchAuthorization:
+        if (
+            not task_id.strip()
+            or not lease_id.strip()
+            or isinstance(fencing_token, bool)
+            or not isinstance(fencing_token, int)
+            or fencing_token < 1
+            or not idempotency_key.strip()
+            or not isinstance(action_digest, str)
+            or len(action_digest) != 64
+            or any(character not in "0123456789abcdef" for character in action_digest)
+        ):
+            raise WorkerAuthenticationError(
+                "WORKER_LEASE_FENCED", "Worker lease is invalid"
+            )
+        response = self.send(
+            "lease_authorize",
+            {
+                "task_id": task_id,
+                "lease_id": lease_id,
+                "fencing_token": fencing_token,
+                "idempotency_key": idempotency_key,
+                "action_digest": action_digest,
+            },
+        )
+        payload = response.payload
+        expires_at_value = payload.get("expires_at")
+        try:
+            expires_at = (
+                datetime.fromisoformat(expires_at_value.replace("Z", "+00:00"))
+                if isinstance(expires_at_value, str) and len(expires_at_value) <= 64
+                else None
+            )
+        except ValueError:
+            expires_at = None
+        if (
+            response.message_type != "lease_authorized"
+            or payload.get("task_id") != task_id
+            or payload.get("lease_id") != lease_id
+            or payload.get("fencing_token") != fencing_token
+            or payload.get("idempotency_key") != idempotency_key
+            or payload.get("action_digest") != action_digest
+            or not isinstance(expires_at, datetime)
+            or expires_at.tzinfo is None
+            or expires_at.utcoffset() is None
+        ):
+            raise WorkerAuthenticationError(
+                "WORKER_LEASE_AUTHORIZATION_INVALID",
+                "Cloud returned an invalid lease authorization",
+            )
+        return WorkerDispatchAuthorization(
+            task_id=task_id,
+            lease_id=lease_id,
+            fencing_token=fencing_token,
+            idempotency_key=idempotency_key,
+            action_digest=action_digest,
+            expires_at=expires_at,
+        )
+
+    def dispatch_tool(
+        self,
+        lease: Mapping[str, object],
+        tool_broker: WorkerToolBroker,
+        *,
+        tool_id: str,
+        args: Mapping[str, object],
+        actor: Mapping[str, object],
+        context: Mapping[str, object],
+        clock=None,
+    ) -> Any:
+        """Authorize the exact current lease through Cloud before Tool Broker dispatch."""
+        dispatcher = (
+            WorkerToolDispatcher(self, tool_broker)
+            if clock is None
+            else WorkerToolDispatcher(self, tool_broker, clock=clock)
+        )
+        return dispatcher.execute(
+            lease,
+            tool_id=tool_id,
+            args=args,
+            actor=actor,
+            context=context,
+        )
 
     def close(self) -> None:
         if self._connection_context is not None:

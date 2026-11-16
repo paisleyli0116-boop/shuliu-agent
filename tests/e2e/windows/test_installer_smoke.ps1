@@ -15,6 +15,16 @@ New-Item -ItemType Directory -Path $testRoot, $installDirectory, $userDataDirect
 $evidence = [IO.Path]::GetFullPath($EvidenceDirectory)
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 
+# Chromium's sandbox verifies that a restricted low-integrity token can read the
+# install directory and aborts with 0x80000003 when Windows denies that read
+# (electron/shell/browser/win/install_dir_access.cc). Directory trees outside
+# Program Files inherit no ALL APPLICATION PACKAGES entry by default, so grant
+# the documented ACL on the install directory only. The user-data directory
+# keeps its default ACL on purpose so sandboxed processes still cannot read
+# stored credentials.
+$icaclsOutput = & icacls $installDirectory /grant '*S-1-15-2-1:(OI)(CI)(RX)' 2>&1
+if ($LASTEXITCODE -ne 0) { throw "INSTALL_DIR_ACL_GRANT_FAILED: $icaclsOutput" }
+
 function Install-Package([string]$Path, [string]$Destination) {
   $resolvedDestination = [IO.Path]::GetFullPath($Destination)
   $resolvedRoot = [IO.Path]::GetFullPath($testRoot)
@@ -79,7 +89,7 @@ try {
   if ($healthy.Report.electron_version -ne '44.9.0' -or $healthy.Report.node_version -ne '24.22.0') {
     throw 'PACKAGED_ELECTRON_VERSION_MISMATCH'
   }
-  if ($healthy.Report.preload_available -ne $true -or $healthy.Report.database_schema -ne '1.0.0') {
+  if ($healthy.Report.preload_available -ne $true -or $healthy.Report.database_schema -ne '1.3.0') {
     throw 'PACKAGED_RUNTIME_HEALTH_INCOMPLETE'
   }
   $markerPath = Join-Path $userDataDirectory 'task26-preservation.marker'

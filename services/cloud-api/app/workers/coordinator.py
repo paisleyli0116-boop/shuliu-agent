@@ -18,6 +18,7 @@ from app.workers.leases import (
     ReconciliationResult,
     RecoveryDecision,
     WorkerCoordinatorError,
+    WorkerDispatchPermit,
     WorkerPrincipal,
     WorkerResultAck,
 )
@@ -85,6 +86,24 @@ class WorkerCoordinator:
         )
         return grant
 
+    def lease_next_assigned(
+        self,
+        principal: WorkerPrincipal,
+        *,
+        idempotency_key: str,
+        trace_id: str | None = None,
+    ) -> LeaseGrant | None:
+        """Lease only a task assigned by Cloud to the authenticated Worker."""
+        task_id = self._repository.next_assigned_task_id(principal)
+        if task_id is None:
+            return None
+        return self.lease(
+            task_id,
+            principal,
+            idempotency_key=idempotency_key,
+            trace_id=trace_id,
+        )
+
     def renew(
         self,
         lease_id: str,
@@ -96,6 +115,27 @@ class WorkerCoordinator:
             lease_id,
             principal,
             fencing_token=fencing_token,
+            config=self._config,
+            now=self._clock(),
+        )
+
+    def authorize_tool_dispatch(
+        self,
+        principal: WorkerPrincipal,
+        *,
+        task_id: str,
+        lease_id: str,
+        fencing_token: int,
+        idempotency_key: str,
+        action_digest: str,
+    ) -> WorkerDispatchPermit:
+        return self._repository.authorize_tool_dispatch(
+            principal,
+            task_id=task_id,
+            lease_id=lease_id,
+            fencing_token=fencing_token,
+            idempotency_key=idempotency_key,
+            action_digest=action_digest,
             config=self._config,
             now=self._clock(),
         )

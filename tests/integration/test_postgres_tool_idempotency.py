@@ -14,7 +14,10 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 from app.persistence.postgres import create_postgres_engine
-from shuliu_runtime.tools.idempotency import IdempotencyClaimStatus
+from shuliu_runtime.tools.idempotency import (
+    IdempotencyClaimStatus,
+    IdempotencyRecordStatus,
+)
 from shuliu_runtime.tools.postgres_idempotency import PostgresIdempotencyStore
 
 
@@ -194,4 +197,56 @@ def test_postgres_only_releases_claim_before_dispatch():
         assert store.begin(scope=scope, key=key, request_digest=digest).status is IdempotencyClaimStatus.RECONCILIATION_REQUIRED
     finally:
         _delete_claim(engine, scope, key)
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_postgres_recovery_inspection_is_read_only_and_returns_safe_result():
+    engine, store = _store()
+    scope = ("org-" + str(uuid4()), "foundation.document.write", "run-step-recovery")
+    key = "idem-" + str(uuid4())
+    indeterminate_key = key + "-unknown"
+    digest = "f" * 64
+
+    try:
+        assert store.inspect(scope=scope, key=key, request_digest=digest).status is IdempotencyRecordStatus.ABSENT
+        assert store.begin(scope=scope, key=key, request_digest=digest).status is IdempotencyClaimStatus.NEW
+        assert store.inspect(scope=scope, key=key, request_digest=digest).status is IdempotencyRecordStatus.CLAIMED
+
+        store.mark_dispatched(scope=scope, key=key, request_digest=digest)
+        assert store.inspect(scope=scope, key=key, request_digest=digest).status is IdempotencyRecordStatus.DISPATCHED
+        assert store.inspect(scope=scope, key=key, request_digest="0" * 64).status is IdempotencyRecordStatus.CONFLICT
+
+        store.begin(scope=scope, key=indeterminate_key, request_digest=digest)
+        store.mark_dispatched(scope=scope, key=indeterminate_key, request_digest=digest)
+        store.mark_indeterminate(scope=scope, key=indeterminate_key, request_digest=digest)
+        assert store.inspect(scope=scope, key=indeterminate_key, request_digest=digest).status is IdempotencyRecordStatus.INDETERMINATE
+
+        store.complete(
+            scope=scope,
+            key=key,
+            request_digest=digest,
+            result={
+                "tool_id": scope[1],
+                "tool_version": "1.0.0",
+                "execution_status": "SUCCEEDED",
+                "verification_status": "VERIFIED",
+                "output": {
+                    "evidence_ref": "evidence-recovery-1",
+                    "document_text": "must-not-be-persisted",
+                },
+                "error_code": None,
+                "policy_decision": "ALLOW",
+                "policy_version": "policy-v1",
+                "policy_rule_id": "rule-1",
+            },
+        )
+        snapshot = store.inspect(scope=scope, key=key, request_digest=digest)
+        assert snapshot.status is IdempotencyRecordStatus.COMPLETED
+        assert snapshot.result["verification_status"] == "VERIFIED"
+        assert snapshot.result["output"] == {"evidence_ref": "evidence-recovery-1"}
+        assert store.inspect(scope=scope, key=key, request_digest="0" * 64).result is None
+    finally:
+        _delete_claim(engine, scope, key)
+        _delete_claim(engine, scope, indeterminate_key)
         engine.dispose()

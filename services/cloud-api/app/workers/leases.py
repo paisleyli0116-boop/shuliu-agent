@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from hashlib import sha256
+import json
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -76,6 +78,17 @@ class WorkerResultAck:
     lease_id: str
     idempotency_key: str
     duplicate: bool
+
+
+@dataclass(frozen=True)
+class WorkerDispatchPermit:
+    task_id: str
+    lease_id: str
+    worker_id: str
+    fencing_token: int
+    idempotency_key: str
+    action_digest: str
+    expires_at: datetime
 
 
 @dataclass(frozen=True)
@@ -268,6 +281,16 @@ class PostgresLeaseRepository:
                 raise WorkerCoordinatorError(
                     "TASK_PAYLOAD_INVALID", "task payload is invalid"
                 )
+            assignment = payload.get("_worker_assignment")
+            if (
+                not isinstance(assignment, Mapping)
+                or set(assignment) != {"worker_id"}
+                or assignment.get("worker_id") != principal.worker_id
+            ):
+                raise WorkerCoordinatorError(
+                    "WORKER_TASK_NOT_ASSIGNED",
+                    "task is not assigned to the authenticated Worker",
+                )
             required = payload.get("required_capabilities", [])
             available = worker["capabilities"]
             if (
@@ -345,6 +368,23 @@ class PostgresLeaseRepository:
         assert grant is not None
         return grant
 
+    def next_assigned_task_id(self, principal: WorkerPrincipal) -> str | None:
+        """Return the oldest ready task explicitly assigned to this Worker."""
+        statement = (
+            select(tasks.c.task_id)
+            .where(
+                tasks.c.organization_id == principal.organization_id,
+                tasks.c.status.in_(("READY", "QUEUED")),
+                tasks.c.payload["_worker_assignment"]["worker_id"].as_string()
+                == principal.worker_id,
+            )
+            .order_by(tasks.c.created_at, tasks.c.task_id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        with self._engine.connect() as connection:
+            return connection.execute(statement).scalar_one_or_none()
+
     def renew(
         self,
         lease_id: str,
@@ -413,6 +453,147 @@ class PostgresLeaseRepository:
             )
         assert renewed is not None
         return renewed
+
+    def authorize_tool_dispatch(
+        self,
+        principal: WorkerPrincipal,
+        *,
+        task_id: str,
+        lease_id: str,
+        fencing_token: int,
+        idempotency_key: str,
+        action_digest: str,
+        config: LeaseConfig,
+        now: datetime,
+    ) -> WorkerDispatchPermit:
+        """Revalidate the active lease immediately before a Worker dispatches a Tool."""
+        if (
+            not task_id.strip()
+            or not lease_id.strip()
+            or not idempotency_key.strip()
+            or isinstance(fencing_token, bool)
+            or not isinstance(fencing_token, int)
+            or fencing_token < 1
+        ):
+            raise WorkerCoordinatorError(
+                "WORKER_LEASE_FENCED", "Worker lease dispatch authorization is invalid"
+            )
+        with self._engine.begin() as connection:
+            initial = (
+                connection.execute(
+                    select(worker_leases).where(
+                        worker_leases.c.lease_id == lease_id,
+                        worker_leases.c.organization_id == principal.organization_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if initial is None or initial["worker_id"] != principal.worker_id:
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_NOT_FOUND", "lease was not found"
+                )
+            if initial["task_id"] != task_id:
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_FENCED", "lease does not authorize this task"
+                )
+            task = (
+                connection.execute(
+                    select(tasks)
+                    .where(
+                        tasks.c.task_id == task_id,
+                        tasks.c.organization_id == principal.organization_id,
+                    )
+                    .with_for_update()
+                )
+                .mappings()
+                .first()
+            )
+            lease = (
+                connection.execute(
+                    select(worker_leases)
+                    .where(worker_leases.c.lease_id == lease_id)
+                    .with_for_update()
+                )
+                .mappings()
+                .first()
+            )
+            if task is None or lease is None:
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_NOT_FOUND", "lease was not found"
+                )
+            expected_action_digest = _task_action_digest(task["payload"])
+            if (
+                not isinstance(action_digest, str)
+                or len(action_digest) != 64
+                or any(character not in "0123456789abcdef" for character in action_digest)
+                or action_digest != expected_action_digest
+            ):
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_ACTION_MISMATCH",
+                    "Tool action does not match the leased task",
+                )
+            if (
+                lease["worker_id"] != principal.worker_id
+                or lease["task_id"] != task_id
+                or lease["fencing_token"] != fencing_token
+                or lease["idempotency_key"] != idempotency_key
+                or lease["status"] != "ACTIVE"
+            ):
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_FENCED", "lease token is stale"
+                )
+            if _utc(lease["expires_at"]) <= _utc(now):
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_EXPIRED", "lease has expired"
+                )
+            if task["status"] != "LEASED":
+                raise WorkerCoordinatorError(
+                    "TASK_NOT_LEASED", "task is not currently leased"
+                )
+            latest_fencing_token = connection.execute(
+                select(func.max(worker_leases.c.fencing_token)).where(
+                    worker_leases.c.organization_id == principal.organization_id,
+                    worker_leases.c.task_id == task_id,
+                )
+            ).scalar_one_or_none()
+            if latest_fencing_token != fencing_token:
+                raise WorkerCoordinatorError(
+                    "WORKER_LEASE_FENCED", "lease generation is stale"
+                )
+            worker = (
+                connection.execute(
+                    select(workers).where(
+                        workers.c.worker_id == principal.worker_id,
+                        workers.c.organization_id == principal.organization_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if worker is None or worker["status"] in {"REVOKED", "DISABLED"}:
+                raise WorkerCoordinatorError(
+                    "WORKER_NOT_ACTIVE", "Worker cannot dispatch Tools"
+                )
+            last_heartbeat = worker["last_heartbeat_at"]
+            if (
+                worker["status"] != "ONLINE"
+                or last_heartbeat is None
+                or _utc(now) - _utc(last_heartbeat)
+                > config.heartbeat_interval + config.grace_period
+            ):
+                raise WorkerCoordinatorError(
+                    "WORKER_HEARTBEAT_STALE", "Worker heartbeat is outside its grace window"
+                )
+            return WorkerDispatchPermit(
+                task_id=task_id,
+                lease_id=lease_id,
+                worker_id=principal.worker_id,
+                fencing_token=fencing_token,
+                idempotency_key=idempotency_key,
+                action_digest=expected_action_digest,
+                expires_at=_utc(lease["expires_at"]),
+            )
 
     def reconcile_expired(
         self,
@@ -746,3 +927,34 @@ class PostgresLeaseRepository:
                 idempotency_key,
                 True,
             )
+
+
+def _task_action_digest(payload: object) -> str:
+    if not isinstance(payload, Mapping):
+        raise WorkerCoordinatorError(
+            "WORKER_TASK_ACTION_INVALID", "Task does not contain an authorized Tool action"
+        )
+    call = payload.get("tool_call")
+    if (
+        not isinstance(call, Mapping)
+        or set(call) != {"tool_id", "arguments"}
+        or not isinstance(call.get("tool_id"), str)
+        or not call["tool_id"].strip()
+        or not isinstance(call.get("arguments"), Mapping)
+    ):
+        raise WorkerCoordinatorError(
+            "WORKER_TASK_ACTION_INVALID", "Task does not contain an authorized Tool action"
+        )
+    try:
+        canonical = json.dumps(
+            {"tool_id": call["tool_id"], "arguments": dict(call["arguments"])},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        raise WorkerCoordinatorError(
+            "WORKER_TASK_ACTION_INVALID", "Task Tool action is invalid"
+        ) from None
+    return sha256(canonical.encode("utf-8")).hexdigest()

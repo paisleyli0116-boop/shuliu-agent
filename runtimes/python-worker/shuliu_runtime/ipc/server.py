@@ -7,12 +7,21 @@ import sys
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO
 
 from shuliu_runtime.ipc.bootstrap import RuntimeBootstrapError, bootstrap_runtime
+from shuliu_runtime.ipc.recovery import create_process_recovery_ipc_handlers
+from shuliu_runtime.ipc.runtime_instance_lock import RuntimeInstanceAlreadyActive, RuntimeInstanceLock
 from shuliu_runtime.models.config import ProviderConfigurationError
 from shuliu_runtime.models.connection import create_provider_ipc_handlers, create_provider_runtime_from_environment
+from shuliu_runtime.persistence.sqlite import SQLiteDatabase
+from shuliu_runtime.production.composition import (
+    attach_production_runtime,
+    compose_production_runtime,
+)
+from shuliu_runtime.recovery.sqlite_safe_mode import SQLiteSafeModeController
 
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
@@ -20,6 +29,16 @@ from referencing import Registry, Resource
 logger = logging.getLogger("shuliu.runtime.ipc")
 _MAX_FRAME_BYTES = 1_048_576
 _MAX_CONCURRENT_REQUESTS = 32
+_SAFE_MODE_DIAGNOSTIC_METHODS = frozenset({
+    "runtime.handshake",
+    "runtime.health",
+    "runtime.recovery.checkpoints",
+})
+_SAFE_MODE_RECOVERY_METHODS = frozenset({
+    "runtime.recovery.begin",
+    "runtime.recovery.recover_run",
+    "runtime.recovery.complete",
+})
 
 
 class IpcProtocolError(ValueError):
@@ -88,9 +107,24 @@ class IpcServer:
         *,
         max_concurrent_requests: int = _MAX_CONCURRENT_REQUESTS,
         health_state: Mapping[str, Any] | None = None,
+        safe_mode: bool = False,
+        safe_mode_error_code: str = "RUNTIME_SAFE_MODE",
+        recovery_required: bool = False,
     ) -> None:
+        if not isinstance(recovery_required, bool):
+            raise TypeError("recovery_required must be a boolean")
         self._handlers = dict(handlers or {})
         self._health_state = dict(health_state or {"status": "healthy"})
+        self._safe_mode = safe_mode is True or recovery_required
+        self._safe_mode_error_code = (
+            safe_mode_error_code
+            if safe_mode_error_code in {"RUNTIME_SAFE_MODE", "RUNTIME_SAFE_MODE_STATE_INVALID"}
+            else "RUNTIME_SAFE_MODE"
+        )
+        self._safe_mode_lock = threading.RLock()
+        if self._safe_mode:
+            self._health_state["status"] = "safe_mode"
+            self._health_state["safe_error_code"] = self._safe_mode_error_code
         self._handlers.setdefault("runtime.handshake", self._handshake)
         self._handlers.setdefault("runtime.health", self._health)
         self._max_concurrent_requests = max(1, min(max_concurrent_requests, 128))
@@ -100,7 +134,8 @@ class IpcServer:
         return {"protocol_version": 1, "status": "ready"}
 
     def _health(self, _: Mapping[str, Any], __: threading.Event) -> dict[str, Any]:
-        return dict(self._health_state)
+        with self._safe_mode_lock:
+            return dict(self._health_state)
 
     def serve(
         self,
@@ -126,14 +161,49 @@ class IpcServer:
             request_payload = request["payload"]
             method = str(request_payload["method"])
             handler = self._handlers.get(method)
-            if handler is None:
+            with self._safe_mode_lock:
+                safe_mode_denies_request = self._safe_mode and method not in (
+                    _SAFE_MODE_DIAGNOSTIC_METHODS | _SAFE_MODE_RECOVERY_METHODS
+                )
+            if safe_mode_denies_request:
+                result: dict[str, Any] = {
+                    "error": _error_payload(self._safe_mode_error_code, trace_id, "PERMISSION")
+                }
+            elif handler is None:
                 result: dict[str, Any] = {"error": _error_payload("IPC_METHOD_NOT_ALLOWED", trace_id, "PERMISSION")}
             else:
                 try:
                     value = handler(request_payload["params"], cancellation)
-                    if cancellation.is_set():
+                    # A successful recovery release is the commit point: its
+                    # durable Safe Mode marker and audit event have already
+                    # changed atomically. A cancellation arriving after that
+                    # point cannot undo the commit, so report it and bring the
+                    # in-memory gate into agreement with durable state.
+                    recovery_release_committed = (
+                        method == "runtime.recovery.complete"
+                        and isinstance(value, Mapping)
+                        and value.get("status") == "RESUME"
+                        and value.get("error_code") is None
+                    )
+                    if cancellation.is_set() and not recovery_release_committed:
                         raise IpcRequestCancelled
                     result = {"result": value if isinstance(value, dict) else {"value": value}}
+                    recovery_requires_safe_mode = (
+                        method in _SAFE_MODE_RECOVERY_METHODS
+                        and isinstance(value, Mapping)
+                        and value.get("status") in {"WAIT", "SAFE_MODE", "DEAD_LETTER"}
+                    )
+                    if recovery_requires_safe_mode:
+                        with self._safe_mode_lock:
+                            self._safe_mode = True
+                            self._safe_mode_error_code = "RUNTIME_SAFE_MODE"
+                            self._health_state["status"] = "safe_mode"
+                            self._health_state["safe_error_code"] = "RUNTIME_SAFE_MODE"
+                    if recovery_release_committed:
+                        with self._safe_mode_lock:
+                            self._safe_mode = False
+                            self._health_state["status"] = "healthy"
+                            self._health_state.pop("safe_error_code", None)
                 except IpcRequestCancelled:
                     result = {"error": _error_payload("IPC_REQUEST_CANCELLED", trace_id)}
                 except Exception:
@@ -212,16 +282,12 @@ def _isolate_protocol_output() -> TextIO:
     return protocol_stream
 
 
-def main() -> int:
-    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
-    try:
-        bootstrap = bootstrap_runtime(_runtime_data_directory())
-    except RuntimeBootstrapError as error:
-        logger.error("event=runtime_bootstrap_failed code=%s", error.code)
-        return 1
+def _serve_bootstrapped_runtime(bootstrap: Any) -> int:
+    workflow_unavailable_code = getattr(bootstrap, "workflow_unavailable_code", None)
+    persisted_safe_mode = SQLiteSafeModeController(bootstrap.database).status()
 
     health_state = {
-        "status": "healthy",
+        "status": "safe_mode" if persisted_safe_mode.active else "healthy",
         "provider_connection_test_enabled": os.environ.get("SHULIU_MODEL_CONNECTION_TEST") == "1",
         "components": {
             "database": {
@@ -230,6 +296,8 @@ def main() -> int:
             },
         },
     }
+    if persisted_safe_mode.active:
+        health_state["safe_error_code"] = persisted_safe_mode.error_code or "RUNTIME_SAFE_MODE"
     try:
         provider_runtime = create_provider_runtime_from_environment()
     except ProviderConfigurationError:
@@ -237,9 +305,45 @@ def main() -> int:
         return 1
 
     try:
+        handlers = create_provider_ipc_handlers(provider_runtime)
+        runtime_database = getattr(bootstrap, "database", None)
+        if runtime_database is None:
+            runtime_database = SQLiteDatabase(bootstrap.database_path)
+        handlers.update(create_process_recovery_ipc_handlers(
+            runtime_database,
+            expected_context_version=os.environ.get(
+                "SHULIU_WORKFLOW_CONTEXT_VERSION", "workflow:v1;skill:v1"
+            ),
+        ))
+        workflow_runtime = getattr(bootstrap, "workflow_runtime", None)
+        if workflow_runtime is not None:
+            handlers.update(workflow_runtime.create_ipc_handlers())
+            health_state["components"]["workflow"] = {"status": "healthy"}
+        else:
+            health_state["components"]["workflow"] = {
+                "status": "not_configured",
+                "error_code": workflow_unavailable_code
+                or "WORKFLOW_RUNTIME_NOT_CONFIGURED",
+            }
+        health_state["components"]["browser"] = _desktop_component(
+            getattr(bootstrap, "browser_runtime", None),
+            getattr(bootstrap, "browser_unavailable_code", None),
+            "BROWSER_RUNTIME_NOT_CONFIGURED",
+            # 生产上 Browser 的副作用门禁固定关闭：只有观察类操作可用。
+            extra={"execution_gate": "closed"},
+        )
+        health_state["components"]["computer"] = _desktop_component(
+            getattr(bootstrap, "computer_runtime", None),
+            getattr(bootstrap, "computer_unavailable_code", None),
+            "COMPUTER_RUNTIME_NOT_CONFIGURED",
+            extra={"approval_required": True},
+        )
         IpcServer(
-            handlers=create_provider_ipc_handlers(provider_runtime),
+            handlers=handlers,
             health_state=health_state,
+            safe_mode=persisted_safe_mode.active,
+            safe_mode_error_code=persisted_safe_mode.error_code or "RUNTIME_SAFE_MODE",
+            recovery_required=True,
         ).serve(output_stream=_isolate_protocol_output())
     except Exception:
         # Preserve a safe crash marker for the Desktop supervisor. Never emit
@@ -247,6 +351,67 @@ def main() -> int:
         logger.error("event=runtime_unhandled_exception code=RUNTIME_UNHANDLED_EXCEPTION")
         return 1
     return 0
+
+
+def main() -> int:
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
+    data_directory = Path(_runtime_data_directory())
+    lock = RuntimeInstanceLock(data_directory / "runtime-instance.lock")
+    try:
+        lock.acquire()
+    except RuntimeInstanceAlreadyActive:
+        logger.error("event=runtime_instance_lock_failed code=RUNTIME_INSTANCE_ALREADY_ACTIVE")
+        return 1
+    try:
+        try:
+            bootstrap = bootstrap_runtime(data_directory)
+        except RuntimeBootstrapError as error:
+            logger.error("event=runtime_bootstrap_failed code=%s", error.code)
+            return 1
+        bootstrap = _attach_production_workflow(bootstrap)
+        return _serve_bootstrapped_runtime(bootstrap)
+    finally:
+        lock.close()
+
+
+def _attach_production_workflow(bootstrap: Any) -> Any:
+    """Compose Workflow and the desktop runtimes from deployment configuration.
+
+    The Sidecar starts either way: a missing or invalid trusted dependency keeps
+    the affected runtime switched off and reported as `not_configured`, rather
+    than opening a permissive path or failing the whole application.
+    """
+    try:
+        outcome = compose_production_runtime(
+            bootstrap.database,
+            os.environ,
+            data_directory=Path(bootstrap.database_path).parent,
+        )
+        return attach_production_runtime(bootstrap, outcome)
+    except Exception:
+        # 依赖已配置但装配失败时同样保持关闭，并留下稳定错误码供排障。
+        logger.error("event=workflow_composition_failed code=WORKFLOW_COMPOSITION_FAILED")
+        return _mark_workflow_unavailable(bootstrap, "WORKFLOW_COMPOSITION_FAILED")
+
+
+def _desktop_component(
+    runtime: Any, unavailable_code: Any, default_code: str, *, extra: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Describe a desktop runtime without implying more capability than it has."""
+    if runtime is not None:
+        return {"status": "healthy", **extra}
+    return {
+        "status": "not_configured",
+        "error_code": unavailable_code or default_code,
+    }
+
+
+def _mark_workflow_unavailable(bootstrap: Any, code: str) -> Any:
+    try:
+        return replace(bootstrap, workflow_unavailable_code=code)
+    except Exception:
+        # 非标准引导结果（测试替身）没有可替换字段，保持原样即可。
+        return bootstrap
 
 
 if __name__ == "__main__":

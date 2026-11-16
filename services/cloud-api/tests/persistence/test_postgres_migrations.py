@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,20 @@ def upgrade_to_head(connection):
     config = Config(str(SERVICE_ROOT / "alembic.ini"))
     config.attributes["connection"] = connection
     command.upgrade(config, "head")
+
+
+@pytest.mark.migration
+def test_every_migration_revision_fits_the_alembic_version_column():
+    """alembic_version.version_num is varchar(32); SQLite cannot catch an overflow."""
+
+    revisions = {}
+    for path in sorted((SERVICE_ROOT / "migrations" / "versions").glob("*.py")):
+        match = re.search(r'^revision = "([^"]+)"$', path.read_text(), re.MULTILINE)
+        assert match is not None, path.name
+        revisions[match.group(1)] = path.name
+
+    too_long = {name: revision for revision, name in revisions.items() if len(revision) > 32}
+    assert too_long == {}
 
 
 @pytest.mark.migration
@@ -525,5 +540,31 @@ def test_task30_embedding_profile_check_rejects_partial_metadata(dimensions, ind
                         "index_version": index_version,
                     },
                 )
+    finally:
+        engine.dispose()
+
+@pytest.mark.migration
+def test_worker_assignment_permission_is_seeded_without_default_role_grants():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    permission_id = "foundation.task.assign_worker"
+    try:
+        with engine.begin() as connection:
+            upgrade_to_head(connection)
+            permission = connection.execute(
+                text(
+                    "SELECT permission_id FROM permissions "
+                    "WHERE permission_code = :permission_code"
+                ),
+                {"permission_code": permission_id},
+            ).scalar_one()
+            grant_count = connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM role_permissions "
+                    "WHERE permission_id = :permission_id"
+                ),
+                {"permission_id": permission_id},
+            ).scalar_one()
+        assert permission == permission_id
+        assert grant_count == 0
     finally:
         engine.dispose()

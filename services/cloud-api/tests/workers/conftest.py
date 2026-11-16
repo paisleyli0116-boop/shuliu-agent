@@ -63,7 +63,14 @@ def worker_harness():
                 task_id="task-1",
                 organization_id="org-1",
                 status="READY",
-                payload={"required_capabilities": ["worker.runtime"]},
+                payload={
+                    "required_capabilities": ["worker.runtime"],
+                    "_worker_assignment": {"worker_id": "worker-old"},
+                    "tool_call": {
+                        "tool_id": "foundation.test",
+                        "arguments": {"value": "safe"},
+                    },
+                },
                 created_at=clock(),
             )
         )

@@ -12,7 +12,8 @@ def test_first_bootstrap_creates_database_under_the_user_data_directory(tmp_path
 
     assert result.status == "healthy"
     assert result.database_path == tmp_path / "foundation.sqlite"
-    assert result.database_schema == "1.0.0"
+    assert result.database_schema == "1.3.0"
+    assert result.workflow_repository is not None
 
     with sqlite3.connect(result.database_path) as connection:
         migration_ids = connection.execute(
@@ -22,6 +23,10 @@ def test_first_bootstrap_creates_database_under_the_user_data_directory(tmp_path
     assert migration_ids == [
         ("0001_local_foundation",),
         ("0002_tool_idempotency",),
+        ("0003_workflow_runs",),
+        ("0004_runtime_generation",),
+        ("0005_runtime_generation_transition",),
+        ("0006_approval_requests",),
     ]
 
 

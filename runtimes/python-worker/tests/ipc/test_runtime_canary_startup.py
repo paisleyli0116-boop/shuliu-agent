@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import pytest
 
 from shuliu_runtime.ipc import server
@@ -7,19 +5,20 @@ from shuliu_runtime.ipc import server
 
 @pytest.mark.parametrize(("opt_in", "expected"), [(None, False), ("1", True), ("true", False)])
 def test_runtime_health_reports_process_scoped_canary_gate_without_calling_provider(
-    monkeypatch, opt_in, expected
+    monkeypatch, opt_in, expected, tmp_path
 ):
     observed = {}
 
     class FakeIpcServer:
-        def __init__(self, *, handlers, health_state):
+        def __init__(self, *, handlers, health_state, **_kwargs):
             observed["handlers"] = handlers
             observed["health_state"] = health_state
 
         def serve(self, output_stream):
             return None
 
-    monkeypatch.setattr(server, "bootstrap_runtime", lambda _path: SimpleNamespace(database_schema=1))
+    monkeypatch.setattr(server, "_runtime_data_directory", lambda: tmp_path)
+    monkeypatch.setattr(server, "create_process_recovery_ipc_handlers", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(server, "create_provider_runtime_from_environment", lambda: object())
     monkeypatch.setattr(server, "create_provider_ipc_handlers", lambda _runtime: {"providers.test_connection": object()})
     monkeypatch.setattr(server, "IpcServer", FakeIpcServer)

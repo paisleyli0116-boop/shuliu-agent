@@ -17,6 +17,7 @@ export type RuntimeRestartPolicy = {
 export type RuntimeRecoveryContext = {
   previous_generation: number;
   current_generation: number;
+  transition_id: string;
   previous_exit_code: number | null;
   previous_exit_kind: string;
   previous_error_code: string | null;
@@ -147,6 +148,7 @@ const recoveryErrorCodes = new Set([
   "CHECKPOINT_SCHEMA_INCOMPATIBLE",
   "CHECKPOINT_STATE_INVALID",
   "CHECKPOINT_UNAVAILABLE",
+  "DATABASE_SCHEMA_INCOMPATIBLE",
   "EXTERNAL_STATE_INVALID",
   "EXTERNAL_STATE_UNAVAILABLE",
   "IDEMPOTENCY_KEY_REQUIRED",
@@ -156,6 +158,9 @@ const recoveryErrorCodes = new Set([
   "RECOVERY_AUDIT_UNAVAILABLE",
   "RECOVERY_METADATA_INVALID",
   "RUNTIME_GENERATION_INVALID",
+  "RUNTIME_RECOVERY_CANCELLED",
+  "RUNTIME_RECOVERY_RESULT_INVALID",
+  "SAFE_MODE_RELEASE_NOT_READY",
   "SIDE_EFFECT_STATE_UNKNOWN",
   "WORKER_LEASE_FENCE_UNAVAILABLE",
   "WORKER_LEASE_FENCE_UNCONFIRMED",

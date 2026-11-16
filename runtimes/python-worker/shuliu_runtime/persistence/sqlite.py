@@ -21,7 +21,7 @@ class UnknownMigrationError(MigrationError):
     """The database contains a migration not known to this runtime."""
 
 
-DATABASE_SCHEMA_VERSION = "1.0.0"
+DATABASE_SCHEMA_VERSION = "1.3.0"
 
 
 class IdempotencyConflictError(RuntimeError):
@@ -85,6 +85,51 @@ LOCAL_MIGRATIONS = (
             "(organization_id, tool_id, operation_id, idempotency_key)",
             "CREATE INDEX ix_tool_idempotency_status_updated "
             "ON tool_idempotency(status, updated_at)",
+        ),
+    ),
+    LocalMigration(
+        migration_id="0003_workflow_runs",
+        statements=(
+            "CREATE TABLE workflow_runs ("
+            "run_id TEXT PRIMARY KEY, revision INTEGER NOT NULL CHECK (revision >= 0), "
+            "payload_json TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        ),
+    ),
+    LocalMigration(
+        migration_id="0004_runtime_generation",
+        statements=(
+            "CREATE TABLE runtime_generation ("
+            "runtime_id TEXT PRIMARY KEY, generation INTEGER NOT NULL CHECK (generation >= 1))",
+        ),
+    ),
+    LocalMigration(
+        migration_id="0005_runtime_generation_transition",
+        statements=(
+            "ALTER TABLE runtime_generation ADD COLUMN transition_id TEXT",
+        ),
+    ),
+    LocalMigration(
+        migration_id="0006_approval_requests",
+        statements=(
+            "CREATE TABLE approval_requests ("
+            "approval_id TEXT PRIMARY KEY, "
+            "organization_id TEXT NOT NULL CHECK (length(organization_id) BETWEEN 1 AND 128), "
+            "requester_id TEXT NOT NULL, target_approver_id TEXT NOT NULL, "
+            "action_id TEXT NOT NULL, action_summary TEXT NOT NULL, "
+            "resource_json TEXT NOT NULL, "
+            "risk TEXT NOT NULL CHECK (risk IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')), "
+            "action_digest TEXT NOT NULL, policy_decision_json TEXT NOT NULL, "
+            "trace_id TEXT NOT NULL, run_id TEXT, "
+            "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, "
+            "status TEXT NOT NULL CHECK (status IN "
+            "('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED', 'INVALIDATED', 'CONSUMED')), "
+            "decision_by TEXT, decision_at TEXT)",
+            "CREATE INDEX approval_requests_org_status_idx ON approval_requests"
+            "(organization_id, status, created_at)",
+            "CREATE TABLE approval_audit_events ("
+            "event_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, "
+            "event_type TEXT NOT NULL, organization_id TEXT NOT NULL, "
+            "trace_id TEXT NOT NULL, occurred_at TEXT NOT NULL, payload_json TEXT NOT NULL)",
         ),
     ),
 )

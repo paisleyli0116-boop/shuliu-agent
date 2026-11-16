@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { SpawnOptions } from "node:child_process";
 import { isSafeRuntimeErrorCode, readSafeSidecarLogLine, type RuntimeDiagnostics, type RuntimeExitKind, type SafeRuntimeLog } from "./diagnostics";
@@ -15,6 +16,7 @@ export type SidecarSupervisorOptions = {
   handshakeTimeoutMs?: number;
   maxRestarts?: number;
   recovery?: RuntimeRecoveryCoordinator;
+  recoverOnStart?: boolean;
   onLog?: (entry: SafeRuntimeLog) => void;
   onDiagnostic?: (diagnostics: RuntimeDiagnostics) => void;
 };
@@ -23,6 +25,10 @@ const SIDECAR_ENV_KEYS = new Set([
   "PATH", "Path", "SystemRoot", "WINDIR", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR",
   "SHULIU_DATA_DIR", "SHULIU_MODEL_PROFILES_JSON", "SHULIU_ORGANIZATION_ID",
   "SHULIU_MODEL_CONNECTION_TEST",
+  // Trusted Runtime identity and Workflow composition. Only this process sets
+  // them, so a Renderer cannot promote itself by writing a request body.
+  "SHULIU_ACTOR_ID", "SHULIU_ACTOR_PERMISSIONS", "SHULIU_CONTEXT_PRIVACY",
+  "SHULIU_POLICY_BUNDLE", "SHULIU_WORKFLOW_CATALOG", "SHULIU_APPROVAL_TTL_SECONDS",
   "LANG", "LC_ALL", "PYTHONPATH", "PYTHONUTF8", "PYTHONIOENCODING", "VIRTUAL_ENV",
 ]);
 
@@ -181,7 +187,17 @@ export class SidecarSupervisor {
   }
 
   private async launch(recoveryContext?: RuntimeRecoveryContext): Promise<void> {
-    this.generation = recoveryContext?.current_generation ?? this.generation + 1;
+    const activeRecoveryContext: RuntimeRecoveryContext | undefined = recoveryContext ?? (this.options.recoverOnStart === true
+      ? {
+          previous_generation: 0,
+          current_generation: this.generation + 1,
+          transition_id: randomUUID(),
+          previous_exit_code: null,
+          previous_exit_kind: "initial_start",
+          previous_error_code: null,
+        }
+      : undefined);
+    this.generation = activeRecoveryContext?.current_generation ?? this.generation + 1;
     this.stateValue = this.restartCount === 0 ? "starting" : "restarting";
     this.startupStage = "sidecar_spawn";
     this.handshakeStatus = "not_started";
@@ -261,8 +277,8 @@ export class SidecarSupervisor {
       throw error instanceof RuntimeIpcError ? error : new RuntimeIpcError("IPC_HANDSHAKE_FAILED");
     }
 
-    if (recoveryContext) {
-      const recoveryState = await this.completeRecovery(child, channel, recoveryContext);
+    if (activeRecoveryContext) {
+      const recoveryState = await this.completeRecovery(child, channel, activeRecoveryContext);
       if (this.intentionalStop || this.child !== child || recoveryState !== "ready") return;
     }
     if (this.child !== child || this.isSafeMode()) {
@@ -365,6 +381,7 @@ export class SidecarSupervisor {
     const recoveryContext: RuntimeRecoveryContext = {
       previous_generation: this.generation,
       current_generation: this.generation + 1,
+      transition_id: randomUUID(),
       previous_exit_code: outcome?.kind === "exit" ? outcome.code : null,
       previous_exit_kind: this.exitKind,
       previous_error_code: this.safeErrorCode,

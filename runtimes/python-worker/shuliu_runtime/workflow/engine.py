@@ -363,11 +363,19 @@ class WorkflowEngine:
                 idempotency_key=idempotency_key,
             )
         except ToolExecutionError as error:
-            if error.code == "APPROVAL_NOT_CONSUMABLE":
+            if error.code in {
+                "APPROVAL_NOT_CONSUMABLE",
+                "RECONCILIATION_REQUIRED",
+                "TOOL_EXECUTION_UNKNOWN",
+            }:
                 return self._wait_for_resume(
                     run,
                     step_id,
-                    WorkflowWaitReason.APPROVAL,
+                    (
+                        WorkflowWaitReason.APPROVAL
+                        if error.code == "APPROVAL_NOT_CONSUMABLE"
+                        else WorkflowWaitReason.EXTERNAL
+                    ),
                     error.code,
                 )
             return self._fail_step(run, step_id, error.code)

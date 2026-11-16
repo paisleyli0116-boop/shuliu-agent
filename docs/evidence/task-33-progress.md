@@ -190,3 +190,32 @@ PostgreSQL 集成环境补记：精简 pytest 依赖目录最初缺少 `alembic`
   2. 通用集成 job 没有数据库却执行 PG-only 测试，按设计抛出 `CI requires a PostgreSQL test database`。两个模块标记 `pytest.mark.postgres`，通用 job 过滤为 `integration and not real_browser and not postgres`；PG 矩阵 job 仍显式执行它们（提交 `30ad778`）。
 - 结论：**Task 33 的真实 PostgreSQL 17/18 验收证据已取得**，不再是「skipped / database unavailable」。
 - 仍然开放（不因 CI 转绿而消失）：生产 Tool runtime 组合根尚未实例化 durable store 并注入 Browser / Computer Broker（复审 Important #2），因此生产环境副作用 Tool 仍为 fail-closed 不可用。该接线属 Task 27 范围。
+
+## 当前分支 SHA 的 CI 与本地证据（2026-11-05）
+
+背景：此前 CI 证据绑定的是 `feat/foundation-v0.1` 的 `30ad778`；本分支 HEAD `0f6f26bc37bbf58c54a75f348228412b648d85c2`（含 Task 33 幂等实现 `a519fc5` 与 Task 34 生产组合根 `ad9a5f3`）从未运行过 CI，因此在本机手动触发并记录。
+
+- **Generic CI** run `42017114833`（`workflow_dispatch`，ref `codex/task34-production-recovery`）：`Generic tests (ubuntu-latest)` success、`Generic tests (macos-latest)` success、`PostgreSQL migration (PG 17)` success、`PostgreSQL migration (PG 18)` success。
+- **Windows Validation** run `42017123457`（同 ref）：**success**。
+- PG17 与 PG18 两个 job 内的 `Run durable Tool idempotency restart and concurrency integration tests` 步骤均为 **success**，输出 **9 passed**（`test_postgres_tool_idempotency.py` 6 项 + `test_tool_idempotency_crash.py` 3 项），即真实 PostgreSQL 17/18 上的重启、并发、`CLAIMED` 释放与崩溃/ACK 丢失路径已验证，不是 skipped。其余 PG 步骤：迁移 30 passed / 1 skipped，model usage 2 passed，Knowledge 48 passed + ACL 3 passed，Worker lease 2 passed / 32 deselected。
+- **首轮失败与复跑证据（均为环境 flaky，未改代码）**：
+  1. 首轮 ubuntu 失败于 `pnpm test:contract` → `tests/contract/ipc-roundtrip.test.ts` 真实 Electron 进程 `signal=SIGSEGV`（dbus 报错随之出现，属无头环境）。复跑该 job 后该步骤 5 个文件全部通过。
+  2. 第二次复跑改在 `tests/integration/test_worker_wss_cloud_loop.py` 握手阶段 `TimeoutError`（与 Task 34 记录过的 macOS WSS 同源 flake）。再次复跑后整 job **success**。
+  - 结论：这两条是同一 SHA 上可复现的**测试稳定性缺陷**，不改变功能结论；但不能被描述为"一次通过"。
+- **本地 Windows 全量 Python Worker 回归**（`pytest runtimes/python-worker/tests -q`）：**645 passed, 19 skipped, 0 failed**。此前记录的 2 项 `WinError 1314` symlink 夹具失败在本 worktree 不再复现，也未通过跳过或放宽断言规避。
+
+### 生产组合根接线现状（本 SHA）
+
+- `workflow/composition.py` 的 `ProductionWorkflowRuntime.build` 已向 `ToolBroker` 注入 `SQLiteIdempotencyStore(database)`；`worker/service.py` 同样注入。因此生产 Workflow / Worker 副作用入口已使用持久适配器，复审 Important #5 中"没有生产组合根"的结论在当前 SHA 已不成立。
+- `browser/adapter.py` 与 `computer/adapter.py` 接受 `idempotency_store` 参数，但**本分支没有任何生产代码构造 Browser / Computer runtime**（仅测试构造）。因此这两条路径的持久幂等仍无法在生产中证明，其副作用工具继续 fail-closed。补齐需要先有它们自己的生产组合根，属 Task 27 汇总阶段。
+
+### 任务状态
+
+- `durable_idempotency` 所需的三类证据（持久 adapter、重启后 key/result 对账、重复请求结果一致）在 Workflow Tool 路径与 PG 适配器层已具备，并有本 SHA 绑定的 CI 记录。
+- Task 33 仍不标记为"验收通过"：Browser / Computer 生产组合根缺失导致的 fail-closed 属功能面欠账，且文末此前记录的一轮独立只读复审尚未对最新修正给出结论。
+
+## 后续更新（2026-11-05，Task 24/25 组合根）
+
+上文“本分支没有任何生产代码构造 Browser / Computer runtime”一条已被补齐：`shuliu_runtime/production/desktop.py` 现在在 Sidecar 启动时装配两个运行时，并向它们注入 `SQLiteIdempotencyStore(database)`。证据与未覆盖面见 `docs/evidence/task-24-25-production-composition.md`。
+
+需要注意，装配完成不等于副作用可用：Browser 的执行门禁仍固定为 `None`（写操作在派发前被拒），Computer 的写操作仍要求人工审批。因此 Task 33 关于“这两条路径的持久幂等在真实副作用上得到证明”的结论依然不成立——现在缺的是可执行的副作用，而不是组合根。

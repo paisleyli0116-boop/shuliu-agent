@@ -218,6 +218,24 @@ class CheckpointStore:
             raise ValueError("persisted checkpoint run_id does not match its storage key")
         return checkpoint
 
+    def latest_all(self) -> tuple[Checkpoint, ...]:
+        """Read the latest durable checkpoint for each run without exposing state."""
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                "SELECT c.task_id, c.payload_json, c.schema_version FROM checkpoints c "
+                "JOIN (SELECT task_id, MAX(checkpoint_id) AS checkpoint_id FROM checkpoints "
+                "GROUP BY task_id) latest ON latest.checkpoint_id = c.checkpoint_id "
+                "ORDER BY c.task_id"
+            ).fetchall()
+        checkpoints: list[Checkpoint] = []
+        for row in rows:
+            _check_schema_version(row["schema_version"])
+            checkpoint = _decode_checkpoint(row["payload_json"])
+            if checkpoint.run_id != row["task_id"]:
+                raise ValueError("persisted checkpoint run_id does not match its storage key")
+            checkpoints.append(checkpoint)
+        return tuple(checkpoints)
+
     def record_decision(
         self, checkpoint: Checkpoint, *, status: str, error_code: str | None
     ) -> None:

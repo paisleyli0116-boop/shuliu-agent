@@ -6,7 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.identity.rbac import RBACRepository
-from app.persistence.postgres import events, tasks
+from app.persistence.postgres import events, tasks, workers
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import insert, select
@@ -16,6 +16,7 @@ from sqlalchemy.engine import Engine
 class CreateTaskBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     payload: dict[str, Any] = Field(default_factory=dict)
+    assigned_worker_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 def create_task_router(
@@ -42,17 +43,43 @@ def create_task_router(
         organization_id: str = Header(alias="X-Organization-ID"),
     ) -> dict[str, object]:
         authorize(user_id, organization_id, "foundation.task.create")
+        payload = dict(body.payload)
+        if "_worker_assignment" in payload:
+            raise HTTPException(status_code=422, detail={"code": "TASK_PAYLOAD_INVALID"})
+        if body.assigned_worker_id is not None:
+            authorize(user_id, organization_id, "foundation.task.assign_worker")
         now = datetime.now(UTC)
         task_id = f"task_{uuid4().hex}"
         trace_id = str(uuid4())
         event_id = str(uuid4())
         with engine.begin() as connection:
+            if body.assigned_worker_id is not None:
+                worker = connection.execute(
+                    select(workers).where(
+                        workers.c.worker_id == body.assigned_worker_id,
+                        workers.c.organization_id == organization_id,
+                    )
+                ).mappings().first()
+                required = payload.get("required_capabilities", [])
+                if (
+                    worker is None
+                    or worker["status"] in {"REVOKED", "DISABLED"}
+                    or not isinstance(required, list)
+                    or any(not isinstance(item, str) or not item.strip() for item in required)
+                    or not isinstance(worker["capabilities"], list)
+                    or not set(required).issubset(set(worker["capabilities"]))
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail={"code": "WORKER_ASSIGNMENT_INVALID"},
+                    )
+                payload["_worker_assignment"] = {"worker_id": body.assigned_worker_id}
             connection.execute(
                 insert(tasks).values(
                     task_id=task_id,
                     organization_id=organization_id,
                     status="READY",
-                    payload=dict(body.payload),
+                    payload=payload,
                     created_at=now,
                 )
             )
@@ -68,7 +95,11 @@ def create_task_router(
                         "timestamp": now.isoformat(),
                         "organization_id": organization_id,
                         "trace_id": trace_id,
-                        "payload": {"task_id": task_id, "created_by": user_id},
+                        "payload": {
+                            "task_id": task_id,
+                            "created_by": user_id,
+                            "assigned_worker_id": body.assigned_worker_id,
+                        },
                     },
                     received_at=now,
                 )

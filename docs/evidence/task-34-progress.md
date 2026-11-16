@@ -149,3 +149,269 @@ Codex 第二轮增量（23 改 + 15 新文件）：Sidecar 代际围栏（SQLite
 - **Windows Validation run `41419030117`**：**success**（SHA 24699b5）。首轮失败原因：冒烟脚本 `test_installer_smoke.ps1` 把 `database_schema` 写死为 `1.0.0`，而代际围栏表使 schema 升到 `1.2.0`——陈旧断言而非功能故障，已修（提交 `24699b5`）。教训：冒烟脚本不应硬编码 schema 版本，应改为运行时自报值比对。
 - 附带修复：`ci.yml` 补 `workflow_dispatch`，使任务分支可手动触发 CI（提交 `7d62d9a`）。
 - Task 34 剩余缺口：Workflow Engine → ToolBroker 的执行接线、Worker runner 实际调用 fencing 的生产路径、真实 dispatch→ACK 崩溃注入、Task 35 未开始。
+## Task 33 幂等状态与崩溃恢复桥接增量（2026-11-02）
+
+本轮在隔离工作副本 `D:\Documents\ChatGPT\数流\task34-production-recovery-827fdda`（分支 `codex/task34-production-recovery`，起始 HEAD `827fddabc1859a58a1bbf7f8280b92dd04bd638d`）实现 Task 34 的一个受限增量；没有修改主 checkout、`main`、Task 33 工作副本或其他会话文件。
+
+- 为 SQLite 与 PostgreSQL 幂等存储增加只读 `inspect` 能力和状态记录类型。读取不会创建、释放、锁定或推进 claim；摘要冲突不返回既有结果。
+- 新增 `IdempotencyExternalStateReader`，只在记录缺失时报告 `NOT_APPLIED`；`CLAIMED`、`DISPATCHED`、`INDETERMINATE`、冲突、格式错误、存储错误及未验证的完成结果均映射为 `UNKNOWN`。只有已完成、已验证且含安全引用的结果可作为 `APPLIED`。该读取器不派发工具、不自动重试，也不释放 claim。
+- RecoveryCoordinator 将组织范围取自已验证 checkpoint，覆盖 pending action 中不可信的组织字段。新增进程恢复测试确认派发后状态未知会 `WAIT / SIDE_EFFECT_STATE_UNKNOWN` 且不推进 checkpoint；已验证完成结果可推进 checkpoint，而不重放副作用。
+- 独立白名单复投影测试先以 RED 复现了恢复输出将携带额外 `private_payload` 的问题；修复后读取器在写回 checkpoint 前再次调用幂等结果安全投影。
+- **定向验证：61 passed、4 skipped**。命令覆盖 Python recovery、SQLite 幂等重启、durable idempotency 与 PostgreSQL 幂等集成测试。4 项 PostgreSQL 集成用例因本机未配置 `SHULIU_DATABASE_URL` 而按测试门控跳过；PG17/18 结果仍只能引用之前 run `41310851081`，不能作为本轮新代码的 CI 证据。另有 1 条旧 Browser Runtime 临时目录清理 `WinError 5` 警告；测试进程退出码为 0，未影响断言结果。
+- 对所有改动 Python 文件执行 `compileall`，退出码 0；`git diff --check` 退出码 0。本仓库未发现可用的本地 `ruff` 命令，因此本轮未声称通过 Ruff。
+- RED/GREEN 增量：恢复输出重投影测试先失败（多出 `private_payload`），最小修复后该测试 **1 passed**；随后的相关回归为 **61 passed / 4 skipped**。
+
+**仍然不能验收 Task 34：** 此读取桥接尚未连接到生产 Electron Main / Sidecar / Workflow→ToolBroker 执行组合根，也没有生产 Worker lease/generation fencing。crash-before-checkpoint、dispatch-before-ACK 的真实生产路径故障注入未完成。PostgreSQL 变更测试在本机 skipped，本轮没有新的 GitHub Windows Validation、PG CI、安装包恢复验证或独立审查结果。Task 34 继续 **IN_PROGRESS / acceptance BLOCKED**；Task 35 未开始。
+
+## 生产恢复接线与 Windows 本地验收（2026-11-02）
+
+本节记录从基线 `b342a974dae8e6c45cfaae965a895593d39c7a0a` 继续完成的未提交增量。用户提供的基线 CI 证据为 Generic CI run `41385069236` 与 Windows Validation run `41385069133`，两者目标 SHA 均为 `b342a97` 且成功；这些结果不验证本节的新增改动。
+
+- **Workflow 持久化组合根：** `bootstrap_runtime()` 现在实例化并返回 SQLite `WorkflowRepository`；`WorkflowEngine` 使用该 Repository 的本地测试覆盖创建、事件 outbox 原子提交、进程重开恢复、重复创建和 revision 冲突。这里验证的是组合根返回的持久化 Repository，不代表 Sidecar 已暴露 Workflow 执行 API，也不代表生产 ToolBroker 已接入 Workflow Engine。
+- **Electron Main → RecoveryCoordinator：** Main 构造 `RuntimeRecoveryCoordinator` 并启用 `recoverOnStart`。初次启动和 supervisor 重启各自生成唯一 transition ID；Recovery bridge 通过 Sidecar 查询检查点并提交恢复决议。等待与 Safe Mode 结果保持 fail-closed。
+- **Sidecar 生产恢复 IPC：** Sidecar 通过正式 handler 注册 `runtime.recovery.begin`、`runtime.recovery.checkpoints` 与 `runtime.recovery.recover_run`。SQLite 保存单调 runtime generation / transition；恢复决议使用 Task 33 的只读 durable idempotency 状态读取器。持久化 Safe Mode 会在冷启动时恢复，并在处理普通工作请求前拒绝请求。按用户级数据目录持有 singleton lock，避免第二个 Sidecar 并发服务同一数据库；本轮 RED 测试确认旧顺序会先 bootstrap/migrate 再拿锁，修复后启动锁在数据库 bootstrap 之前取得。
+- **Worker lease / fencing：** Cloud 的 `lease_authorize` 路由在数据库事务中重新核验 Worker、task、lease、expiry、心跳和当前 fencing token；Python `WorkerWebSocketConnection.dispatch_tool()` 在 Broker 调用前要求匹配的 Cloud permit 并再次检查有效期，且将 lease 身份及 generation 传入 Broker context。Cloud 对旧 generation / 过期 lease 的拒绝与 Python 侧 Broker 未被调用均有测试。当前仓库没有 Worker job runner 调用 `dispatch_tool()`；因此这些接线尚未证明生产任务执行器实际走该入口，生产 Worker→Tool 的完整执行路径仍为阻塞项。
+- **故障注入：** Windows Python 子进程测试真实启动 Sidecar、写入 dispatched checkpoint / idempotency 状态后强制终止，再以新 Sidecar 进程恢复。结果为 `WAIT / SIDE_EFFECT_STATE_UNKNOWN`，checkpoint 序号不前移、状态仍为 `DISPATCHED`，没有重复派发。该用例使用人工写入的 durable 状态，不是在实际 Workflow→ToolBroker 执行链的 dispatch/ACK 窗口杀进程。另验证 persisted Safe Mode 冷启动拒绝 Provider handler，以及同一数据目录第二个 Sidecar 被 singleton lock 拒绝、首个退出后第三个可启动。
+
+**本机定向测试实际结果（Windows）：**
+
+- Python recovery / IPC / workflow / worker / persistence：**118 passed**（包含启动锁先于数据库迁移的顺序回归）。
+- Desktop IPC：**52 passed**；Desktop typecheck、生产构建通过。
+- Cloud Worker tests：**24 passed、2 skipped**；跳过项分别要求 `SHULIU_DATABASE_URL` 的 PostgreSQL 并发与 Worker Auth 集成测试。
+- Worker 协议 contract：**18 passed**；Security suite：**10 passed**。
+- 根 TypeScript typecheck、Python `compileall`、`git diff --check`：通过。
+- 根 `pnpm test:contract` **未通过/未完成**：`event-roundtrip` 子测试无法由 `uvx` 在受限网络下解析锁定的 `uv==0.12.20`（真实错误为 cache miss 且 network disabled）；该全量命令曾因 uvx 等待而中断。本地已安装的全局 `uv` 版本为 `0.12.20`，但本节没有把手动替代命令记作该 Contract suite 通过。
+- Windows Electron IPC tests 通过；当前环境未进行真实安装版 Electron Main 启动。此前记录的 AppContainer ACL 限制仍适用，本轮没有修改 ACL。Linux/macOS、本地 PG17/18、安装包重启/升级验证均未在本轮执行。
+
+**独立审查前状态：** 工作树位于 `codex/task34-production-recovery`，HEAD 仍为 `b342a974dae8e6c45cfaae965a895593d39c7a0a`；以上实现与证据均未提交、未推送。工作树 `origin` 指向本机 `C:\Dev\shuliu-agent`，不是可直接用于 GitHub 对账的 URL；未对该本地 remote 执行 push。Task 28–33 文件未因本轮测试而清理；本轮代码仅在隔离 Task34 worktree。最新 SHA 的 GitHub CI 尚无证据。
+
+**结论：Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 生产 Main→Sidecar 恢复和 Sidecar 恢复 IPC 已接线；持久 Workflow Repository 已在生产 bootstrap 构造，但 Workflow 执行/ToolBroker 组合根尚未接入；Worker 的 Cloud lease 校验及 Python Broker 前置 adapter 已实现，尚无生产 Worker runner 调用点。真实 Workflow→ToolBroker 进程故障注入、Worker 执行链路、完整 contract suite、安装版 Windows 验收以及本轮 SHA 的远端 CI 与独立审查仍待完成。Task 35 未开始。
+
+## Safe Mode 受控恢复补齐（2026-11-02）
+
+上一轮独立审查指出持久 Safe Mode 没有退出路径。本轮按 RED→GREEN 补上仅供 Main 启动恢复流程使用的受控出口：Sidecar 在 Safe Mode 时继续拒绝普通能力，只放行 generation begin、checkpoint 查询、recover_run 和 recovery.complete；Main 仅在当前代际确认有效、所有 checkpoint 都得到 RESUME、SQLite `quick_check` 成功且迁移版本完整时发送 complete。Sidecar 在同一事务写入 `RUNTIME_SAFE_MODE_RELEASED` outbox 事件并清除已恢复 run 的 Safe Mode 标记，然后才将健康状态切为 healthy。未恢复的 marker、未知副作用、等待审批、无效 checkpoint、旧 transition、数据库不健康或在 release 事务准入检查前被观察到的取消均保持 Safe Mode；准入检查通过后的迟到取消由原子 release 提交胜出。
+
+- **RED：** Windows 真实 Sidecar 子进程测试先复现冷启动 Safe Mode 下 `runtime.recovery.begin` 被拒绝，恢复状态没有到达生产 coordinator。
+- **GREEN：** 新路径用两个真实 Sidecar 子进程建立并切换 generation；未完成 checkpoint 恢复时 `complete` 返回 `SAFE_MODE_RELEASE_NOT_READY` 且 marker 仍存在；当前代际成功恢复后，marker 清除、outbox 审计事件存在、health 转为 healthy。随后 Provider 测试只返回 `MODEL_CONNECTION_TEST_DISABLED` 且 `request_status=not_sent`，未触发任何外部请求。定向用例 **1 passed**。
+- **本轮回归（Windows 本地）：** Python recovery / IPC / workflow / worker / persistence **119 passed**；Desktop IPC **52 passed**；Cloud Worker **24 passed、2 skipped**（PostgreSQL 并发与 Worker Auth 两项需要 `SHULIU_DATABASE_URL`）；worker protocol contract + security **28 passed**；Desktop 与根 TypeScript typecheck、Desktop production build、Python compileall、`git diff --check` 均通过。
+- 用户给出的 PG17/18 Generic CI `41385069236` 和 Windows Validation `41385069133` 均针对基线 SHA `b342a974dae8e6c45cfaae965a895593d39c7a0a`，不验证本轮未提交改动。当前 HEAD 仍为该基线，本轮工作未提交、未推送、没有对应 GitHub Actions 运行。
+
+**独立审查复核后的未关闭阻塞：** Safe Mode 不再因“没有任何受控退出路径”而永久锁死，但整项 Task 34 仍不能验收。生产 bootstrap 目前持久化构造 `SQLiteWorkflowRepository`，但全仓没有生产 `WorkflowEngine` 实例或 Sidecar workflow 执行 IPC；Recovery 扫描的是独立 `CheckpointStore`，没有从 `workflow_runs` 恢复实际 WorkflowRun。Worker lease authorize / Python `dispatch_tool()` 已各自实现并有本地/测试证据，但仓库没有 Worker job runner 调用该方法，且目前 permit 未把批准的 tool/参数范围绑定到 dispatch。现有子进程故障测试仍预置 checkpoint 和 DISPATCHED 状态后杀进程，没有从 WorkflowEngine → ToolBroker → durable idempotency 的真实 dispatch/ACK 窗口注入故障。
+
+本轮也没有启动已安装 Electron Desktop；Windows 实机证据限于真实 Sidecar 子进程和 Electron IPC 单元测试。完整 contract suite 先前因 `uvx` 在受限网络缺少锁定工具缓存而未完成，尚未复跑；本轮没有安装包恢复、跨平台 subprocess 矩阵、PG17/18 当前 SHA 或远端 Windows CI 证据。独立审查员已复核上一轮差异并指出上述阻塞；本轮 Safe Mode 修复等待再次只读复审。Task 34 维持 **IN_PROGRESS / acceptance BLOCKED**，Task 35 未开始。
+
+## Safe Mode 释放与迟到取消竞态（2026-11-02）
+
+独立只读复审确认：`runtime.recovery.complete` 在入口检查取消后，会在 SQLite 事务中同时追加 release audit 并删除 Safe Mode marker。若 IPC 取消在该提交期间或提交后到达，旧版 `IpcServer.respond()` 会丢弃已经提交的成功结果、返回 `IPC_REQUEST_CANCELLED`，并保持进程内 `_safe_mode=True`。这造成持久 marker 已删除、进程仍拒绝普通请求的状态不一致；复审未发现普通请求因此提前放行。
+
+- **RED：** `test_safe_mode_release_commits_before_a_late_ipc_cancellation` 通过 handler 在成功 release 返回前置位取消事件，复现旧 server 把成功结果改成取消错误（定向测试 **1 failed**，响应缺少 `result`）。
+- **GREEN（初始版本，后由复审补充）：** `IpcServer.respond()` 将 `runtime.recovery.complete` 返回白名单成功状态作为 durable commit 点。该实现最初只在 handler 入口检查取消，没有覆盖入口检查后、事务准入前的取消；下方“Safe Mode 事务准入取消边界”记录了复审发现与修复。准入检查通过后的迟到取消仍由原子 release 提交胜出，其他 IPC 取消行为未改变。
+- **定向结果（Windows 本地）：** 取消竞态与 SQLite IPC release 定向测试通过；Python IPC / recovery / workflow / worker / persistence **123 passed**；Desktop IPC **52 passed**；Cloud Worker **24 passed、2 skipped**（需本地 `SHULIU_DATABASE_URL` 的 PostgreSQL 用例）。`compileall` 与 `git diff --check` 通过。
+- **RED/GREEN 证据（初始版本，入口后准入前的窗口由下方复审补测）：** 第一个定向测试先以 **1 failed** 复现 server 丢弃成功结果，再在修复后通过。随后新增真实 SQLite recovery handler + `IpcServer` 测试，在 release transaction 执行 marker `DELETE`、事务尚未返回提交时注入取消；实际事务提交后，marker 已清除、release outbox 事件存在、IPC 返回 `RESUME` 且内存 health 为 healthy。既有真实 Sidecar subprocess 测试另验证进程重启后的 marker/outbox/health 状态。本轮仍未在已安装 Electron Desktop 中验证取消时序。
+- **远端状态：** 基线 `b342a974dae8e6c45cfaae965a895593d39c7a0a` 的 CI 绿色结果不覆盖本轮差异。本轮未产生提交或新 SHA，未推送，也没有对应 Windows Validation。
+- **独立复审：** 复审确认了初始迟到取消竞态，并未发现普通 IPC Safe Mode bypass；复审后又发现事务开始前的窗口，详见后续记录。
+
+**Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 生产 `WorkflowEngine` / ToolBroker 组合根和 WorkflowRun 恢复缺失；Worker job runner 没有调用 fencing dispatcher，且授权 permit 尚未绑定获批 Tool/参数/可信 actor scope；进程故障注入仍未覆盖真实 dispatch→ACK 窗口。还缺当前差异的新 SHA Windows CI、安装版 Windows 恢复验收及最终独立复审。Task 35 未开始。
+
+## Workflow 对未知 Tool 结果的等待状态（2026-11-02）
+
+新增 RED 测试发现：`WorkflowEngine._run_tool_step()` 原先只把 approval 未消费映射为 `WAITING`；来自 durable Tool Broker 的 `RECONCILIATION_REQUIRED`（已派发、结果未知）和 `TOOL_EXECUTION_UNKNOWN`（执行器异常、状态未知）会落入普通失败终态。修复后这两种错误进入 `WAITING / EXTERNAL`，保存原错误码和单次 resume token。恢复后继续使用同一个 Workflow step idempotency key；不会生成新的副作用标识。测试用 Fake Broker 模拟外部状态已完成后的返回，因此它验证 Workflow 状态和 key 连续性，不代表真实 Tool Broker/外部副作用已完成端到端测试。
+
+- **RED：** 参数化测试针对两个安全错误码均复现 `FAILED` 而非 `WAITING`（**2 failed**）。
+- **GREEN：** 两个用例均进入 `WAITING / EXTERNAL`；显式 resume 后使用相同幂等键并完成（**2 passed**）。
+- **相关回归：** Python IPC / recovery / workflow / worker / persistence **123 passed**。
+
+这项状态映射改善了未知副作用的恢复处理，但没有补上生产 WorkflowEngine/ToolBroker 组合根，也没有证明 WorkflowRun 可从数据库自动重建。Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**。
+
+## Safe Mode 事务准入取消边界（2026-11-02）
+
+独立复审发现：`runtime.recovery.complete` 的入口取消检查与 SQLite `BEGIN IMMEDIATE` 之间还会读取 checkpoint、Safe Mode 状态、`quick_check` 和 migration 记录。此前取消若在入口检查后、事务开始前到达，release 仍会清除 marker 并写入 outbox。此前提交期间迟到取消测试只在 marker `DELETE` 时置位，未覆盖该事务准入窗口。
+
+- **RED：** 新测试用 SQLite trace 在 `BEGIN IMMEDIATE` 执行前置位 `IpcServer` 当前请求的真实取消事件。旧实现仍返回 `RESUME`，导致持久 marker 被清除且 release event 被写入；测试以 **1 failed** 复现。
+- **GREEN：** `SQLiteSafeModeController.release_after_verified_recovery()` 在取得 `BEGIN IMMEDIATE` 写事务后立即检查请求取消标记。取消已到达时不读取或删除 Safe Mode marker、不写 release outbox；handler 保持 Safe Mode，IPC 返回 `IPC_REQUEST_CANCELLED`。这次准入检查通过后，事务成为 release 的线性化阶段：后续迟到取消仍由 marker 删除与 audit outbox 的原子提交胜出，避免持久状态和进程内 health 分裂。
+- **定向验证：** `test_recovery_release_rejects_cancel_at_transaction_admission`、`test_recovery_release_commit_wins_over_cancel_during_sqlite_transaction` 与 `tests/ipc/test_real_process_recovery.py` 一起运行，**6 passed in 1.79s**（Windows）。此前 Python IPC / recovery / workflow / worker / persistence **123 passed** 来自一次聚合命令，在前面两个小节重复引用，并非两次或可累加结果，也不包含本次新增准入测试。
+- **受影响回归（Windows）：** `.venv\Scripts\python.exe -m pytest -q runtimes/python-worker/tests/ipc runtimes/python-worker/tests/recovery runtimes/python-worker/tests/workflow runtimes/python-worker/tests/worker runtimes/python-worker/tests/persistence`，**124 passed in 3.77s**。同轮 `compileall -q runtimes/python-worker/shuliu_runtime` 退出码 0，`git diff --check` 退出码 0（仅有 Markdown 文件换行格式提示）。
+- **独立复审：** 复审者确认本次限定范围内的准入取消缺口已关闭，未发现由此导致的 Safe Mode 绕过或 marker / outbox / health 状态分裂。复审为只读且没有独立重跑测试；124 项回归结果仍以本机命令输出为证。当前差异仍未提交、未推送，没有新 SHA 的 Windows Validation 或 PG CI。
+
+**Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 生产 Workflow Engine / ToolBroker 组合根与 WorkflowRun 恢复、Worker job runner 调用 fencing dispatcher 且 permit 绑定授权范围、真实 Workflow→ToolBroker dispatch/ACK 窗口故障注入、完整 contract suite、安装版 Windows 验收及当前差异的 CI 仍未完成。Task 35 未开始。
+
+## 未结束 Workflow 缺少 Checkpoint 时的 fail-closed 保护（2026-11-02）
+
+复核代码发现一个可复现缺口：生产 recovery `begin` 原先只用 `CheckpointStore.latest_all()` 判断是否有上一代状态；SQLite `workflow_runs` 中若存在 `RUNNING` / `WAITING` 记录但没有 checkpoint，会被当作空白首次启动而允许建立新 generation。`complete` 也只核对 checkpoint 与既有 Safe Mode marker，因此该 run 可能被遗漏并让 Sidecar 报 healthy。IpcServer 还没有在 recovery handler 返回 `SAFE_MODE` 后更新当前进程的内存请求门禁。
+
+- **RED：** 新增 `test_unfinished_workflow_without_checkpoint_keeps_sidecar_in_safe_mode`，通过生产 `SQLiteWorkflowRepository` 保存一个真实非终态 WorkflowRun（没有 checkpoint），再走 Sidecar Recovery IPC。旧代码返回 `RESUME`，测试以 **1 failed** 复现。
+- **GREEN：** `SQLiteWorkflowRepository.list_unfinished()` 读取并验证持久化的 `RUNNING` / `WAITING` runs；recovery begin 在 generation 变更前检查每个非终态 run 均有 checkpoint，否则为该 run 持久化 `CHECKPOINT_UNAVAILABLE` Safe Mode marker 并返回 `CHECKPOINT_NOT_FOUND`。Recovery complete 再次确认所有非终态 runs 都属于当前 transition 已恢复集合。IpcServer 在 recovery 返回 `WAIT` / `SAFE_MODE` / `DEAD_LETTER` 时，将当前进程同步切到 Safe Mode，拒绝后续普通 IPC。定向测试 **1 passed**。
+- **相关 Windows 本地回归：** `pytest runtimes/python-worker/tests/ipc runtimes/python-worker/tests/recovery runtimes/python-worker/tests/workflow runtimes/python-worker/tests/worker runtimes/python-worker/tests/persistence`，**125 passed in 4.15s**；Python `compileall` 退出码 0；`git diff --check` 退出码 0（仅有 evidence Markdown LF→CRLF 提示）。
+- **独立复核：** 尚待本轮代码冻结后的只读复审；本节记录的是实现与本机测试输出，不构成审查结论。
+- **未覆盖事项：** 这项保护防止漏掉没有 checkpoint 的未结束 WorkflowRun 并误报健康，但不会自动恢复该 run。实际生产 WorkflowEngine / ToolBroker 组合根、Sidecar workflow 执行入口及恢复已有 WorkflowRun 的能力仍不存在。当前 Worker WebSocket / lease authorize 与 Python `dispatch_tool()` 没有生产 job runner 串接，授权 permit 尚未绑定获批的 tool、参数摘要和可信 actor scope。现有进程故障注入仍是预置 checkpoint / durable idempotency 状态后重启，没有从真实 WorkflowEngine → ToolBroker dispatch 到 ACK 窗口杀进程。本轮未运行安装版 Desktop、未生成新 SHA、未提交或推送、也没有本轮差异对应的 GitHub CI。
+
+**Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 本地回归不替代计划要求的真实执行链路、故障注入、Windows 安装版验收、独立复审及新 SHA CI。Task 35 未开始。
+
+## 启动恢复门禁回归收口（2026-11-02）
+
+新增的启动安全门要求 Sidecar 在 Main 完成恢复协议前维持 `safe_mode`。第一次相关回归运行中，两个既有进程测试仍断言 Sidecar 一启动就为 `healthy`，因此失败；这反映测试没有执行生产启动所需的恢复握手。已更新测试：崩溃恢复场景先完成空 checkpoint 的初始恢复后才断言健康；实例锁场景则只验证新 Sidecar 在 Safe Mode 下持锁，并且不会因 Safe Mode 释放实例锁。产品健康门槛没有降低。
+
+- **定向回归：** `test_forced_sidecar_restart_recovers_dispatched_action_without_replay` 与 `test_second_sidecar_for_same_user_data_fails_closed_until_first_exits`：**2 passed**。
+- **受影响 Python 回归：** Windows 本机运行 IPC、Recovery、Workflow、Worker、Persistence 测试目录，**127 passed in 3.25s**。
+- **Desktop 验证：** `pnpm --filter @shuliu/desktop test:ipc`：**52 passed**；`pnpm --filter @shuliu/desktop typecheck`：退出码 0。
+- Python `compileall` 退出码 0；`git diff --check` 退出码 0（仅显示 evidence Markdown 的 LF/CRLF 提示）。
+- 此次变更尚未提交或推送。基线 `b342a974dae8e6c45cfaae965a895593d39c7a0a` 的既有 CI 不覆盖当前差异；当前差异没有新 SHA 或 GitHub CI 结果。
+- 本节的状态门和测试更新仍待独立审查者核验。
+
+**Task 34 继续 IN_PROGRESS / acceptance BLOCKED。** 当前实现仍未接上生产 WorkflowEngine→ToolBroker 执行组合根与 WorkflowRun 自动重建；Worker job runner 尚未调用 fencing dispatcher，且授权 permit 未绑定获批工具、参数摘要与可信 actor scope；故障注入未在真实 Workflow→ToolBroker dispatch/ACK 窗口杀进程；未完成安装版 Windows 验收和当前差异的新 SHA CI。Task 35 未开始。
+
+## Worker runner fencing 与真实 dispatch 崩溃窗口（2026-11-02）
+
+本节对应用户给出的 `24699b5` 基线后的本地未提交增量。用户提供的 Windows Validation `41419030117`（目标 `24699b5`）和 Generic CI `41415811633`（目标 `7d62d9a`）均不覆盖本节改动；Generic CI `41427409240` 也是针对 `24699b5`，不能作为本节代码的 CI 证据。本轮没有重新触发或重跑这些工作流。
+
+- **Worker 执行入口：** 新增 `WorkerTaskRunner`，一次处理一个 Cloud lease；只接受严格的 `{tool_id, arguments}` 任务动作，拒绝任务携带 actor、organization、context 或 permissions；执行身份和组织来自已认证连接。runner 必须通过 `WorkerWebSocketConnection.dispatch_tool()`，由 Cloud 再核验当前 Worker、lease、expiry 和 fencing token，然后才进入 ToolBroker。Cloud permit 同时绑定任务动作的 canonical SHA-256 摘要；任务动作与 Worker 实际提交的 Tool 或参数不一致时 fail-closed。成功和 ACK 均按 task / lease / idempotency key 对账；ACK 状态未知时不重发 Tool 或结果。
+- **Worker Runner 测试：** Cloud worker harness 中使用真实 `WorkerTaskRunner`、真实 `WorkerToolDispatcher`、真实 Cloud `WorkerCoordinator` / lease repository 测试层、真实 `ToolBroker` 与 `PolicyEngine`；一次执行通过 fencing 并收到匹配 ACK，任务状态转为 `SUCCEEDED`。此外，扩展 `tests/integration/test_worker_wss_cloud_loop.py`：在本机启动 TLS WSS Cloud API，真实完成 Worker 注册、认证、lease request、动作摘要 fencing、ToolBroker/Policy 执行及 Cloud result ACK；单次副作用后 Cloud 任务状态为 `SUCCEEDED`。该真实网络链路测试使用临时 SQLite Cloud DB，而不是 PostgreSQL；PG 并发 fencing 仍未在本机执行。
+- **Worker dispatch→ACK 故障注入：** Windows 子进程实际执行 `WorkerTaskRunner → WorkerToolDispatcher → ToolBroker → SQLiteIdempotencyStore → Executor`。Executor 写入一次外部效果标记后，测试用 `Popen.kill()` 终止子进程，发生点在 Broker/Worker 尚未收到结果 ACK 之前。持久幂等状态保持 `DISPATCHED`；重启后再次尝试由真实 ToolBroker 返回 `RECONCILIATION_REQUIRED`，没有第二次执行 Executor，效果标记仍只有一条。Cloud authorizer 与连接在这个特定崩溃夹具中是受控替身，所以它证明的是 runner 到本地 durable Broker 的进程崩溃防重放；不证明真实 Cloud 已提交 ACK 后 ACK 包丢失，也不证明真实 WSS 断线恢复。
+- **Workflow dispatch→ACK 故障注入：** 另一个 Windows 子进程通过真实 `WorkflowEngine → SQLiteWorkflowRepository → ToolBroker → SQLiteIdempotencyStore → Executor` 开始 Workflow；在外部效果标记已写、Workflow/Tool ACK 尚未持久完成时强制终止。重启检查到未完成 run 缺少可恢复 checkpoint，进入 `SAFE_MODE / CHECKPOINT_NOT_FOUND`；按同一幂等键尝试恢复时被 `RECONCILIATION_REQUIRED` 拒绝，副作用未重放。此场景是真实本地 Workflow/Broker/SQLite 进程故障注入，不是生产 Sidecar 的 Workflow IPC 调用。
+- **Protocol compatibility：** 新增组织 ID 若作为 Worker v1 `authenticated` 必填字段会破坏既有 Worker / Cloud 兼容。兼容测试先因旧版 `{worker_id}` 响应不符合 schema 而 RED；修复后该字段在 v1 保持可选。新版 Cloud 仍返回组织 ID；若旧 Cloud 未返回，握手仍兼容，但 `WorkerTaskRunner` 因没有可信组织身份在 dispatch 前 fail-closed。`action_digest` 在 Worker v1 的 lease authorization schema 中也保持可选以允许旧帧解析；Cloud 对缺少摘要的授权请求返回 `WORKER_LEASE_ACTION_BINDING_REQUIRED`，新 Worker 对旧 Cloud 未回显摘要的 permit 返回 `WORKER_LEASE_AUTHORIZATION_INVALID`，两条路径都不能进入 ToolBroker。缺摘要 WSS 场景先以通用错误码失败断言（RED），修改后明确错误码通过。
+- **TDD 证据：** WorkerTaskRunner 测试先因 runner 模块不存在而在收集阶段失败；实现后相关 runner 与 fencing 测试通过。动作摘要接入前 Cloud lease fencing 测试因 authorizer 签名缺少摘要而失败，加入摘要契约及服务器端校验后通过。新 Worker crash 测试第一次运行暴露的是测试连接未消费 runner 注入的 clock 参数（`TypeError`，未进入 Tool 执行）；修正测试夹具后同一测试 **1 passed**。这次夹具修正不是产品缺陷修复。
+- **本轮 Windows 定向回归：** `pytest runtimes/python-worker/tests/ipc runtimes/python-worker/tests/recovery runtimes/python-worker/tests/workflow runtimes/python-worker/tests/worker runtimes/python-worker/tests/persistence services/cloud-api/tests/workers -q`：在新增 v1 兼容与缺少组织 ID fail-closed 测试前 **158 passed, 2 skipped in 4.48s**；`tests/integration/test_worker_wss_cloud_loop.py` **1 passed**；兼容测试 RED→GREEN 后 **1 passed**。两个原回归 skip 是 `test_postgres_worker_registration_and_session_replay_protection` 与 `test_postgres_serializes_task_claim_and_fencing_token_increments`，原因均为未配置 `SHULIU_DATABASE_URL`。Worker protocol contract：**18 passed**。Python `compileall`、worker protocol schema JSON 解析、`git diff --check` 均通过（完整最终增量的复跑结果见下方收口记录）。
+- **未接生产的部分：** 静态检查确认 `bootstrap_runtime()` 只创建持久 Workflow Repository；Sidecar `server.py` 没有生产 Workflow 执行 IPC；生产代码未构造 WorkflowEngine + ToolBroker。全仓生产路径也没有一个可注入该执行器的 Worker 进程入口；`WorkerTaskRunner` 目前由测试直接实例化。当前没有生产身份解析 / Policy / Approval / ToolRegistry 组合根可安全用于 Workflow 执行。没有这些可信依赖时开放由 Renderer 或 Sidecar 请求直接提供定义、actor、权限的执行入口会造成授权边界缺口，因此本轮没有伪造接线。
+- **差异与交付：** 当前分支为 `codex/task34-production-recovery`，HEAD 仍是 `24699b5dd03707e283a7d65afe613261076cdcbd`；仅 Task34 worker protocol / runner / fencing / 测试文件及本证据文档有改动，无其他未跟踪文件混入。本轮未提交、未推送，也没有当前差异对应的 GitHub CI、安装版 Desktop 验收或独立审查结果。
+
+**Task 34 继续 IN_PROGRESS / acceptance BLOCKED。** Worker runner 的本地 fencing 调用和两个本地 durable dispatch 崩溃场景有 Windows 证据；真实 Workflow→ToolBroker 生产组合根、生产 Worker 进程调用入口、PostgreSQL fencing、Cloud ACK 提交后应答丢失场景、当前差异的独立复审和 SHA 对应 CI 仍未完成。Task 35 未开始。
+
+### 本地收口复跑（2026-11-02）
+
+- 最终相关 Windows 回归将 IPC、recovery、workflow、worker、persistence、Cloud Worker 与真实本地 TLS WSS Worker 集成测试放在同一轮执行：**163 passed, 2 skipped in 5.17s**。两个 skip 均因没有 `SHULIU_DATABASE_URL`，分别是 PostgreSQL Worker 注册/会话重放测试和 PostgreSQL 并发 lease fencing 测试。
+- Worker protocol Vitest contract：**18 passed**；Python `compileall`、Worker schema JSON 解析、`git diff --check` 退出码均为 0。
+- 本轮实现没有提交或推送，HEAD 仍为 `24699b5dd03707e283a7d65afe613261076cdcbd`。用户提供的 CI 只验证该基线或更早 SHA，不能覆盖本地差异；本轮没有对应 CI，也没有独立只读审查。
+- Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**：生产 Workflow→ToolBroker 组合根与 Sidecar 执行 IPC 缺少可信身份、Policy、Approval 和注册工具配置；没有生产 Worker host 调用 runner；Cloud PostgreSQL 并发 fencing、Cloud 已提交结果但 ACK 丢失的故障注入、当前差异审查及 SHA 对应 CI 尚未完成。Task 35 未开始。
+
+## 真实 WSS Worker 子进程故障注入补充（2026-11-02）
+
+本轮继续验证可安全独立完成的 dispatch 崩溃场景，没有修改产品执行策略，也没有提交或推送。
+
+- 新增 `tests/integration/test_worker_wss_dispatch_process_crash.py`：本机启动带临时 TLS 证书的真实 Cloud WSS 服务和独立 Windows Worker 子进程。子进程使用真实 `WorkerWebSocketConnection`、Cloud 注册/认证、lease、动作摘要 fencing、`WorkerTaskRunner`、`ToolBroker`、Policy 与 SQLite durable idempotency。Executor 写入一次外部效果标记后阻塞；测试对 Worker 子进程调用 `Process.terminate()` 模拟进程突然终止。Cloud lease 超时后经 `OUTCOME_UNKNOWN` reconciliation 进入 `RECONCILIATION_REQUIRED / INDETERMINATE`。Worker 经设备密钥安全续期会话后重启并尝试领取同一 task，Cloud 返回 `TASK_NOT_READY`；效果标记仍只有一条。
+- **定向验收：** 两个真实 WSS 子进程故障注入（副作用开始后强制终止；Cloud 已持久化成功结果但 ACK 被网络层丢弃）与既有 WSS 成功、Cloud ACK 幂等、Worker runner / fencing 测试合并运行 **15 passed**。其后两个故障用例顺序重复 **3 轮，每轮 2 passed，共 6/6 passed**。真实 ACK 丢失场景确认 Worker 返回 `WORKER_RESULT_ACK_UNKNOWN`，Cloud task 为 `SUCCEEDED`、lease 为 `COMPLETED`、Cloud 仅有一条结果事件、副作用标记仅一条；重启 Worker 时任务不能再次领取。另一场景在副作用执行后强制终止 Worker，Cloud 将结果未知 lease 标记为 `INDETERMINATE` 并阻止任务重领。运行使用真实本地 TLS/WSS、Windows 子进程和 SQLite；不是 PostgreSQL 或生产 Cloud 环境证据。
+- 试验中出现的首轮失败是测试夹具问题：未导入 `multiprocessing.dummy`、Worker 与 Cloud 测试时钟不一致，以及进程重启后一次性 session credential 已被消费。已通过使用 `threading.Thread`、注入同一测试时钟、并通过设备密钥续期短期会话修正；没有延长产品超时或放宽断言。
+- **生产 Worker host 状态：** WSS 集成现在从独立进程真实执行 `WorkerTaskRunner` 并经过 Cloud lease fencing → ToolBroker → Cloud result ACK；静态入口核对仍未找到已部署/可启动的 Worker 服务命令或生产 ToolBroker 注册组合根。当前验证在测试中构造生产类，不是已安装 Worker 服务实机运行。
+- **Workflow→ToolBroker 状态：** `ipc/bootstrap.py` 持久化构造 `SQLiteWorkflowRepository`；`ipc/server.py` 只注册 Provider 与 Recovery handlers；Desktop task / approval 服务仍由 `createDemoDesktopServices()` 提供，Workflow UI 明确标示执行接口尚未接入。仓库没有可复用的可信本地用户/组织主体、实时 Policy / Approval 服务和正式工具注册表。由 Renderer 或 Sidecar 请求提供 actor、permission、tool definition 或审批结果会跨越信任边界，因此本轮没有开放该入口。生产 Workflow→ToolBroker 执行组合根仍阻塞，需先提供可信主体和正式 Tool / Policy / Approval 组合。
+- **状态与交付：** 当前分支 `codex/task34-production-recovery`，本轮检查时 HEAD 为 `0f8be979e1928026930354c371d371638f3daed0`；日志中其父提交 `aec68a8e879528c440620818cad4176aea2aa7f5` 已包含 Worker runner / action digest fencing 与第一版 WSS 崩溃用例，`0f8be97` 固定该测试时钟。本轮 ACK 丢失场景及本证据更新仍在工作区、尚未提交。远端 `origin` 指向本机 `C:\Dev\shuliu-agent`，本分支无 GitHub upstream；没有本轮完整 HEAD 的远端 CI、PostgreSQL 17/18 fencing、安装版 Worker/Desktop 生产端到端或独立审查证据。用户提供的 CI runs `41419030117` 和 `41427409240` 针对 `24699b5`，不验证上述提交或当前工作区差异。
+
+**Task 34 仍为 IN_PROGRESS / acceptance BLOCKED，Task 35 未开始。** 已补真实本地 WSS Worker 进程崩溃、Cloud result ACK 丢失及防重放证据；仍缺 Workflow 生产执行组合根、可启动的生产 Worker host、PostgreSQL fencing、安装版完整验收、当前差异独立审查以及最新提交 SHA 对应 CI。
+
+### 独立核实与 SHA 对应 CI 证据（2026-11-02 19:50，审查者）
+
+本节由独立审查者（非 Task 34 实现者）在 Windows 实机完成，更正前文“没有本轮完整 HEAD 的远端 CI”“Cloud ACK 提交后应答丢失场景仍未完成”两处陈述。
+
+- **提交与推送：** 实现者未提交的工作区由审查者分三次提交并推送到 GitHub `codex/task34-production-recovery`：`aec68a8`（WorkerTaskRunner、action digest fencing、dispatch/ACK 崩溃注入）、`0f8be97`（固定真实 WSS 崩溃用例时钟）、`6a5a93b`（Cloud 已提交结果但 ACK 丢失场景）。推送方式为隔离副本 → 本机 `C:/Dev/shuliu-agent` → GitHub；隔离副本的 `origin` 指向本机仓库，因此 GitHub 推送由主仓完成。
+- **CI（SHA `6a5a93b`，即当前 HEAD）：** Generic CI run `41438143417` **success**，四个 job 全部通过：`Generic tests (ubuntu-latest)`、`Generic tests (macos-latest)`、`PostgreSQL migration (PG 17)`、`PostgreSQL migration (PG 18)`。Windows Validation run `41438147882` **success**。
+- **CI（SHA `0f8be97`）：** Generic CI run `41436257429` **success**（同上四个 job），Windows Validation run `41436263540` **success**。
+- **CI（SHA `24699b5`，前序基线）：** Generic CI run `41427409240` 第 1、2 次尝试在 `tests/contract/ipc-roundtrip.test.ts` 因 ubuntu runner 上 Electron 进程 `SIGSEGV`（`signal=SIGSEGV`、`status=null`）失败，第 3 次尝试 **success**；Windows Validation run `41419030117` **success**。该失败为已记录的 runner 偶发，同一 SHA 重跑即通过，不是断言逻辑缺陷。
+- **Windows Validation 覆盖范围说明：** `.github/workflows/windows-validation.yml` 只执行 `tests/computer`、`tests/e2e/windows`、`tests/browser`、`tests/skills` 与 PyInstaller 安装包校验，**不执行** `runtimes/python-worker/tests/worker` 与通用 `tests/integration`。因此本轮 Worker runner / action digest / 崩溃注入的 Windows 覆盖仍是本机实机结果；CI 侧覆盖来自 Generic CI 的 ubuntu、macOS、PG 17、PG 18 四个 job。
+- **审查者独立复跑（Windows 实机）：** `pytest runtimes/python-worker/tests/ipc tests/recovery tests/workflow tests/worker tests/persistence services/cloud-api/tests/workers tests/integration/test_worker_wss_cloud_loop.py tests/integration/test_worker_wss_dispatch_process_crash.py -q` → **165 passed, 2 skipped**，两个 skip 仍为无 `SHULIU_DATABASE_URL` 的 PostgreSQL 注册/并发 fencing 测试。Worker protocol Vitest contract → **18 passed**。与实现者报告的 163 passed 相差 1，差异为审查者额外纳入的 `test_worker_wss_dispatch_process_crash.py`（实现者的清单未包含该文件）。
+- **代理环境注意：** 本机首次复跑真实 TLS WSS 用例时 `test_worker_wss_cloud_loop.py` 握手超时失败；清除 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY` 后 **1 passed**。原因是本机代理把 `127.0.0.1` 的 WSS 握手也转发了。该失败是环境问题，不是产品缺陷；CI runner 无此代理。
+- **审查者对代码的独立判断：** Worker 侧 `worker_action_digest` 与 Cloud 侧 `_task_action_digest` 使用同一 canonical JSON 形式（`sort_keys`、紧凑分隔符、`ensure_ascii=False`、`allow_nan=False`），摘要可对账；Cloud 的 `authorize_tool_dispatch` 先校验调用者持有该 lease（`initial["worker_id"] == principal.worker_id`）再计算并比对动作摘要，不会向非持有者泄露任务动作信息。`WorkerTaskRunner` 拒绝任务 payload 携带 `actor`、`context`、`organization_id`、`permissions`，执行身份只取自已认证 WSS 响应；ACK 状态未知时抛 `WORKER_RESULT_ACK_UNKNOWN` 且不重发。未发现可绕过授权边界的新入口。
+- **仍未完成（本轮不改变验收结论）：** `ipc/bootstrap.py` 只构造持久 `SQLiteWorkflowRepository`，`ipc/server.py` 无生产 Workflow 执行 handler；仓库无可启动的生产 Worker host；无生产可信主体 / Policy / Approval / ToolRegistry 组合根。这对应本文档 “Acceptance blockers” 第 1、3 项，仍是 Task 34 的硬门槛。
+- **合并注意：** `feat/foundation-v0.1` 与 `codex/task34-production-recovery` 双方都修改本文档，且前者多出 2 个仅文档的提交，合并时会在此文件冲突，需要人工取舍。
+
+**结论不变：Task 34 仍为 IN_PROGRESS / acceptance BLOCKED。** 本轮新增的是 Worker 执行入口、动作摘要绑定、三个真实崩溃/Ack 丢失场景与 SHA 对应的平台 CI 证据；生产 Workflow→ToolBroker 组合根与可启动的生产 Worker host 仍未接通，Task 35 未开始。
+
+## 9be5bb7 后续核验：本机安装 smoke 的 ACL 环境差异（2026-11-03）
+
+- **Git 状态：** `codex/task34-production-recovery`，HEAD `9be5bb7b38730ed0dfebc071d3d11cb3954e8c0d`；核验开始时工作区干净。用户提供的 Generic CI `41438143417` 与 Windows Validation `41438147882` 均对应该 SHA 且成功。本机未重跑 CI 或 Worker/Integration 全量测试。
+- **本机构建：** Desktop build 成功；PyInstaller 首次因默认 uv 缓存目录 ACL 拒绝而失败，改用仅当前进程的 `%TEMP%` 缓存后构建成功，未修改系统 ACL。NSIS 产物版本 `0.1.0-task34.9be5bb7`，SHA-256 `E3D4B8D34DFDB6A5380F3D3201866406782A74600B6A6736DC70F9D36F02E3C3`。
+- **本机安装 smoke：** 在全新 `%TEMP%` 根运行仓库现有 `test_installer_smoke.ps1`，首次健康检查失败，Electron 退出码 `-2147483645`（`0x80000003`），Sidecar 未启动，未取得 IPC 握手。脱敏 Electron stderr 给出直接根因：Chromium sandbox 在 `electron/shell/browser/win/install_dir_access.cc:52` 拒绝读取安装目录，因为目录 ACL 有 AppContainer package SID 条目，却没有 `ALL APPLICATION PACKAGES`；其提示要求对该安装目录具备 RX 权限。故障发生在 `safe_storage` 诊断阶段之前，日志只有 `electron_main` 与 `resource_resolution` 两项。
+- **交叉核对：** 本次临时安装目录及 `%LOCALAPPDATA%\Programs` 父目录均无 `ALL APPLICATION PACKAGES` 条目；现存 `C:\Program Files\ShuLiu Foundation Current Session` 有继承的读取/执行条目。Windows Application 日志未找到该次匹配事件，也没有对应 CrashDumps 文件。stderr 的 Electron FATAL 行是本次根因证据；它说明本机临时安装路径的继承 ACL 不满足 Chromium sandbox 要求，不能据此否定用户提供的 Windows Validation 成功结果。
+- **安全与数据：** 未修改任何 ACL、未使用管理员权限、未触碰已有 Program Files 安装、旧用户安装目录或其凭据；本次 smoke 仅产生独立临时安装/测试数据。未点击 Provider 测试，也未访问 API Key。
+- **验收影响：** Windows Validation #41438147882 是 SHA 绑定的远端安装验收通过证据；本机当前用户目录的独立安装 smoke 为 **failed**，不能记作本机安装通过。若要在该机器复验，需为一个全新、专用的安装目录提供 Electron 所需的 AppContainer 读取/执行 ACL；本轮既有“不得修改 ACL”限制，因此未实施。PG17/18 并发 fencing 由 Generic CI #41438143417 真实执行通过；Windows Validation 不运行 Worker / 通用 Integration。
+
+**当前结论：Task 34 继续 IN_PROGRESS / acceptance BLOCKED，Task 35 未开始。** 最新 SHA 的远端 PG17/18 与 Windows Validation 证据齐全；本机安装路径存在已证实的 ACL 条件阻塞；另外生产 Workflow→ToolBroker 组合根和可启动 Worker host 仍缺可信生产身份、Policy/Approval、工具注册与任务领取配置，不能由本地测试身份代替。
+
+### ACL 授权后的本机安装验证与根因收口（2026-11-03 11:10，审查者）
+
+Owner 批准对新建专用测试安装目录授予 Electron 要求的 AppContainer ACL，并同步排查安装器。本节记录执行结果。
+
+- **smoke 脚本授权改动：** `tests/e2e/windows/test_installer_smoke.ps1` 在创建安装目录后、安装前执行 `icacls "<install>" /grant *S-1-15-2-1:(OI)(CI)(RX)`，即 Electron `install_dir_access.cc` 的 FATAL 消息官方建议的命令；授予仅限 install 子目录，`user-data` 目录保持默认 ACL，沙盒进程仍不能读取用户数据。授予失败会显式抛错而不是静默继续。CI 干净 runner 上该授予为冗余但无害。
+- **本机核心路径验证（全部通过）：** 安装器静默安装退出码 0，`ShuLiu Agent.exe` 与 `resources\python\ShuLiuRuntime.exe` 均存在；健康检查退出码 **0**，报告 `status=healthy`、`electron_version=44.9.0`、`node_version=24.22.0`、`preload_available=true`、`database_schema=1.2.0`、`ipc_handshake_status=succeeded`、`failure_stage=none`。**前一轮的 0x80000003 完全消失**，证实缺少 ALL APPLICATION PACKAGES 读/执行条目是唯一根因，产品本身无缺陷。验证后已静默卸载（退出码 0）并删除临时目录，标准安装位置无残留。
+- **根因收口（升级为环境问题）：** 本机 `C:\Users` 与 `C:\Users\Administrator` 的 DACL 各有一条**非继承的** capability SID 条目（`S-1-15-3-65536-…`，ExecuteFile），这是 Windows 默认不写的显式 ACE；本机装有 OpenAI Codex 桌面/CLI。该现象与 openai/codex#53272 描述的故障模式一致：沙箱安装向用户 profile 放置孤立的 AppContainer/capability ACE 且缺少 ALL APPLICATION PACKAGES，导致装在 profile 下任何位置（含 %TEMP%、%LOCALAPPDATA%\Programs）的 Electron 应用触发 `install_dir_access.cc` 检查失败。`C:\Program Files` 不在 profile 下、自带 ALL APPLICATION PACKAGES RX，因此既有安装不受影响；GitHub runner 的用户 profile 无此污染，因此 SHA 绑定的 Windows Validation smoke 一直通过。**结论：本机 smoke 失败是本机 profile ACL 环境问题，不是产品安装器缺陷；不建议为此修改 NSIS 安装器。** 如需本机根治，可评估对 profile 根授予 `*S-1-15-2-1:(OI)(CI)(RX)`（openai/codex#53272 的 workaround），该动作影响面大于本轮授权范围，未执行。
+- **执行环境注意：** 本机实际未安装 PowerShell 7（`pwsh` 不存在），完整 smoke 脚本使用 `ProcessStartInfo.ArgumentList` 与 `Process.Kill($true)`，只能在 pwsh 7 下运行；本轮核心路径验证由审查者以 Windows PowerShell 5.1 等价步骤（`Arguments` 字符串、`Kill()`）手工执行。另外启动安装版应用前必须清除 `ELECTRON_RUN_AS_NODE`，否则 Electron 降级为纯 Node 并以 `bad option: --shuliu-health-check` 退出（退出码 9）。完整 smoke（含安全模式与卸载保留断言）仍由 CI 的 Windows Validation 执行。
+- **打包注意：** electron-builder 下载 Electron/nsis 二进制在本机直连 GitHub 超时，设置 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 与 `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/` 后构建成功；产物 `ShuLiu Agent-Setup-0.1.0-task34-x64.exe`。
+- **状态影响：** 本机安装验证从 failed 改为 **passed（核心路径）**；Task 34 剩余阻塞仅剩生产 Workflow→ToolBroker 组合根与可启动的生产 Worker host。Task 35 未开始。
+
+## Cloud 显式 Worker 指派与生产组合边界（2026-11-03）
+
+- **工作区基线：** 隔离 worktree 分支 codex/task34-production-recovery，基线 HEAD 50947b5b10bbbd51ddf5c3320014ee9b471f2d5f。本轮未提交、未推送；主 checkout 与 main 未改动。
+- **Cloud 指派边界：** 创建任务时只能通过受 RBAC 控制的 assigned_worker_id 指派。Cloud 校验 Worker 属于同一组织、状态可用并具备任务能力，再由 Cloud 写入 _worker_assignment；调用方不能在 payload 伪造该字段。新迁移 0011_worker_task_assignment 只定义 foundation.task.assign_worker，默认不授予任何角色。没有此权限的用户不能创建指派任务。
+- **领取与 fencing：** Worker 新增 lease_request_assigned 轮询，不在请求中指定 task_id；Cloud 只选择 READY/QUEUED 且 assignment.worker_id 与已认证 Worker 相符的任务。租约事务再次校验归属、能力、心跳和 fencing token。无指派时返回 no_assignment，不会领用组织内其他 Worker 的任务。普通 task_id 请求仍受 Cloud 指派检查限制。
+- **Worker host：** WorkerHost.with_tool_broker() 组合现有 WorkerTaskRunner；运行循环仅心跳并轮询 Cloud 明确指派任务，对连接错误、未知 ACK 不自动重试或重放。该服务类和 Cloud API 已由本地真实 TLS/WSS 测试执行；当前仓库仍没有已部署服务命令、生产 Worker 配置/注册凭据或生产 ToolBroker 策略组合，因此不能称为已上线的 Worker 服务。
+- **Workflow 组合：** ProductionWorkflowRuntime 将 SQLite Workflow Repository、ToolBroker、SQLite durable idempotency 与 Outbox 接在一起，Workflow actor/context 只能由注入的可信服务端 provider 构造。Sidecar bootstrap 可显式注入依赖，未注入时 health 返回 not_configured。当前 server.main() 没有受信 Identity、Policy、Approval、Workflow definition provider 或正式 ToolRegistry 可接入，故实际桌面默认运行仍不启用 Workflow 执行；没有用 permissive/fake adapter 绕过这一边界。
+
+### 本轮 RED / GREEN 与验证
+
+- **迁移 RED：** 初版 0011 使用 sa.func.now() 作为 bulk_insert 的 DateTime 值，SQLite 迁移回归实际报 DateTime type only accepts Python datetime and date objects，共 12 项失败、1 项 PG 门控跳过。改为 datetime.now(UTC) 并新增权限种子检查后，迁移套件为 **13 passed, 1 skipped**；检查确认权限代码已定义且默认角色授权数为 0，升级/回滚路径通过。跳过项需要 SHULIU_DATABASE_URL，不是通过。
+- **Worker / Workflow / Cloud 合并定向回归：** **49 passed, 1 skipped**，覆盖 assigned polling、任务授权、lease fencing、Workflow 组合、SQLite/Alembic 迁移和真实本机 TLS/WSS Worker 故障 / ACK 丢失测试。唯一 skip 为需要配置的 PostgreSQL 用例。
+- **协议契约：** tests/contract/worker-protocol.test.ts **21 passed**；包含 lease_request_assigned 与 no_assignment 合法消息，以及拒绝 Worker 自带 task_id 的断言。
+- **WSS 故障诊断：** 初轮 3 项失败，原因均是旧测试任务未写入 Cloud assignment，Cloud 按新安全边界正确拒绝。修正夹具后，崩溃重连有一次在 Cloud 观察旧连接断开前发生 WSS 握手超时。测试随后等待 Cloud 的实际 disconnect 回调事件（有 5 秒上限）再恢复同一 Worker；单项通过，最终 WSS 子进程集成包含在上述 49 项通过内。没有改产品超时或放宽断言。
+- **差异检查：** git diff --check 退出码 0。Windows 本地结果不等于 PG17/18、安装版或 GitHub CI 证据。
+
+### 尚未关闭的 Task 34 阻塞
+
+1. 默认 Sidecar 启动没有可信 Identity / Policy / Approval / Workflow catalog / ToolRegistry 组合；工作流 handler 仍是 not_configured。要启用须由 Cloud/Security/Runtime Owner 提供并批准这些真实依赖，不能从 Renderer 请求体推导。
+2. Worker host 仍缺生产服务启动/部署配置、已注册 Worker 的安全配置、Cloud endpoint 与正式 ToolBroker / Policy 组合；本轮验证的是服务类及本机 WSS，不是已部署的生产 Worker 服务。
+3. 本轮新 SHA 尚无 GitHub Actions、PostgreSQL 17/18 fencing、安装版全链路或独立审查结果。Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**；Task 35 未开始。
+
+### 首次真实 CI 暴露并修复的迁移缺陷（2026-11-03 13:05，审查者）
+
+实现者的本机回归在 SQLite 上全绿，但 SQLite 不校验 `alembic_version.version_num` 的列长度，掩盖了一个只在 PostgreSQL 上出现的错误。
+
+- **提交与 CI：** 审查者将未提交的工作区提交为 `027fd8f` 并推送到 `codex/task34-production-recovery`，触发 Generic CI `41581255818`。
+- **失败：** `PostgreSQL migration (PG 17)` 与 `(PG 18)` 两个 job 均 failure，报 `psycopg.errors.StringDataRightTruncation: value too long for type character varying(32)`，失败语句为 `UPDATE alembic_version SET version_num='0011_worker_task_assignment_permission' …`。revision 名 38 字符，超出 `alembic_version.version_num` 的 `varchar(32)`；历史最长 revision 恰为 32 字符（`0009_knowledge_embedding_profile`），此前从未越界。
+- **修复（RED→GREEN）：** 新增 `test_every_migration_revision_fits_the_alembic_version_column`，扫描 `migrations/versions/*.py` 的 `revision` 并断言长度 ≤ 32；在改名前该测试 RED（明确指出 `0011_worker_task_assignment_permission.py`），把 revision 改为 `0011_worker_task_assignment`（27 字符）并同步文件名后 GREEN。迁移套件由 13 passed / 1 skipped 变为 **14 passed / 1 skipped**（新增的 1 项即该守卫）。该守卫在 SQLite 上即可运行，不需要数据库。
+- **教训：** 迁移用例只在 SQLite 上跑通不能证明 PG 可用；revision 标识长度属于跨库约束，必须由本地守卫覆盖，不能只依赖 CI 兜底。
+
+
+### 指派边界增量的 SHA 绑定 CI 与逐项修复（2026-11-03 13:35，审查者）
+
+首次真实 CI 一共暴露四类问题，前三类是产品/测试断言的真实缺陷，第四类是测试环境余量问题。全部修复后 `c97a707` 双工作流通过。
+
+- **最终证据（SHA `c97a707a`）：** Generic CI run `41583837145` **success**（第 2 次尝试），四个 job 全绿：`Generic tests (ubuntu-latest)`、`Generic tests (macos-latest)`、`PostgreSQL migration (PG 17)`、`PostgreSQL migration (PG 18)`；Windows Validation run `41583842112` **success**。两个工作流落在同一 SHA。
+- **缺陷 1（迁移，PG 专属）：** revision `0011_worker_task_assignment_permission` 长 38 字符，超出 `alembic_version.version_num` 的 `varchar(32)`。SQLite 不校验列长，本机全绿；PG 17/18 报 `StringDataRightTruncation`。改为 `0011_worker_task_assignment` 并新增不依赖数据库的长度守卫（见上一节）。
+- **缺陷 2（并发测试前提失效）：** `test_postgres_concurrency.py` 原用两个不同 Worker 抢同一任务来证明行锁串行化。新边界下第二个 Worker 在行锁之前就被 `WORKER_TASK_NOT_ASSIGNED` 拒绝，断言 `len(grants) == 1` 变成 0。改为同一个已指派 Worker 的两个并发领取（不同幂等键），仍验证“恰好一次授予 + 一次 TASK_NOT_READY”、过期后重租 fencing token 递增、重复提交结果幂等。这是语义变更而非放宽：旧场景在新安全模型下已不可能发生。
+- **缺陷 3（WSS 夹具时序）：** 崩溃注入夹具用 `timeout_seconds=5` 做本地 TLS 握手，在共享 runner 上小于“进程启动 + 握手”的实际耗时，macOS / ubuntu 以 `TimeoutError: timed out while waiting for handshake response` 失败，重跑即过。把连接余量提到 30 秒、子进程 join 窗口提到 45 秒、本地 TLS 服务启动窗口提到 30 秒；其余断言仍然有界。
+- **缺陷 4（重启时序，macOS 偶发）：** ACK 丢失用例在重启 Worker 时，Cloud 偶尔已回调 disconnect 但尚未准备好再次服务同一 Worker，重启进程以握手超时退出（约一半概率）。夹具改为最多 3 次有界重启，只有退出码 0 才接受；“副作用只出现一次”“结果事件只有一条”“任务 SUCCEEDED / 租约 COMPLETED”三条断言在每次尝试后照旧校验，未放宽。
+- **审查者独立复跑（Windows 实机）：** `pytest runtimes/python-worker/tests/worker tests/workflow services/cloud-api/tests/workers services/cloud-api/tests/api/test_task_assignment.py services/cloud-api/tests/persistence/test_postgres_migrations.py tests/integration/test_worker_wss_cloud_loop.py tests/integration/test_worker_wss_dispatch_process_crash.py` → **101 passed, 3 skipped**（3 个 skip 均为无 `SHULIU_DATABASE_URL` 的 PG 用例）。全量非 PG 套件（排除 `tools/shuliu-dev-autopilot`）**687 passed, 11 skipped**。Worker 协议契约 **21 passed**。
+- **另一类已知偶发：** `tests/contract/ipc-roundtrip.test.ts` 在 ubuntu runner 上 Electron 进程 `SIGSEGV`（`signal=SIGSEGV`、`status=null`），与断言无关，重跑通过；本轮 `41583837145` 第 1 次尝试即因此失败、第 2 次通过。该问题跨 Task 反复出现，建议单独立项处理（如 runner 侧加 `xvfb`/禁用 sandbox 或拆分该用例），不计入 Task 34 功能缺陷。
+- **结论不变：** 上述四项修复让代码与 CI 成立，但**没有**把 Workflow 组合根或 Worker host 接入默认产品启动路径——`server.main()` 仍不注入可信依赖，仓库仍无生产 Worker 部署配置。Task 34 保持 **IN_PROGRESS / acceptance BLOCKED**，Task 35 未开始。
+
+## 生产组合根与 Worker 服务接入（2026-11-03 14:00，审查者代实现）
+
+上一轮结论第 1、2 条（默认启动不注入可信依赖、无生产 Worker 部署配置）在本轮由审查者直接实现，不是由实现者补测。基线 HEAD `da63012`，代码 SHA `7e7cd74`。
+
+### 实现内容
+
+- **可信身份（`production/identity.py`）：** `EnvironmentIdentityProvider` 从进程环境读取 `SHULIU_ACTOR_ID` / `SHULIU_ORGANIZATION_ID` / `SHULIU_ACTOR_PERMISSIONS` / `SHULIU_CONTEXT_PRIVACY`。四个变量缺任一即 `RUNTIME_IDENTITY_UNAVAILABLE`，**没有** `"local"` 之类的默认主体；权限重复、格式不符为 `RUNTIME_IDENTITY_INVALID`；空权限不等于"全部权限"。`TrustedIdentityResolver` 只在请求 actor 的 subject 与 organization 都等于可信身份时返回 principal，权限恒取自可信身份，请求体无法扩权。
+- **Policy（`production/policy.py`）：** bundle 的未知顶层字段与未知规则字段一律拒绝加载（拼写错误不能变成"看起来已配置"）；`rules` 为空合法，效果是拒绝全部动作。
+- **审批（`production/approvals.py`）：** `ApprovalRepository` 此前只有 Protocol，本轮补 SQLite 实现。`transition` 是按读取状态的 compare-and-set，被拒绝的转换不写审计事件；审计事件与 outbox 在同一事务内落盘，审批状态与待同步事件不会分叉。新增迁移 `0006_approval_requests`，`DATABASE_SCHEMA_VERSION` 由 `1.2.0` 升至 `1.3.0`。
+- **Workflow 目录（`production/catalog.py`）：** 仓库此前没有任何 workflow 定义文件与加载器。`FileWorkflowCatalog` 启动时一次性加载 `*.json`，按 schema 校验，按 `(workflow_id, workflow_version_id)` 精确索引；空目录、任一非法定义、重复版本都使加载失败；未发布的版本不会被替换成别的版本。
+- **工具注册（`production/tools.py`）：** `ToolRegistry` 新增只读 `bindings()`；`compose_tool_registries` 对同名工具报 `TOOL_REGISTRY_CONFLICT` 而不是按顺序覆盖。未部署任何 provider 时注册表为空，任何工具调用都被拒绝。
+- **组合根（`production/composition.py`）：** 顺序为身份 → 审批窗口 → Policy → Workflow 目录，任一步失败即不装配并返回具体错误码。`attach_workflow_runtime` 复用已迁移的数据库，不重复 bootstrap。
+- **启动路径（`ipc/server.py`）：** `main()` 在 bootstrap 后调用 `_attach_production_workflow`；缺依赖时 Sidecar 照常启动，`health.components.workflow` 返回 `not_configured` 加具体 `error_code`，不打开 permissive 通路也不让应用起不来。`RuntimeBootstrapResult` 新增 `workflow_unavailable_code` 字段承载该原因。
+- **Worker 服务（`worker/service.py`）：** 端点、版本、能力、工具权限全部来自环境；WSS 端点省略时按 Cloud 固定路由 `/v1/workers/ws` 推导，`http://` / `ws://` 一律拒绝。首次用一次性 token 注册，之后走设备密钥挑战应答续期；落盘的 `worker-registration.json` 只含 `worker_id` 与 `device_key_ref`，会话凭据不写盘。`WorkerIdentityResolver` 拒绝带 `permissions` 等额外字段的 actor，权限由 `SHULIU_WORKER_TOOL_PERMISSIONS` 提供，默认空。入口为 `python -m shuliu_runtime.worker.service`（该包 `package = false`，无 console script）。
+- **跨端同步：** `supervisor.ts` 的 `SIDECAR_ENV_KEYS` 白名单补齐 6 个新变量，否则 Desktop 启动 Sidecar 时会被过滤掉；`test_installer_smoke.ps1` 的 `database_schema` 断言由 `1.2.0` 改为 `1.3.0`。
+
+### 边界声明
+
+`EnvironmentIdentityProvider` 是**候选实现**，不是已确认的安全事实。ADR-018 把"具体身份 Provider"列为上线前配置项，本轮没有改写该结论；抽象接口保持不变，未来可替换为 OIDC 或 Cloud 下发令牌。Sidecar 与 Worker 都尚未部署任何真实 Tool provider（Browser / Computer / MCP 需各自任务接入），因此"组合根可用"不等于"生产能力就绪"。
+
+### 验证
+
+- **本机（Windows 实机）：** Worker 全量 `645 passed, 19 skipped`（新增 `tests/production` 89 项）；Desktop `113 passed`；Desktop typecheck 通过；`git diff --check` 退出码 0。
+- **端到端（不依赖 CI）：** `test_a_started_workflow_executes_its_tool_through_the_real_broker` 用真实 SQLite repository、真实 ToolBroker、真实身份与 Policy 启动 `foundation.noop`，断言 `status=SUCCEEDED` 且 `organization_id` 来自可信身份；`test_a_policy_without_a_matching_rule_denies_the_tool` 断言无匹配规则时同一工作流不成功。
+- **CI（SHA `7e7cd74`）：** Generic CI run `41586651534` **success**（`Generic tests (ubuntu-latest)`、`Generic tests (macos-latest)`、`PostgreSQL migration (PG 17)`、`PostgreSQL migration (PG 18)` 四 job 全绿）；Windows Validation run `41586664556` **success**（含安装包 smoke，`database_schema=1.3.0` 在真实安装版上通过）。
+- **触发方式：** `codex/*` 分支的 push 不匹配 workflow 的 `branches: [main, "feat/**"]`，且 draft PR 未自动触发，两个 run 由 `workflow_dispatch` 在 `7e7cd74` 上手动触发。
+
+### 本轮 CI 暴露的既有偶发（非本轮代码缺陷）
+
+- **ubuntu `ipc-roundtrip.test.ts` SIGSEGV：** 第 1 次失败、重跑通过，与上一轮 `41583837145` 的表现一致，仍建议单独立项。
+- **macOS 本地 WSS 握手超时：** 第 1 次 `test_real_wss_cloud_commit_then_lost_ack_...` 在**首次**连接即超时（非重启竞态）；第 2 次换成 `test_real_wss_worker_process_crash_after_dispatch_fences_replay` 的重启段超时；第 3 次全绿。同一 SHA、同一代码三种结果，确认是 macOS runner 上本地 TLS/WSS 握手不稳，不是产品分支逻辑错误。macOS 侧目前只有 `lost_ack` 用例带"等待 disconnect + 3 次有界重启"，`fences_replay` 只有单次重启，建议后续统一。
+
+### Task 34 状态
+
+默认启动路径与 Worker 服务入口已接入，两项代码阻塞关闭。**Task 34 仍不能标记完成**：真实 Tool provider 未部署、生产身份 Provider 未定、Worker 进程守护与部署编排不在本仓库，验收需在真实 Cloud + 真实工具环境下重新执行。Task 35 未开始。

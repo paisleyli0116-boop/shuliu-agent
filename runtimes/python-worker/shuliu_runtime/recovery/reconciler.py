@@ -118,7 +118,11 @@ class RecoveryCoordinator:
             )
 
         try:
-            reconciliation = self._external_state.inspect(run_id, action)
+            trusted_action = dict(action)
+            # Organization scope comes from the validated persisted checkpoint,
+            # never from a Tool-supplied pending-action field.
+            trusted_action["organization_id"] = checkpoint.organization_id
+            reconciliation = self._external_state.inspect(run_id, trusted_action)
         except Exception:
             return self._finish(
                 checkpoint, RecoveryStatus.WAIT, "EXTERNAL_STATE_UNAVAILABLE"
