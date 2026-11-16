@@ -10,6 +10,7 @@ import yaml
 from shuliu_runtime.skills.lifecycle import SkillInstaller, SkillLifecycleError
 from shuliu_runtime.skills.registry import SkillRegistry
 from shuliu_runtime.skills.signature import PackageVerifier, checksum_files
+from tests.fakes.fake_security_scan import FakeSkillScanner
 
 
 class FakeSignatureVerifier:
@@ -71,6 +72,7 @@ def _build_installer(tmp_path: Path, approver=None):
         contract_test=lambda manifest: True,
         permission_approver=approver,
         usage=NoActiveRuns(),
+        scanner=FakeSkillScanner(),
     )
     return installer, registry
 

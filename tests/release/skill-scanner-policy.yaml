@@ -1,0 +1,48 @@
+# Skill security scanner policy — Task 35 (skill_security_scan gate)
+#
+# This file records the reviewed scanner engine choice and the evidence the
+# release gate requires.  The shared release gate manifest is assembled by
+# Task 27; wiring this gate into that manifest is deferred and tracked there.
+#
+# Review scope per Implementation Plan Task 35: maintenance status, security
+# advisories, license, offline capability, cross-platform support and the
+# rules update mechanism.
+
+skill_security_scan:
+  required: true
+  fail_closed_on:
+    - scanner_timeout
+    - scanner_unavailable
+    - unknown_verdict
+    - checksum_mismatch
+    - missing_evidence
+    - fake_engine
+  approved_engines:
+    - engine: clamav
+      license: GPL-2.0-or-later
+      invocation: external-process   # no source/binary linkage; engine license does not attach to this code base
+      engine_version_reviewed: "1.5.4"
+      review:
+        maintainer: Cisco Talos
+        release_channel: https://github.com/Cisco-Talos/clamav/releases
+        reviewed_release: clamav-1.5.4
+        ruleset_source: database.clamav.net via freshclam (daily.cvd / main.cvd / bytecode.cvd)
+        ruleset_reviewed: daily-28173
+        offline_capable: true          # signature databases are local files after freshclam
+        platforms: [windows, linux, macos]
+        maintenance_status: active     # 1.5.4 released within the last month at review time
+        security_advisories: https://www.clamav.net/announcements
+        reviewed_at: "2026-11-05"
+        reviewer: Skill Security Owner (Task 35)
+  required_evidence:
+    - package_digest          # sha256 over the checksum-verified package bytes
+    - engine
+    - engine_version
+    - ruleset_version
+    - scanned_at              # timezone-aware timestamp
+    - verdict                 # CLEAN | DETECTED | ERROR
+  gate_rules:
+    - "Only verdict CLEAN allows staging and activation."
+    - "Evidence engine must be in approved_engines; 'fake' engines are never accepted."
+    - "Evidence package_digest must equal the digest of the verified package."
+    - "All required_evidence fields must be present; missing or not-run is BLOCKED."

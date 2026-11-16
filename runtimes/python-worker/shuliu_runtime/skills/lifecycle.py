@@ -7,6 +7,7 @@ from typing import Protocol
 
 from shuliu_runtime.skills.manifest import ManifestError, SkillManifest, load_manifest
 from shuliu_runtime.skills.registry import SkillRegistry, SkillRegistryError, SkillState
+from shuliu_runtime.skills.security_scan import ScanEvidence, ScanStatus, SkillSecurityScanner
 from shuliu_runtime.skills.signature import PackageVerificationError, PackageVerifier
 
 
@@ -40,6 +41,7 @@ class SkillInstallResult:
     version: str
     state: SkillState
     active_version: str
+    scan_evidence: ScanEvidence | None = None
 
 
 class SkillInstaller:
@@ -52,17 +54,25 @@ class SkillInstaller:
         verifier: PackageVerifier,
         contract_test: Callable[[SkillManifest], bool],
         usage: SkillUsage,
+        scanner: SkillSecurityScanner,
         permission_approver: PermissionChangeApproval | None = None,
+        scan_timeout: float = 300.0,
     ) -> None:
         if not callable(contract_test):
             raise TypeError("Skill contract test callback is required")
         if not callable(getattr(usage, "is_in_use", None)):
             raise TypeError("Skill usage port is required")
+        if not callable(getattr(scanner, "scan", None)):
+            raise TypeError("A real Skill security scanner is required; installation fails closed without one")
+        if not isinstance(scan_timeout, (int, float)) or isinstance(scan_timeout, bool) or scan_timeout <= 0:
+            raise TypeError("Scan timeout must be a positive number")
         self.registry = registry
         self.verifier = verifier
         self.contract_test = contract_test
         self.usage = usage
+        self.scanner = scanner
         self.permission_approver = permission_approver
+        self.scan_timeout = float(scan_timeout)
 
     def install(self, package: str | Path) -> SkillInstallResult:
         package_path = Path(package)
@@ -87,12 +97,14 @@ class SkillInstaller:
                         "SKILL_VERSION_CONFLICT",
                         "Installed Skill version has different content or metadata",
                     )
+                evidence = self._require_scan(package_path, verified)
                 self.registry.activate(manifest.skill_id, manifest.version)
                 return SkillInstallResult(
                     manifest.skill_id,
                     manifest.version,
                     SkillState.ENABLED,
                     manifest.version,
+                    evidence,
                 )
         except PackageVerificationError as error:
             raise SkillLifecycleError(error.code, str(error)) from error
@@ -114,6 +126,7 @@ class SkillInstaller:
             )
             self._require_permission_approval(verified)
 
+            evidence = self._require_scan(package_path, verified)
             stage_path = self.registry.stage(package_path, verified)
             # Re-verify the copied bytes to close a source mutation window during staging.
             staged_manifest = self.verifier.verify(
@@ -150,6 +163,7 @@ class SkillInstaller:
                 manifest.version,
                 SkillState.ENABLED,
                 manifest.version,
+                evidence,
             )
         except PackageVerificationError as error:
             raise SkillLifecycleError(error.code, str(error)) from error
@@ -199,6 +213,41 @@ class SkillInstaller:
             self.registry.remove(skill_id, version)
         except SkillRegistryError as error:
             raise SkillLifecycleError(error.code, str(error)) from error
+
+    def _require_scan(self, package_path: Path, verified: SkillManifest) -> ScanEvidence:
+        """Scan the verified package bytes; only a fully identified CLEAN verdict passes."""
+        try:
+            evidence = self.scanner.scan(
+                package_path,
+                expected_checksum=verified.checksum,
+                timeout=self.scan_timeout,
+            )
+        except ValueError as error:
+            raise SkillLifecycleError(
+                "SKILL_SCAN_EVIDENCE_INVALID",
+                "Skill security scanner produced incomplete evidence",
+            ) from error
+        except Exception as error:
+            raise SkillLifecycleError(
+                "SKILL_SCAN_FAILED",
+                "Skill security scanner failed before producing a verdict",
+            ) from error
+        if evidence.status is ScanStatus.DETECTED:
+            raise SkillLifecycleError(
+                "SKILL_SCAN_DETECTED",
+                "The Skill package content was rejected by the security scanner",
+            )
+        if evidence.status is not ScanStatus.CLEAN:
+            raise SkillLifecycleError(
+                "SKILL_SCAN_FAILED",
+                "Skill security scanning did not produce a clean verdict",
+            )
+        if evidence.package_digest != verified.checksum:
+            raise SkillLifecycleError(
+                "SKILL_SCAN_DIGEST_MISMATCH",
+                "Scan verdict does not cover the verified package digest",
+            )
+        return evidence
 
     def _require_permission_approval(self, manifest: SkillManifest) -> None:
         active = self.registry.active_version(manifest.skill_id)
