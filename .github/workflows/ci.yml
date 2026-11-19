@@ -35,16 +35,10 @@ jobs:
       - name: Configure the Chromium SUID sandbox helper (Linux Electron tests)
         if: runner.os == 'Linux'
         run: |
-          # Under xvfb Electron reaches Chromium sandbox init, which aborts
-          # with "SUID sandbox helper binary ... not configured correctly"
-          # unless chrome-sandbox is root-owned and setuid. Configure it
-          # correctly instead of disabling the sandbox.
-          for helper in node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox; do
-            if [ -f "$helper" ]; then
-              sudo chown root:root "$helper"
-              sudo chmod 4755 "$helper"
-            fi
-          done
+          DIST_DIR="$(node -p "require('path').dirname(require.resolve('electron', { paths: [process.cwd() + '/apps/desktop'] })) + '/dist'")"
+          sudo chown root:root "$DIST_DIR/chrome-sandbox"
+          sudo chmod 4755 "$DIST_DIR/chrome-sandbox"
+          ls -l "$DIST_DIR/chrome-sandbox"
       - name: Run Cloud API identity unit tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/identity -q
       - name: Run Cloud API route and authorization tests
@@ -77,14 +71,15 @@ jobs:
             # Under xvfb Electron reaches Chromium sandbox init, which aborts
             # with "SUID sandbox helper binary ... not configured correctly"
             # unless chrome-sandbox is root-owned and setuid. Configure it
-            # correctly instead of disabling the sandbox.
-            for helper in node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox; do
-              if [ -f "$helper" ]; then
-                sudo chown root:root "$helper"
-                sudo chmod 4755 "$helper"
-                ls -l "$helper"
-              fi
-            done
+            # correctly instead of disabling the sandbox. Resolve the dist
+            # through electron itself because the pnpm virtual-store layout
+            # can differ from the glob.
+            DIST_DIR="$(node -p "require('path').dirname(require.resolve('electron', { paths: [process.cwd() + '/apps/desktop'] })) + '/dist'")"
+            echo "electron dist: $DIST_DIR"
+            ls -la "$DIST_DIR" | head -6
+            sudo chown root:root "$DIST_DIR/chrome-sandbox"
+            sudo chmod 4755 "$DIST_DIR/chrome-sandbox"
+            ls -l "$DIST_DIR/chrome-sandbox"
             xvfb-run -a pnpm test:ipc
           else
             pnpm test:ipc
@@ -99,13 +94,10 @@ jobs:
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
       - run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
-            for helper in node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox; do
-              if [ -f "$helper" ]; then
-                sudo chown root:root "$helper"
-                sudo chmod 4755 "$helper"
-                ls -l "$helper"
-              fi
-            done
+            DIST_DIR="$(node -p "require('path').dirname(require.resolve('electron', { paths: [process.cwd() + '/apps/desktop'] })) + '/dist'")"
+            sudo chown root:root "$DIST_DIR/chrome-sandbox"
+            sudo chmod 4755 "$DIST_DIR/chrome-sandbox"
+            ls -l "$DIST_DIR/chrome-sandbox"
             xvfb-run -a pnpm test:contract
           else
             pnpm test:contract
