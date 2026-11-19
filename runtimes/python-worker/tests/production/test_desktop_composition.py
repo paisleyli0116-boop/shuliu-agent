@@ -210,6 +210,7 @@ def test_a_complete_configuration_wires_both_desktop_runtimes(database, tmp_path
         "browser.close",
         "computer.capability",
         "computer.observe",
+        "computer.observe_foreground",
         "computer.act",
     }
 

@@ -9,6 +9,9 @@ export const DESKTOP_IPC_CHANNELS = Object.freeze({
   providersTestConnection: "shuliu:providers:test-connection",
   providersSaveProfile: "shuliu:providers:save-profile",
   providersReplaceCredential: "shuliu:providers:replace-credential",
+  chatComplete: "shuliu:chat:complete",
+  computerCapabilityGet: "shuliu:computer:capability:get",
+  computerObserveForeground: "shuliu:computer:observe-foreground",
 });
 
 export type RuntimeHealth = {
@@ -37,6 +40,7 @@ export type ProviderOption = {
   name: string;
   models: ProviderModel[];
   configured?: boolean;
+  enabled?: boolean;
   selected_model_id?: string;
 };
 export type ProviderCatalog = { providers: ProviderOption[] };
@@ -61,6 +65,41 @@ export type ProviderCredentialResult = {
   configured: true;
   storage: "OS_SECURE_STORAGE" | "CLOUD_SECRET_MANAGER";
 };
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+export type ChatCompletionInput = {
+  providerId: string;
+  modelId: string;
+  messages: ChatMessage[];
+  requestId: string;
+  traceId: string;
+  externalProcessingConfirmed: true;
+};
+export type ChatCompletionResult = {
+  status: "succeeded" | "blocked" | "failed";
+  provider_id: string;
+  model: string;
+  trace_id: string;
+  safe_error_code: string | null;
+  request_status: ProviderRequestStatus;
+  failure_stage: ProviderFailureStage;
+  http_status: number | null;
+  response: string | null;
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  cost: number | null;
+  latency_ms: number;
+};
+export type ComputerCapability = {
+  status: "available" | "unavailable" | "unknown";
+  safe_error_code: string | null;
+  trace_id: string;
+};
+export type ComputerObservation = {
+  status: "observed" | "blocked";
+  title: string | null;
+  elements: Array<{ role: string; name: string; sensitive: boolean; enabled: boolean }>;
+  safe_error_code: string | null;
+  trace_id: string;
+};
 
 export type RendererApi = {
   runtime: { health: { get(): Promise<RuntimeHealth> } };
@@ -78,6 +117,11 @@ export type RendererApi = {
     testConnection(input: { providerId: string; capability: string; traceId: string }): Promise<ProviderTestResult>;
     saveProfile(input: { providerId: string; modelId: string; apiKey: string }): Promise<ProviderCredentialResult>;
     replaceCredential(input: { profileId: string; apiKey: string }): Promise<ProviderCredentialResult>;
+  };
+  chat: { complete(input: ChatCompletionInput): Promise<ChatCompletionResult> };
+  computer: {
+    capability(): Promise<ComputerCapability>;
+    observeForeground(): Promise<ComputerObservation>;
   };
 };
 
@@ -112,6 +156,14 @@ export function createRendererApi(invoke: IpcRendererPort["invoke"]): RendererAp
         call<ProviderCredentialResult>(DESKTOP_IPC_CHANNELS.providersSaveProfile, input),
       replaceCredential: (input: { profileId: string; apiKey: string }) =>
         call<ProviderCredentialResult>(DESKTOP_IPC_CHANNELS.providersReplaceCredential, input),
+    }),
+    chat: Object.freeze({
+      complete: (input: ChatCompletionInput) =>
+        call<ChatCompletionResult>(DESKTOP_IPC_CHANNELS.chatComplete, input),
+    }),
+    computer: Object.freeze({
+      capability: () => call<ComputerCapability>(DESKTOP_IPC_CHANNELS.computerCapabilityGet),
+      observeForeground: () => call<ComputerObservation>(DESKTOP_IPC_CHANNELS.computerObserveForeground),
     }),
   });
 }

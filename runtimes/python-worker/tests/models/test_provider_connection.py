@@ -293,6 +293,7 @@ def test_provider_runtime_writes_credentials_only_through_secret_resolver_and_li
             }],
             "selected_model_id": "openai/gpt-4.1-mini",
             "configured": False,
+            "enabled": True,
         }]
     }
     reloaded_runtime = runtime_type((profile,), resolver, service)

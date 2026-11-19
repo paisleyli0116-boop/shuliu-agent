@@ -82,6 +82,9 @@ class _WindowsBackend:
         info = self._win32.inspect_window(window_ref)
         return self._uia.observe(window_ref, info)
 
+    def foreground_window_ref(self) -> str:
+        return self._win32.foreground_window_ref()
+
     def perform(self, window_ref: str, action: Mapping[str, object], element_id: str) -> None:
         self._uia.perform(window_ref, action, element_id)
 
@@ -121,6 +124,11 @@ class ComputerRuntime:
                 _OBJECT_SCHEMA, ("computer.read",), RiskLevel.LOW, False,
             ),
             ToolDefinition(
+                "computer.observe_foreground", "1.0.0",
+                {"type": "object", "properties": {}, "additionalProperties": False},
+                _OBJECT_SCHEMA, ("computer.read",), RiskLevel.LOW, False,
+            ),
+            ToolDefinition(
                 "computer.act", "1.0.0", _ACT_SCHEMA,
                 _OBJECT_SCHEMA, ("computer.act",), RiskLevel.CRITICAL, True,
             ),
@@ -149,6 +157,26 @@ class ComputerRuntime:
             actor,
             safe_context,
             idempotency_key=None,
+        )
+
+    def observe_foreground(self, *, actor, context):
+        # Bind the resource class before Policy runs so a computer_window DENY
+        # applies to foreground reads too. The executor resolves the actual
+        # HWND only after this authorization has passed.
+        if not isinstance(context, Mapping):
+            raise ToolExecutionError("TOOL_CONTEXT_INVALID", "Computer context is invalid")
+        safe_context = dict(context)
+        raw_resource = safe_context.get("resource")
+        if raw_resource is not None and not isinstance(raw_resource, Mapping):
+            raise ToolExecutionError("TOOL_CONTEXT_INVALID", "Computer resource is invalid")
+        resource = dict(raw_resource) if isinstance(raw_resource, Mapping) else {}
+        if resource.get("resource_type") not in (None, "computer_window"):
+            raise ToolExecutionError("TOOL_CONTEXT_INVALID", "Computer resource is invalid")
+        resource.setdefault("organization_id", safe_context.get("organization_id"))
+        resource["resource_type"] = "computer_window"
+        safe_context["resource"] = resource
+        return self.broker.execute(
+            "computer.observe_foreground", {}, actor, safe_context, idempotency_key=None
         )
 
     def prepare_approval_context(
@@ -242,7 +270,8 @@ class _ComputerExecutor:
 
     def execute(self, tool_name, args, context, idempotency_key):
         with self._lock:
-            operation = tool_name.removeprefix("computer.")
+            requested_operation = tool_name.removeprefix("computer.")
+            operation = requested_operation
             if operation == "capability":
                 capability = self._capability()
                 output = dict(capability)
@@ -256,9 +285,36 @@ class _ComputerExecutor:
                 code = _safe_error_code(capability.get("reason_code"), "COMPUTER_SESSION_UNAVAILABLE")
                 output = self._result("UNAVAILABLE", context, args, error_code=code)
                 output["evidence_ref"] = self._evidence(
-                    context, operation, "RESULT", status="UNAVAILABLE", error_code=code
+                    context, requested_operation, "RESULT", status="UNAVAILABLE", error_code=code
                 )
                 return output
+
+            if operation == "observe_foreground":
+                resolver = getattr(self.backend, "foreground_window_ref", None)
+                try:
+                    if not callable(resolver):
+                        raise ComputerError("COMPUTER_WINDOW_UNAVAILABLE")
+                    window_ref = resolver()
+                    if not isinstance(window_ref, str) or re.fullmatch(
+                        r"(?:0[xX][0-9a-fA-F]{1,16}|[1-9][0-9]{0,19})", window_ref
+                    ) is None:
+                        raise ComputerError("COMPUTER_WINDOW_REF_INVALID")
+                except ComputerError as error:
+                    output = self._result("FAILED", context, args, error_code=error.code)
+                    output["evidence_ref"] = self._evidence(
+                        context, requested_operation, "RESULT", status="FAILED", error_code=error.code
+                    )
+                    return output
+                except Exception:
+                    code = "COMPUTER_WINDOW_UNAVAILABLE"
+                    output = self._result("FAILED", context, args, error_code=code)
+                    output["evidence_ref"] = self._evidence(
+                        context, requested_operation, "RESULT", status="FAILED", error_code=code
+                    )
+                    return output
+                args = {"window_ref": window_ref}
+                context = _target_context(context, window_ref)
+                operation = "observe"
 
             window_ref = str(args["window_ref"])
             if operation == "observe":
@@ -267,7 +323,7 @@ class _ComputerExecutor:
                 except ComputerError as error:
                     output = self._result("FAILED", context, args, error_code=error.code)
                     output["evidence_ref"] = self._evidence(
-                        context, operation, "RESULT", status="FAILED", error_code=error.code
+                        context, requested_operation, "RESULT", status="FAILED", error_code=error.code
                     )
                     return output
                 observation, element_refs = self._public_observation(snapshot)
@@ -278,7 +334,7 @@ class _ComputerExecutor:
                 }
                 evidence_ref = self._evidence(
                     context,
-                    "observe",
+                    requested_operation,
                     "RESULT",
                     status="OBSERVED",
                     observation=_evidence_observation(observation),
@@ -292,7 +348,7 @@ class _ComputerExecutor:
         operation = tool_name.removeprefix("computer.")
         if operation == "capability":
             return output.get("status") in ("AVAILABLE", "UNAVAILABLE")
-        if operation == "observe":
+        if operation in ("observe", "observe_foreground"):
             return output.get("status") in ("OBSERVED", "UNAVAILABLE", "FAILED")
         return output.get("status") == "VERIFIED" and output.get("retryable") is False
 

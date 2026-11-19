@@ -108,6 +108,7 @@ function normalizeCatalog(value: unknown): ProviderCatalog {
       name: item.name,
       models,
       ...(typeof item.configured === "boolean" ? { configured: item.configured } : {}),
+      ...(typeof item.enabled === "boolean" ? { enabled: item.enabled } : {}),
       ...(selectedModelId ? { selected_model_id: selectedModelId } : {}),
     };
   });

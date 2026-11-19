@@ -58,6 +58,36 @@ export function createFakeApi(overrides: Partial<RendererApi> = {}): RendererApi
       saveProfile: vi.fn().mockResolvedValue({ profile_id: "openai-compatible", configured: true, storage: "OS_SECURE_STORAGE" }),
       replaceCredential: vi.fn().mockResolvedValue({ profile_id: "openai-compatible", configured: true, storage: "OS_SECURE_STORAGE" }),
     },
+    chat: {
+      complete: vi.fn().mockResolvedValue({
+        status: "blocked",
+        provider_id: "openai-compatible",
+        model: "fast-chat-demo",
+        trace_id: "11111111-2222-4333-8444-555555555555",
+        safe_error_code: "MODEL_PROVIDER_NOT_CONFIGURED",
+        request_status: "not_sent",
+        failure_stage: "provider_profile",
+        http_status: null,
+        response: null,
+        usage: {},
+        cost: null,
+        latency_ms: 0,
+      }),
+    },
+    computer: {
+      capability: vi.fn().mockResolvedValue({
+        status: "unknown",
+        safe_error_code: "COMPUTER_RUNTIME_UNAVAILABLE",
+        trace_id: "11111111-2222-4333-8444-555555555555",
+      }),
+      observeForeground: vi.fn().mockResolvedValue({
+        status: "blocked",
+        title: null,
+        elements: [],
+        safe_error_code: "COMPUTER_RUNTIME_UNAVAILABLE",
+        trace_id: "11111111-2222-4333-8444-555555555555",
+      }),
+    },
   } as unknown as RendererApi;
 
   for (const key of Object.keys(overrides) as Array<keyof RendererApi>) {

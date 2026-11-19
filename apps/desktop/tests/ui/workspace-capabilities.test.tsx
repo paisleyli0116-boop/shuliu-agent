@@ -22,13 +22,15 @@ describe("Foundation workspace capability boundaries", () => {
       "审批与运行记录",
       "系统设置",
     ]) {
-      expect(screen.getByRole("button", { name: item })).toBeTruthy();
+      const navigationButton = screen.getByRole("button", { name: item });
+      expect(navigationButton).toBeTruthy();
+      expect(navigationButton.getAttribute("title")).toBe(item);
     }
 
     await user.click(screen.getByRole("button", { name: "AI 对话" }));
     expect((await screen.findAllByRole("heading", { name: "AI 对话" })).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Preload 目前只暴露 Provider 连接 canary/)).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "发送消息" })).toHaveProperty("disabled", true);
+    expect(await screen.findByText("没有可用的对话模型")).toBeTruthy();
     expect(screen.queryByText(/示例对话|模拟回复/)).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "岗位 Agent" }));
@@ -91,3 +93,24 @@ describe("Foundation workspace capability boundaries", () => {
     expect(api.approvals.decide).not.toHaveBeenCalled();
   });
 });
+
+  it("opens an optional page details panel with only the active page and live runtime status", async () => {
+    const user = userEvent.setup();
+    render(<App api={createFakeApi()} />);
+
+    const toggle = screen.getByRole("button", { name: "显示页面详情" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("complementary", { name: "页面详情" })).toBeNull();
+
+    await user.click(toggle);
+
+    const panel = screen.getByRole("complementary", { name: "页面详情" });
+    expect(panel.textContent).toContain("当前页面");
+    expect(panel.textContent).toContain("工作台");
+    expect(panel.textContent).toContain("Sidecar 运行正常");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    await user.click(screen.getByRole("button", { name: "关闭页面详情" }));
+    expect(screen.queryByRole("complementary", { name: "页面详情" })).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });

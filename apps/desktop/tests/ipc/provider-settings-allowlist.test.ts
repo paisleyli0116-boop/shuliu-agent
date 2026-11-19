@@ -12,7 +12,7 @@ describe("desktop IPC allowlist", () => {
 
     await api.providers.saveProfile({ providerId: "openai-compatible", modelId: "fast-chat-demo", apiKey: "key-value" });
 
-    expect(Object.keys(api).sort()).toEqual(["approvals", "providers", "runtime", "tasks"]);
+    expect(Object.keys(api).sort()).toEqual(["approvals", "chat", "computer", "providers", "runtime", "tasks"]);
     expect("execute" in api).toBe(false);
     expect("shell" in api).toBe(false);
     expect(calls).toEqual([[
@@ -37,12 +37,14 @@ describe("desktop IPC allowlist", () => {
         saveProfile: putCredential,
         replaceCredential: vi.fn(),
       },
+      chat: { complete: vi.fn() },
     };
     const unregister = registerDesktopIpc(ipcMain, services, (event) => event === "trusted");
 
     expect([...handlers.keys()].sort()).toEqual([
       "shuliu:approvals:decide",
       "shuliu:approvals:list",
+      "shuliu:chat:complete",
       "shuliu:providers:list",
       "shuliu:providers:replace-credential",
       "shuliu:providers:save-profile",
@@ -83,6 +85,7 @@ it("accepts a capability-scoped provider canary request", async () => {
     tasks: { list: vi.fn(), get: vi.fn(), create: vi.fn() },
     approvals: { list: vi.fn(), decide: vi.fn() },
     providers,
+    chat: { complete: vi.fn() },
   };
   registerDesktopIpc(
     { handle: vi.fn((channel, listener) => handlers.set(channel, listener)) },

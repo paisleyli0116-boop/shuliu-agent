@@ -2,6 +2,8 @@ const path = require("node:path");
 const { app, BrowserWindow, ipcMain } = require("electron");
 const { SidecarSupervisor } = require("../../../.ipc-test-build/main/runtime/supervisor.js");
 const { registerRuntimeIpc } = require("../../../.ipc-test-build/main/runtime/ipc.js");
+const { registerDesktopIpc } = require("../../../.ipc-test-build/main/ipc/desktop-ipc.js");
+const { RuntimeChatService } = require("../../../.ipc-test-build/main/ipc/chat.js");
 
 const python = process.env.SHULIU_TEST_PYTHON_EXECUTABLE;
 const sidecar = process.env.SHULIU_TEST_SIDECAR;
@@ -71,10 +73,17 @@ app.whenReady().then(async () => {
         nodeIntegration: false,
       },
     });
-    registerRuntimeIpc(ipcMain, supervisor, (event) => {
+    const isTrustedSender = (event) => {
       const candidate = event;
       return candidate?.sender === window.webContents && typeof candidate?.senderFrame?.url === "string" && candidate.senderFrame.url.startsWith("file:");
-    });
+    };
+    registerRuntimeIpc(ipcMain, supervisor, isTrustedSender);
+    registerDesktopIpc(ipcMain, {
+      tasks: { list: async () => [], get: async () => null, create: async () => null },
+      approvals: { list: async () => [], decide: async () => null },
+      providers: { list: async () => ({ providers: [] }), testConnection: async () => null, saveProfile: async () => null, replaceCredential: async () => null },
+      chat: new RuntimeChatService((method, params, options) => supervisor.request(method, params, options)),
+    }, isTrustedSender);
     await window.loadFile(path.join(__dirname, "index.html"));
     const renderer = await window.webContents.executeJavaScript(`(async () => {
       const health = await window.shuliu.runtime.health.get();
@@ -84,6 +93,15 @@ app.whenReady().then(async () => {
         arbitraryRequest: typeof window.shuliu.runtime.request === "function" || typeof window.shuliu.runtime.exec === "function"
       };
     })()`);
+    stage = "fake-provider-chat-roundtrip";
+    const chat = await window.webContents.executeJavaScript(`window.shuliu.chat.complete({
+      providerId: "fixture",
+      modelId: "fixture/chat",
+      messages: [{ role: "user", content: "fixture prompt" }],
+      requestId: "11111111-2222-4333-8444-555555555555",
+      traceId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      externalProcessingConfirmed: true,
+    })`);
 
     stage = "safe-mode-after-repeated-crashes";
     const repeatedCrashCode = await captureCode(() => supervisor.request("test.crash", {}));
@@ -100,6 +118,7 @@ app.whenReady().then(async () => {
     const protocolMismatchCode = await captureCode(() => incompatible.start());
     const report = {
       health,
+      chat,
       concurrent: concurrent.map((item) => item.value),
       sidecarSecretVariablePresent: environment.sensitive_variable_present,
       sidecarUtf8: environment.stdin_encoding === "utf-8" && environment.stdout_encoding === "utf-8",

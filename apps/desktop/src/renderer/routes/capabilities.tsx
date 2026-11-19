@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { ProviderCatalog, ProviderOption, RendererApi } from "../../preload/api";
-import { Card, DataNotice, EmptyState, SelectField, StatusIndicator } from "../components/design-system";
+import type { RendererApi } from "../../preload/api";
+import { Button, Card, DataNotice, EmptyState, StatusIndicator } from "../components/design-system";
+import { ChatRoute } from "./chat";
 
 export type CapabilityPage = "chat" | "agents" | "tasks" | "workflows" | "knowledge" | "tools" | "runs";
 
@@ -54,28 +55,16 @@ const capabilities: Record<CapabilityPage, {
   },
 };
 
-export function CapabilityRoute({ page, api }: { page: CapabilityPage; api: RendererApi }) {
+export function CapabilityRoute({ page, api, runtimeReady = false, onOpenModels }: {
+  page: CapabilityPage;
+  api: RendererApi;
+  runtimeReady?: boolean;
+  onOpenModels?: () => void;
+}) {
+  if (page === "chat") {
+    return <ChatRoute api={api} runtimeReady={runtimeReady} onOpenModels={onOpenModels} />;
+  }
   const capability = capabilities[page];
-  const [catalog, setCatalog] = useState<ProviderCatalog | null>(null);
-  const [catalogFailed, setCatalogFailed] = useState(false);
-
-  useEffect(() => {
-    if (page !== "chat") return;
-    let active = true;
-    void api.providers.list().then((value) => {
-      if (active) setCatalog(value);
-    }).catch(() => {
-      if (active) setCatalogFailed(true);
-    });
-    return () => { active = false; };
-  }, [api, page]);
-
-  const configuredModels = catalog?.providers.flatMap((provider: ProviderOption) =>
-    provider.models.map((model) => ({
-      value: `${provider.id}:${model.id}`,
-      label: `${provider.name} · ${model.name}${provider.configured ? " · 凭据已配置" : " · 未配置凭据"}`,
-    })),
-  ) ?? [];
 
   return (
     <div className="page-stack">
@@ -85,29 +74,6 @@ export function CapabilityRoute({ page, api }: { page: CapabilityPage; api: Rend
           <StatusIndicator tone="warning" label="尚未接入" />
         </div>
         <DataNotice tone="warning" title="当前限制">{capability.reason}</DataNotice>
-        {page === "chat" && (
-          <div className="chat-unavailable-preview">
-            <div className="chat-unavailable-preview__toolbar">
-              <SelectField
-                label="会话模型"
-                aria-label="发送消息的模型"
-                disabled
-                value=""
-                hint="当前只读取实际 Sidecar Profile；由于对话发送接口未提供，模型不能切换并执行。"
-              >
-                <option value="">{catalogFailed ? "模型目录读取失败" : catalog ? (configuredModels.length ? "请选择已加载模型" : "没有已加载模型") : "正在读取运行时模型…"}</option>
-                {configuredModels.map((model) => <option key={model.value} value={model.value}>{model.label}</option>)}
-              </SelectField>
-            </div>
-            {catalogFailed ? <div className="inline-error" role="alert">无法读取 Python Runtime 的模型目录；请到“模型与连接”检查 Runtime。</div> : null}
-            <EmptyState title="尚无会话" description="真实会话存储和消息执行接口尚未开放；此处不会显示模拟对话。" icon="✦" />
-            <label className="field chat-composer">
-              <span>消息内容</span>
-              <textarea aria-label="发送消息" disabled rows={3} placeholder="等待会话服务接口接入后开放" />
-              <small>发送、停止、Markdown 消息和 Tool / Approval 状态尚未接入。</small>
-            </label>
-          </div>
-        )}
         {page === "agents" && (
           <EmptyState
             title="没有已接入的 Agent 目录"
@@ -117,6 +83,10 @@ export function CapabilityRoute({ page, api }: { page: CapabilityPage; api: Rend
         )}
       </Card>
 
+      {page === "tools" && (
+        <ComputerRuntimeStatus api={api} runtimeReady={runtimeReady} />
+      )}
+
       <Card className="contract-card">
         <span className="eyebrow">REQUIRED DESKTOP CONTRACT</span>
         <h3>开放前需要的真实接口</h3>
@@ -124,5 +94,97 @@ export function CapabilityRoute({ page, api }: { page: CapabilityPage; api: Rend
         <p className="muted">接口未接通前，本页面只呈现交付状态，不执行、保存或模拟任何业务操作。</p>
       </Card>
     </div>
+  );
+}
+
+function ComputerRuntimeStatus({ api, runtimeReady }: { api: RendererApi; runtimeReady: boolean }) {
+  const [result, setResult] = useState<Awaited<ReturnType<RendererApi["computer"]["capability"]>> | null>(null);
+  const [observation, setObservation] = useState<Awaited<ReturnType<RendererApi["computer"]["observeForeground"]>> | null>(null);
+  const [observing, setObserving] = useState(false);
+
+  useEffect(() => {
+    if (!runtimeReady) return;
+    let active = true;
+    void api.computer.capability().then(
+      (value) => { if (active) setResult(value); },
+      () => {
+        if (active) setResult({
+          status: "unknown",
+          safe_error_code: "COMPUTER_RUNTIME_UNAVAILABLE",
+          trace_id: "",
+        });
+      },
+    );
+    return () => { active = false; };
+  }, [api, runtimeReady]);
+
+  async function observeForeground(): Promise<void> {
+    if (!runtimeReady || observing) return;
+    setObserving(true);
+    setObservation(null);
+    try {
+      setObservation(await api.computer.observeForeground());
+    } catch {
+      setObservation({
+        status: "blocked",
+        title: null,
+        elements: [],
+        safe_error_code: "COMPUTER_RUNTIME_UNAVAILABLE",
+        trace_id: "",
+      });
+    } finally {
+      setObserving(false);
+    }
+  }
+
+  const tone = result?.status === "available" ? "success" : result?.status === "unknown" ? "warning" : "neutral";
+  const label = !runtimeReady
+    ? "Sidecar 尚未就绪"
+    : result?.status === "available"
+      ? "桌面环境可用"
+      : result?.status === "unavailable"
+        ? "当前桌面不可用"
+        : result
+          ? "状态未确认"
+          : "正在检测桌面环境";
+
+  return (
+    <Card className="capability-card">
+      <div className="capability-card__header">
+        <div>
+          <span className="eyebrow">WINDOWS COMPUTER RUNTIME</span>
+          <h2>桌面自动化（Windows）</h2>
+          <p>显示 Sidecar 对当前交互桌面的真实检测结果。</p>
+        </div>
+        <StatusIndicator tone={tone} label={label} />
+      </div>
+      <DataNotice tone="warning" title="当前能力边界">
+        {result?.status === "available"
+          ? "Computer Runtime 已接入 Sidecar，但 AI 对话尚未接入桌面操作闭环；本页不会点击、输入或滚动，也不会自动操作电脑。"
+          : "当前没有确认可用的交互桌面；本页不会点击、输入或滚动，也不会自动操作电脑。"}
+        {result?.safe_error_code ? ` 安全状态码：${result.safe_error_code}。` : ""}
+      </DataNotice>
+      <div className="computer-observation">
+        <Button onClick={() => void observeForeground()} disabled={!runtimeReady || observing || result?.status !== "available"}>
+          {observing ? "正在读取当前窗口…" : "观察当前前台窗口"}
+        </Button>
+        <p className="muted">仅在你点击后读取当前前台窗口；内容只在本机显示，不会自动发送给 AI。</p>
+        {observation?.status === "blocked" && (
+          <div className="inline-error" role="alert">观察未完成：{observation.safe_error_code ?? "COMPUTER_RUNTIME_UNAVAILABLE"}</div>
+        )}
+        {observation?.status === "observed" && (
+          <section aria-label="窗口观察结果">
+            <h3>当前窗口：{observation.title}</h3>
+            {observation.elements.length === 0 ? <p>没有读取到可访问的界面控件。</p> : (
+              <ul>{observation.elements.map((element, index) => (
+                <li key={`${element.role}-${index}`}>
+                  <strong>{element.role}</strong> · {element.name}{element.sensitive ? " · 已隐藏" : ""}
+                </li>
+              ))}</ul>
+            )}
+          </section>
+        )}
+      </div>
+    </Card>
   );
 }

@@ -1,4 +1,4 @@
-import type { ApprovalSummary, ProviderCatalog, ProviderCredentialResult, ProviderTestResult, RuntimeHealth, TaskSummary } from "../../preload/api";
+import type { ApprovalSummary, ChatCompletionInput, ChatCompletionResult, ComputerCapability, ComputerObservation, ProviderCatalog, ProviderCredentialResult, ProviderTestResult, RuntimeHealth, TaskSummary } from "../../preload/api";
 import { DESKTOP_IPC_CHANNELS } from "../../preload/api";
 
 export class DesktopIpcError extends Error {
@@ -23,10 +23,17 @@ export type DesktopProviderService = {
   saveProfile(input: { providerId: string; modelId: string; apiKey: string }): Promise<ProviderCredentialResult>;
   replaceCredential(input: { profileId: string; apiKey: string }): Promise<ProviderCredentialResult>;
 };
+export type DesktopChatService = { complete(input: ChatCompletionInput): Promise<ChatCompletionResult> };
+export type DesktopComputerService = {
+  capability(): Promise<ComputerCapability>;
+  observeForeground(): Promise<ComputerObservation>;
+};
 export type DesktopServices = {
   tasks: DesktopTaskService;
   approvals: DesktopApprovalService;
   providers: DesktopProviderService;
+  chat: DesktopChatService;
+  computer?: DesktopComputerService;
 };
 export type DesktopIpcMainLike = {
   handle(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown): void;
@@ -36,6 +43,7 @@ export type DesktopIpcMainLike = {
 const validIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/;
 const validModelIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const validTraceId = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const validUuid = validTraceId;
 const validModelCapabilities = new Set(["fast_chat", "reasoning_high", "vision", "embedding"]);
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -136,7 +144,57 @@ export function registerDesktopIpc(
       }
       return services.providers.replaceCredential({ profileId: payload.profileId, apiKey: payload.apiKey });
     }],
+    [DESKTOP_IPC_CHANNELS.chatComplete, (args) => {
+      const payload = onePayload(args, ["providerId", "modelId", "messages", "requestId", "traceId", "externalProcessingConfirmed"]);
+      if (typeof payload.providerId !== "string" || !validIdentifier.test(payload.providerId) ||
+        typeof payload.modelId !== "string" || !validModelIdentifier.test(payload.modelId) ||
+        typeof payload.requestId !== "string" || !validUuid.test(payload.requestId) ||
+        typeof payload.traceId !== "string" || !validTraceId.test(payload.traceId) ||
+        payload.externalProcessingConfirmed !== true || !Array.isArray(payload.messages) ||
+        payload.messages.length < 1 || payload.messages.length > 20) {
+        throw new DesktopIpcError("DESKTOP_REQUEST_INVALID");
+      }
+      let total = 0;
+      const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+      for (let index = 0; index < payload.messages.length; index += 1) {
+        const message = payload.messages[index];
+        if (!record(message) || !exactKeys(message, ["role", "content"]) ||
+          message.role !== (index % 2 === 0 ? "user" : "assistant") || typeof message.content !== "string" ||
+          message.content.trim().length === 0 || message.content.length > 4_000) {
+          throw new DesktopIpcError("DESKTOP_REQUEST_INVALID");
+        }
+        total += message.content.length;
+        if (total > 16_000) throw new DesktopIpcError("DESKTOP_REQUEST_INVALID");
+        messages.push({ role: message.role as "user" | "assistant", content: message.content });
+      }
+      if (messages[messages.length - 1]?.role !== "user") throw new DesktopIpcError("DESKTOP_REQUEST_INVALID");
+      return services.chat.complete({
+        providerId: payload.providerId,
+        modelId: payload.modelId,
+        messages,
+        requestId: payload.requestId,
+        traceId: payload.traceId,
+        externalProcessingConfirmed: true,
+      });
+    }],
   ];
+
+  if (services.computer) {
+    handlers.push([
+      DESKTOP_IPC_CHANNELS.computerCapabilityGet,
+      (args) => {
+        if (args.length) throw new DesktopIpcError("DESKTOP_REQUEST_INVALID");
+        return services.computer!.capability();
+      },
+    ]);
+    handlers.push([
+      DESKTOP_IPC_CHANNELS.computerObserveForeground,
+      (args) => {
+        if (args.length) throw new DesktopIpcError("DESKTOP_REQUEST_INVALID");
+        return services.computer!.observeForeground();
+      },
+    ]);
+  }
 
   for (const [channel, handler] of handlers) {
     ipcMain.handle(channel, async (event, ...args) => {

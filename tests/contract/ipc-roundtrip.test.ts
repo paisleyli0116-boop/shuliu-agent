@@ -41,23 +41,24 @@ describe("runtime IPC contract", () => {
     expect(existsSync(electronPath)).toBe(true);
     expect(existsSync(python)).toBe(true);
 
+    const childEnv = { ...process.env };
+    delete childEnv.ELECTRON_DISABLE_SANDBOX;
     const result = spawnSync(
       electronPath,
       // --disable-dev-shm-usage: /dev/shm exhaustion on Linux CI caused
       // intermittent SIGSEGV (run 43818777207, twice consecutively); the flag
       // is a no-op on Windows and macOS.
-      ["--no-sandbox", "--headless", "--disable-gpu", "--disable-dev-shm-usage", electronApp],
+      ["--headless", "--disable-gpu", "--disable-dev-shm-usage", electronApp],
       {
         cwd: repository,
         encoding: "utf8",
         timeout: 90_000,
         env: {
-          ...process.env,
+          ...childEnv,
           SHULIU_TEST_PYTHON_EXECUTABLE: python,
           SHULIU_TEST_SIDECAR: sidecar,
           SHULIU_SECRET_SENTINEL: "sensitive-ipc-test-value",
           PYTHONPATH: join(repository, "runtimes/python-worker"),
-          ELECTRON_DISABLE_SANDBOX: "1",
         },
       },
     );
@@ -68,6 +69,13 @@ describe("runtime IPC contract", () => {
     const report = JSON.parse(marker!.slice("SHULIU_IPC_RESULT:".length));
     expect(report).toMatchObject({
       health: { status: "healthy" },
+      chat: {
+        status: "succeeded",
+        provider_id: "fixture",
+        model: "fixture/chat",
+        request_status: "http_response_received",
+        response: "fixture reply",
+      },
       concurrent: ["one", "two"],
       sidecarSecretVariablePresent: false,
       sidecarUtf8: true,

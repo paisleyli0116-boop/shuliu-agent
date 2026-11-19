@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from copy import deepcopy
 from collections.abc import Mapping
 from datetime import timedelta
@@ -26,6 +27,7 @@ from shuliu_runtime.tools.broker import (
 )
 from shuliu_runtime.tools.idempotency import InMemoryIdempotencyStore
 from shuliu_runtime.computer.win32_backend import Win32Backend
+from shuliu_runtime.computer.verification import ComputerError
 
 
 class RecordingIdentity:
@@ -85,6 +87,11 @@ class FakeComputerBackend:
         self.disconnected = False
         self.apply_action = True
         self.sensitive = False
+        self.foreground_resolutions = 0
+
+    def foreground_window_ref(self) -> str:
+        self.foreground_resolutions += 1
+        return "0x2bc"
 
     def capability(self) -> dict[str, object]:
         return {
@@ -161,6 +168,7 @@ def _make_runtime(
     *,
     backend: FakeComputerBackend | None = None,
     deny_actions: bool = False,
+    deny_foreground_window_resource: bool = False,
     approval_service=None,
 ) -> tuple[ComputerRuntime, FakeComputerBackend, list[EventRecord], list[dict[str, object]], object]:
     computer = backend or FakeComputerBackend()
@@ -185,6 +193,14 @@ def _make_runtime(
             permission="computer.read",
         ),
         PolicyRule(
+            rule_id="computer-observe-foreground-read",
+            action="computer.observe_foreground",
+            risk=RiskLevel.LOW,
+            decision=PolicyOutcome.ALLOW,
+            organization_id="org-1",
+            permission="computer.read",
+        ),
+        PolicyRule(
             rule_id="computer-act",
             action="computer.act",
             risk=RiskLevel.CRITICAL,
@@ -193,6 +209,16 @@ def _make_runtime(
             permission="computer.act",
         ),
     ]
+    if deny_foreground_window_resource:
+        rules.append(PolicyRule(
+            rule_id="deny-computer-window-observation",
+            action="computer.observe_foreground",
+            risk=RiskLevel.LOW,
+            decision=PolicyOutcome.DENY,
+            organization_id="org-1",
+            permission="computer.read",
+            resource_type="computer_window",
+        ))
 
     def save_evidence(record: dict[str, object]) -> str:
         evidence.append(deepcopy(record))
@@ -228,6 +254,46 @@ def _observe(runtime: ComputerRuntime) -> dict[str, object]:
     )
     assert result.verification_status is VerificationStatus.VERIFIED
     return result.output  # type: ignore[return-value]
+
+
+def test_foreground_observation_resolves_target_in_backend_and_uses_tool_broker():
+    runtime, backend, events, evidence, _ = _make_runtime()
+
+    result = runtime.observe_foreground(
+        actor={"subject_id": "agent-1"}, context=_context()
+    )
+
+    assert result.verification_status is VerificationStatus.VERIFIED
+    assert result.output["window_ref"] == "0x2bc"
+    assert result.output["status"] == "OBSERVED"
+    assert any(event.event_type == "TOOL_EXECUTION_COMPLETED" for event in events)
+    assert any(event["operation"] == "observe_foreground" for event in evidence)
+
+
+def test_foreground_window_resource_policy_deny_runs_before_window_observation():
+    runtime, backend, _events, _evidence, _ = _make_runtime(
+        deny_foreground_window_resource=True,
+    )
+
+    with pytest.raises(ToolExecutionError, match="Policy denied"):
+        runtime.observe_foreground(actor={"subject_id": "agent-1"}, context=_context())
+    assert backend.foreground_resolutions == 0
+
+
+def test_foreground_observation_is_registered_as_a_broker_tool():
+    runtime, _backend, _events, _evidence, _approvals = _make_runtime()
+
+    result = runtime.broker.execute(
+        "computer.observe_foreground",
+        {},
+        {"subject_id": "agent-1"},
+        _context(),
+        idempotency_key="foreground-observe-1",
+    )
+
+    assert result.verification_status is VerificationStatus.VERIFIED
+    assert result.output["status"] == "OBSERVED"
+    assert result.output["window_ref"] == "0x2bc"
 
 
 def _act(
@@ -579,6 +645,48 @@ def test_win32_capability_marks_locked_or_uncertain_desktop_unavailable():
     assert capability["status"] == "UNAVAILABLE"
     assert capability["reason_code"] == "COMPUTER_SESSION_LOCKED"
     assert capability["session_id"] == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows foreground API contract")
+def test_win32_foreground_reference_is_taken_from_current_visible_interactive_window(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    backend = Win32Backend(
+        session_query=lambda: {
+            "status": "AVAILABLE",
+            "session_id": 2,
+            "desktop_name": "Default",
+        }
+    )
+    gui = SimpleNamespace(
+        GetForegroundWindow=lambda: 0x1234,
+        IsWindow=lambda _hwnd: True,
+        IsWindowVisible=lambda _hwnd: True,
+        IsIconic=lambda _hwnd: False,
+        GetWindowRect=lambda _hwnd: (0, 0, 640, 480),
+        GetWindowText=lambda _hwnd: "Fixture",
+    )
+    process = SimpleNamespace(GetWindowThreadProcessId=lambda _hwnd: (11, 123))
+    monkeypatch.setitem(sys.modules, "win32gui", gui)
+    monkeypatch.setitem(sys.modules, "win32process", process)
+    monkeypatch.setattr("shuliu_runtime.computer.win32_backend._process_session_id", lambda _pid: 2)
+    monkeypatch.setattr("shuliu_runtime.computer.win32_backend._window_dpi", lambda _hwnd: 96)
+
+    assert backend.foreground_window_ref() == "0x1234"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows foreground API contract")
+def test_win32_foreground_reference_fails_closed_without_a_window(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "win32gui", SimpleNamespace(GetForegroundWindow=lambda: 0))
+
+    with pytest.raises(ComputerError) as error:
+        Win32Backend().foreground_window_ref()
+
+    assert error.value.code == "COMPUTER_WINDOW_UNAVAILABLE"
 
 
 @pytest.mark.parametrize(

@@ -27,7 +27,7 @@ const preloadBundle = [
   'const { contextBridge, ipcRenderer } = require("electron");',
   `const DESKTOP_IPC_CHANNELS = ${JSON.stringify(preloadApi.DESKTOP_IPC_CHANNELS)};`,
   `const createRendererApi = ${rendererApiFactory};`,
-  'contextBridge.exposeInMainWorld("shuliu", createRendererApi((channel) => ipcRenderer.invoke(channel)));',
+  'contextBridge.exposeInMainWorld("shuliu", createRendererApi((channel, ...args) => ipcRenderer.invoke(channel, ...args)));',
   "",
 ].join("\n");
 await writeFile(resolve(buildDirectory, "preload.cjs"), preloadBundle);

@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from shuliu_runtime.approval.service import ApprovalService
+from shuliu_runtime.computer.ipc import create_computer_ipc_handlers
 from shuliu_runtime.ipc.bootstrap import RuntimeBootstrapResult
 from shuliu_runtime.persistence.sqlite import SQLiteDatabase
 from shuliu_runtime.production.approvals import SQLiteApprovalRepository
@@ -67,6 +68,7 @@ class TrustedDependencies:
     policy: object
     approvals: ApprovalService
     approval_ttl: timedelta
+    principal: ProductionIdentity
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,8 @@ class ProductionRuntimeOutcome:
 
     workflow: CompositionOutcome
     desktop: DesktopRuntimeOutcome
+    principal: ProductionIdentity | None = None
+    policy: object | None = None
 
 
 def compose_trusted_dependencies(
@@ -113,6 +117,7 @@ def compose_trusted_dependencies(
             policy=policy_engine,
             approvals=approvals,
             approval_ttl=approval_ttl,
+            principal=identity,
         ),
         None,
     )
@@ -175,7 +180,7 @@ def compose_production_runtime(
         environment,
         tuple(tool_providers) + desktop.tool_providers,
     )
-    return ProductionRuntimeOutcome(workflow, desktop)
+    return ProductionRuntimeOutcome(workflow, desktop, trusted.principal, trusted.policy)
 
 
 def _compose_workflow(
@@ -240,11 +245,25 @@ def attach_production_runtime(
     bootstrap: RuntimeBootstrapResult, outcome: ProductionRuntimeOutcome
 ) -> RuntimeBootstrapResult:
     """Attach Workflow first, then the desktop runtimes built beside it."""
-    return attach_desktop_runtimes(
+    attached = attach_desktop_runtimes(
         attach_workflow_runtime(
             bootstrap, outcome.workflow.dependencies, outcome.workflow.unavailable_code
         ),
         outcome.desktop,
+    )
+    handlers = {}
+    if outcome.desktop.computer is not None and outcome.principal is not None:
+        handlers = create_computer_ipc_handlers(
+            outcome.desktop.computer,
+            actor={"subject_id": outcome.principal.actor_id},
+            organization_id=outcome.principal.organization_id,
+            privacy=outcome.principal.privacy,
+        )
+    return replace(
+        attached,
+        computer_ipc_handlers=handlers,
+        chat_principal=outcome.principal,
+        chat_policy=outcome.policy,
     )
 
 

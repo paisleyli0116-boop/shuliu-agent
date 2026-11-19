@@ -12,6 +12,8 @@ import { consumeProviderCanarySession } from "./runtime/canary-session.js";
 import { appendProviderConnectionDiagnostic, appendRuntimeDiagnostic } from "./runtime/diagnostic-journal.js";
 import { appendDesktopStartupDiagnostic } from "./runtime/startup-diagnostics.js";
 import { RuntimeProviderService } from "./ipc/providers.js";
+import { RuntimeChatService } from "./ipc/chat.js";
+import { RuntimeComputerService } from "./ipc/computer.js";
 import { createDemoDesktopServices } from "./services/demo-desktop-services.js";
 import { registerDesktopIpc } from "./ipc/desktop-ipc.js";
 import { createSecureWindowWebPreferences, isTrustedRendererRequest } from "./window-security.js";
@@ -84,7 +86,11 @@ const providers = new RuntimeProviderService(
   },
   { canaryEnabled: canarySessionEnabled },
 );
-const services = createDemoDesktopServices(providers);
+const services = {
+  ...createDemoDesktopServices(providers),
+  chat: new RuntimeChatService((method, params, options) => supervisor.request(method, params, options)),
+  computer: new RuntimeComputerService((method, params, options) => supervisor.request(method, params, options)),
+};
 let mainWindow: BrowserWindow | undefined;
 let removeRuntimeHandlers: (() => void) | undefined;
 let removeDesktopHandlers: (() => void) | undefined;

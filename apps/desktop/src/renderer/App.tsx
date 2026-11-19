@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RendererApi, RuntimeHealth } from "../preload/api";
 import { getRendererApi } from "./api/client";
-import { Button, Card, DataNotice, PageHeader, StatusIndicator } from "./components/design-system";
+import { Button, Card, DataNotice, DetailPanel, PageHeader, StatusIndicator, Typography } from "./components/design-system";
 import { RuntimeHealth as RuntimeHealthCard } from "./components/runtime-health";
 import { CapabilityRoute, type CapabilityPage } from "./routes/capabilities";
 import { ProvidersRoute } from "./routes/settings/providers";
@@ -30,7 +30,7 @@ const navigation: Array<{ section: string; items: NavigationItem[] }> = [
 
 const pageTitles: Record<Page, { title: string; description: string }> = {
   workbench: { title: "智能工作台", description: "从真实运行状态进入当前可用的 Foundation 能力。" },
-  chat: { title: "AI 对话", description: "会话执行接口尚未接入；页面会明确展示可用模型目录和当前缺口。" },
+  chat: { title: "AI 对话", description: "使用已配置的模型进行受控文本对话；发送前先确认数据范围。" },
   agents: { title: "岗位 Agent", description: "当前 Foundation 不包含行业岗位 Agent 的产品实现。" },
   tasks: { title: "任务中心", description: "当前没有连接真实的持久化任务与 Agent 执行服务。" },
   workflows: { title: "工作流", description: "通用 Workflow Engine 已存在，Desktop 管理和执行接口尚未接入。" },
@@ -44,6 +44,7 @@ const pageTitles: Record<Page, { title: string; description: string }> = {
 export function App({ api: providedApi }: { api?: RendererApi }) {
   const api = providedApi ?? getRendererApi();
   const [page, setPage] = useState<Page>("workbench");
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [health, setHealth] = useState<RuntimeHealth | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
   const refreshHealth = async () => {
@@ -77,7 +78,7 @@ export function App({ api: providedApi }: { api?: RendererApi }) {
             <div className="nav-group" key={group.section}>
               <span className="nav-group__label">{group.section}</span>
               {group.items.map((item) => (
-                <button key={item.id} type="button" aria-label={item.label} className={`nav-item ${page === item.id ? "nav-item--active" : ""}`} aria-current={page === item.id ? "page" : undefined} onClick={() => setPage(item.id)}>
+                <button key={item.id} type="button" aria-label={item.label} title={item.label} className={`nav-item ${page === item.id ? "nav-item--active" : ""}`} aria-current={page === item.id ? "page" : undefined} onClick={() => setPage(item.id)}>
                   <span className={`nav-item__icon ${item.id === "chat" || item.id === "models" ? "nav-item__icon--ai" : ""}`} aria-hidden="true">{item.icon}</span><span className="nav-item__label">{item.label}</span>
                 </button>
               ))}
@@ -89,11 +90,14 @@ export function App({ api: providedApi }: { api?: RendererApi }) {
         </div>
       </aside>
 
-      <main className="main-area">
+      <main className={`main-area${detailsOpen ? " main-area--details-open" : ""}`}>
         <header className="topbar">
           <div className="breadcrumb"><span>ShuLiu Agent</span><span className="breadcrumb__slash">/</span><strong>{activePage.title}</strong></div>
           <div className="topbar-actions">
             <span className="workspace-context">本地工作区</span>
+            <Button variant="quiet" className="detail-toggle" aria-label={detailsOpen ? "隐藏页面详情" : "显示页面详情"} aria-expanded={detailsOpen} aria-controls="page-details" onClick={() => setDetailsOpen((open) => !open)}>
+              <span aria-hidden="true">▤</span><span>页面详情</span>
+            </Button>
             <StatusIndicator tone={runtimeTone} label={healthLoading ? "检查中" : health?.status === "healthy" ? "Sidecar 在线" : safeMode ? "Safe Mode" : "状态待检查"} />
           </div>
         </header>
@@ -109,14 +113,31 @@ export function App({ api: providedApi }: { api?: RendererApi }) {
         <section className="page-content">
           <PageHeader eyebrow="SHULIU FOUNDATION · V0.1" title={activePage.title} description={activePage.description} />
 
+          {detailsOpen && (
+            <DetailPanel title={activePage.title} onClose={() => setDetailsOpen(false)}>
+              <section className="detail-section" aria-labelledby="detail-current-page">
+                <Typography variant="label" as="h3" id="detail-current-page">当前页面</Typography>
+                <Typography variant="body">{activePage.description}</Typography>
+              </section>
+              <section className="detail-section" aria-labelledby="detail-runtime-status">
+                <Typography variant="label" as="h3" id="detail-runtime-status">运行状态</Typography>
+                <StatusIndicator
+                  tone={runtimeTone}
+                  label={healthLoading ? "正在检查" : health?.status === "healthy" ? "Sidecar 运行正常" : safeMode ? "Safe Mode" : health?.status === "degraded" ? "Sidecar 状态降级" : "状态未知"}
+                />
+                {health?.code && <Typography variant="caption">状态码：<code>{health.code}</code></Typography>}
+              </section>
+              <DataNotice title="数据范围">这里只显示当前页面说明和 Desktop / Sidecar 健康状态；未接入的数据不会显示为真实任务、Agent 或审批。</DataNotice>
+            </DetailPanel>
+          )}
           {page === "workbench" && <WorkbenchRoute api={api} health={health} onNavigate={navigate} />}
-          {page === "chat" && <CapabilityRoute page="chat" api={api} />}
+          {page === "chat" && <CapabilityRoute page="chat" api={api} runtimeReady={!healthLoading && health?.status === "healthy"} onOpenModels={() => setPage("models")} />}
           {page === "agents" && <CapabilityRoute page="agents" api={api} />}
           {page === "tasks" && <CapabilityRoute page="tasks" api={api} />}
           {page === "workflows" && <CapabilityRoute page="workflows" api={api} />}
           {page === "knowledge" && <CapabilityRoute page="knowledge" api={api} />}
           {page === "models" && <ProvidersRoute api={api} />}
-          {page === "tools" && <CapabilityRoute page="tools" api={api} />}
+          {page === "tools" && <CapabilityRoute page="tools" api={api} runtimeReady={!healthLoading && health?.status === "healthy"} />}
           {page === "runs" && <CapabilityRoute page="runs" api={api} />}
           {page === "settings" && <RuntimeRoute health={health} loading={healthLoading} refresh={refreshHealth} />}
 

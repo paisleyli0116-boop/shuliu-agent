@@ -15,7 +15,7 @@ from shuliu_runtime.ipc.bootstrap import RuntimeBootstrapError, bootstrap_runtim
 from shuliu_runtime.ipc.recovery import create_process_recovery_ipc_handlers
 from shuliu_runtime.ipc.runtime_instance_lock import RuntimeInstanceAlreadyActive, RuntimeInstanceLock
 from shuliu_runtime.models.config import ProviderConfigurationError
-from shuliu_runtime.models.connection import create_provider_ipc_handlers, create_provider_runtime_from_environment
+from shuliu_runtime.models.connection import create_chat_ipc_handlers, create_provider_ipc_handlers, create_provider_runtime_from_environment
 from shuliu_runtime.persistence.sqlite import SQLiteDatabase
 from shuliu_runtime.production.composition import (
     attach_production_runtime,
@@ -299,13 +299,18 @@ def _serve_bootstrapped_runtime(bootstrap: Any) -> int:
     if persisted_safe_mode.active:
         health_state["safe_error_code"] = persisted_safe_mode.error_code or "RUNTIME_SAFE_MODE"
     try:
-        provider_runtime = create_provider_runtime_from_environment()
+        provider_runtime = create_provider_runtime_from_environment(
+            chat_principal=getattr(bootstrap, "chat_principal", None),
+            chat_policy=getattr(bootstrap, "chat_policy", None),
+        )
     except ProviderConfigurationError:
         logger.error("event=provider_configuration_failed code=MODEL_PROVIDER_CONFIGURATION_INVALID")
         return 1
 
     try:
         handlers = create_provider_ipc_handlers(provider_runtime)
+        handlers.update(create_chat_ipc_handlers(provider_runtime))
+        handlers.update(getattr(bootstrap, "computer_ipc_handlers", {}))
         runtime_database = getattr(bootstrap, "database", None)
         if runtime_database is None:
             runtime_database = SQLiteDatabase(bootstrap.database_path)

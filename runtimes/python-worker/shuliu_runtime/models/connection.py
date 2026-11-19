@@ -13,9 +13,11 @@ from uuid import UUID, uuid4
 
 from .capability import ModelCapability, parse_capability
 from .config import ProviderConfigurationError, ProviderProfile, load_provider_profiles
+from .conversation import ConversationContext, ConversationService, LocalConversationBudget
 from .gateway import ModelGateway, ModelGatewayError, ModelRequest, ModelResult
 from .providers.litellm_adapter import LiteLLMAdapter
 from shuliu_runtime.policy.engine import PolicyEngine
+from shuliu_runtime.production.identity import ProductionIdentity
 from shuliu_runtime.policy.rules import PolicyRule
 from shuliu_runtime.security.os_secret_store import OSSecretStore
 from shuliu_runtime.security.secret_ref import SecretRef
@@ -263,7 +265,7 @@ def _elapsed_ms(started: float, finished: float) -> float:
 class ProviderRuntime:
     """Fixed desktop provider operations; plaintext credentials go only to SecretResolver."""
 
-    def __init__(self, profiles, secret_resolver, connection_service):
+    def __init__(self, profiles, secret_resolver, connection_service, conversation_service=None):
         if not isinstance(profiles, tuple) or any(not isinstance(item, ProviderProfile) for item in profiles):
             raise TypeError("provider profiles are invalid")
         if not callable(getattr(secret_resolver, "put", None)) or not callable(
@@ -272,9 +274,12 @@ class ProviderRuntime:
             raise TypeError("SecretResolver is required")
         if not isinstance(connection_service, ProviderConnectionService):
             raise TypeError("provider connection service is required")
+        if conversation_service is not None and not isinstance(conversation_service, ConversationService):
+            raise TypeError("conversation service is invalid")
         self._profiles = {profile.provider_id: profile for profile in profiles}
         self._secret_resolver = secret_resolver
         self._connection_service = connection_service
+        self._conversation_service = conversation_service
 
     def list_profiles(self) -> dict[str, object]:
         providers = []
@@ -292,6 +297,7 @@ class ProviderRuntime:
                     ],
                     "selected_model_id": profile.model,
                     "configured": self._is_configured(profile),
+                    "enabled": profile.enabled,
                 }
             )
         return {"providers": providers}
@@ -319,6 +325,40 @@ class ProviderRuntime:
 
     def test_connection(self, provider_id: str, capability: str, trace_id: str | None = None) -> dict[str, object]:
         return asdict(self._connection_service.test_provider_connection(provider_id, capability, trace_id))
+
+    def complete_chat(
+        self,
+        *,
+        provider_id: object,
+        model_id: object,
+        messages: object,
+        request_id: object,
+        trace_id: object,
+        external_processing_confirmed: object,
+    ) -> dict[str, object]:
+        if self._conversation_service is None:
+            return {
+                "status": "blocked",
+                "provider_id": provider_id if isinstance(provider_id, str) and _SAFE_IDENTIFIER.fullmatch(provider_id) else "unknown",
+                "model": model_id if isinstance(model_id, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", model_id) else "unknown",
+                "trace_id": trace_id if isinstance(trace_id, str) and _SAFE_TRACE_ID.fullmatch(trace_id) else str(uuid4()),
+                "safe_error_code": "CHAT_SERVICE_UNAVAILABLE",
+                "request_status": "not_sent",
+                "failure_stage": "preflight",
+                "http_status": None,
+                "response": None,
+                "usage": {},
+                "cost": None,
+                "latency_ms": 0.0,
+            }
+        return self._conversation_service.complete(
+            provider_id,
+            model_id,
+            messages,
+            request_id,
+            trace_id,
+            external_processing_confirmed,
+        )
 
     def _profile_for_credential(self, provider_id: str, model_id: str | None) -> ProviderProfile:
         profile = self._profiles.get(provider_id) if isinstance(provider_id, str) else None
@@ -399,6 +439,12 @@ def create_provider_ipc_handlers(runtime: ProviderRuntime):
     }
 
 
+def create_chat_ipc_handlers(runtime: ProviderRuntime):
+    from .conversation import create_conversation_ipc_handlers
+
+    return create_conversation_ipc_handlers(runtime)
+
+
 class _ConnectionTestBudget:
     """Process-local canary cap; durable financial accounting is Task 29."""
 
@@ -463,7 +509,9 @@ class _UnavailableSecretStore:
         raise SecretStoreUnavailableError("OS secure storage is unavailable")
 
 
-def create_provider_runtime_from_environment() -> ProviderRuntime:
+def create_provider_runtime_from_environment(
+    *, chat_principal: ProductionIdentity | None = None, chat_policy: object | None = None
+) -> ProviderRuntime:
     profiles = load_provider_profiles()
     organization_id = os.environ.get("SHULIU_ORGANIZATION_ID", "local")
     subject_id = "local-desktop-operator"
@@ -515,7 +563,34 @@ def create_provider_runtime_from_environment() -> ProviderRuntime:
         context,
         canary_enabled=os.environ.get("SHULIU_MODEL_CONNECTION_TEST") == "1",
     )
-    return ProviderRuntime(profiles, secret_resolver, service)
+
+    conversation_service = None
+    if (
+        isinstance(chat_principal, ProductionIdentity)
+        and callable(getattr(chat_policy, "evaluate", None))
+        and organization_id == chat_principal.organization_id
+    ):
+        chat_profiles = tuple(
+            profile for profile in profiles if profile.enabled and "fast_chat" in profile.capabilities
+        )
+        chat_gateway = ModelGateway(
+            providers=tuple(profile.to_model_provider_config() for profile in chat_profiles),
+            adapter=LiteLLMAdapter(timeout_seconds=45.0, max_output_tokens=512),
+            policy=chat_policy,
+            budget=LocalConversationBudget(max_requests=20),
+            health=_ConfiguredProviderHealth(chat_profiles),
+            model_calls=_ConnectionCallSink(),
+            secret_resolver=secret_resolver,
+            fallback_enabled=False,
+        )
+        chat_context = ConversationContext(
+            organization_id=chat_principal.organization_id,
+            subject_id=chat_principal.actor_id,
+            permissions=chat_principal.permissions,
+            budget_ref=f"budget://{chat_principal.organization_id}/desktop-chat",
+        )
+        conversation_service = ConversationService(chat_profiles, chat_gateway, chat_context)
+    return ProviderRuntime(profiles, secret_resolver, service, conversation_service)
 
 
 def connection_test_cli(argv: list[str] | None = None) -> int:

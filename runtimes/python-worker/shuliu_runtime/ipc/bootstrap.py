@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections.abc import Mapping
+from typing import Any
 from pathlib import Path
 
 from shuliu_runtime.persistence.sqlite import (
@@ -37,6 +39,9 @@ class RuntimeBootstrapResult:
     computer_runtime: object | None = None
     browser_unavailable_code: str | None = None
     computer_unavailable_code: str | None = None
+    computer_ipc_handlers: Mapping[str, Any] = field(default_factory=dict)
+    chat_principal: Any | None = None
+    chat_policy: Any | None = None
 
 
 def bootstrap_runtime(

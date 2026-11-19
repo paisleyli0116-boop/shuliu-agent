@@ -184,7 +184,7 @@ def test_main_sanitizes_unhandled_sidecar_exception_and_returns_failure(monkeypa
 
     monkeypatch.setattr(module, "_runtime_data_directory", lambda: tmp_path)
     monkeypatch.setattr(module, "create_process_recovery_ipc_handlers", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(module, "create_provider_runtime_from_environment", lambda: object())
+    monkeypatch.setattr(module, "create_provider_runtime_from_environment", lambda **_kwargs: object())
 
     class CrashingServer:
         def __init__(self, **_kwargs):
@@ -230,7 +230,7 @@ def test_main_serves_protocol_frames_on_isolated_stream(monkeypatch, capfd, tmp_
     constructor_options = {}
     monkeypatch.setattr(module, "_runtime_data_directory", lambda: tmp_path)
     monkeypatch.setattr(module, "create_process_recovery_ipc_handlers", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(module, "create_provider_runtime_from_environment", lambda: object())
+    monkeypatch.setattr(module, "create_provider_runtime_from_environment", lambda **_kwargs: object())
 
     class RecordingServer:
         def __init__(self, **kwargs):

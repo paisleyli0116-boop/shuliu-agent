@@ -59,6 +59,24 @@ class Win32Backend:
             "machine": socket.gethostname(),
         }
 
+    def foreground_window_ref(self) -> str:
+        """Return only the current foreground HWND after validating its session."""
+        if os.name != "nt":
+            raise ComputerError("COMPUTER_WINDOWS_ONLY")
+        try:
+            import win32gui
+
+            hwnd = int(win32gui.GetForegroundWindow())
+            if hwnd <= 0:
+                raise ComputerError("COMPUTER_WINDOW_UNAVAILABLE")
+            window_ref = f"0x{hwnd:x}"
+            self.inspect_window(window_ref)
+            return window_ref
+        except ComputerError:
+            raise
+        except Exception:
+            raise ComputerError("COMPUTER_WINDOW_UNAVAILABLE") from None
+
     def inspect_window(self, window_ref: str) -> dict[str, object]:
         if os.name != "nt":
             raise ComputerError("COMPUTER_WINDOWS_ONLY")

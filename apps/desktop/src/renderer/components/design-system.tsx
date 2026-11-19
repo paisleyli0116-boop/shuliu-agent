@@ -1,5 +1,26 @@
 import { useId, type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
 
+export type TypographyVariant = "display" | "page-title" | "section-title" | "body" | "muted" | "caption" | "label";
+type TypographyTag = "h1" | "h2" | "h3" | "p" | "span" | "div";
+const typographyTags: Record<TypographyVariant, TypographyTag> = {
+  display: "h1",
+  "page-title": "h1",
+  "section-title": "h2",
+  body: "p",
+  muted: "p",
+  caption: "span",
+  label: "span",
+};
+
+export function Typography({ as, variant = "body", className = "", ...props }: HTMLAttributes<HTMLElement> & {
+  as?: TypographyTag;
+  variant?: TypographyVariant;
+  className?: string;
+}) {
+  const Element = as ?? typographyTags[variant];
+  return <Element className={`typography typography--${variant} ${className}`.trim()} {...props} />;
+}
+
 export type ButtonVariant = "primary" | "secondary" | "quiet" | "danger";
 
 export function Button({ variant = "secondary", className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) {
@@ -16,7 +37,7 @@ export function StatusIndicator({ tone, label, detail }: {
   detail?: string;
 }) {
   return (
-    <span className={`status-indicator status-indicator--${tone}`}>
+    <span role="status" aria-live="polite" className={`status-indicator status-indicator--${tone}`}>
       <span className="status-dot" aria-hidden="true" />
       <span>{label}</span>
       {detail && <small>{detail}</small>}
@@ -33,7 +54,7 @@ export function EmptyState({ title, description, icon, action }: {
   return (
     <div className="empty-state">
       {icon && <span className="empty-state__mark" aria-hidden="true">{icon}</span>}
-      <strong>{title}</strong>
+      <h3>{title}</h3>
       <span>{description}</span>
       {action}
     </div>
@@ -48,7 +69,7 @@ export function DataNotice({ tone = "info", title, children }: {
   return (
     <div className={`data-notice data-notice--${tone}`}>
       <span className="data-notice__icon" aria-hidden="true">{tone === "warning" ? "!" : "i"}</span>
-      <div><strong>{title}</strong><p>{children}</p></div>
+      <div><h3>{title}</h3><p>{children}</p></div>
     </div>
   );
 }
@@ -115,6 +136,21 @@ export function Modal({ open, title, onClose, children }: {
   );
 }
 
+export function DetailPanel({ title, onClose, children }: {
+  title: string;
+  onClose(): void;
+  children: ReactNode;
+}) {
+  return (
+    <aside id="page-details" className="detail-panel" aria-label="页面详情">
+      <header className="detail-panel__header">
+        <div><Typography variant="label">当前上下文</Typography><Typography as="h2" variant="section-title">{title}</Typography></div>
+        <Button variant="quiet" aria-label="关闭页面详情" onClick={onClose}>×</Button>
+      </header>
+      <div className="detail-panel__content">{children}</div>
+    </aside>
+  );
+}
 export function PageHeader({ eyebrow, title, description, action }: {
   eyebrow?: string;
   title: string;
@@ -123,7 +159,7 @@ export function PageHeader({ eyebrow, title, description, action }: {
 }) {
   return (
     <div className="page-heading">
-      <div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{description}</p></div>
+      <div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<Typography variant="page-title">{title}</Typography><Typography variant="muted">{description}</Typography></div>
       {action && <div className="page-heading__action">{action}</div>}
     </div>
   );
