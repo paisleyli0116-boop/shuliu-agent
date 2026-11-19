@@ -52,3 +52,8 @@ The event contract wrapper's first attempt was blocked when `uvx` tried to write
 - Chat authorization denial and computer resource-policy denial are covered by tests using fake provider/runtime boundaries; these tests do not prove a live provider response or actual foreground desktop observation.
 - There is no independent reviewer sign-off for this isolated worktree. The available review agent could not complete its review because of a usage limit; the code was manually inspected for the trust boundary, Policy use, request bounds, and absence of credential literals.
 - No changes were made to `main`, no commit or push was performed, and no real Provider request was sent.
+
+## CI verification status (2026-11-19)
+
+- Windows Validation run `44446821943` at `61206a7` (feature code identical to the final HEAD; later commits touch only `ci.yml`): **success**, including installer smoke.
+- Generic CI on the final HEAD (`7bc6ed4`) could not start: GitHub reports "The job was not started because recent account payments have failed or your spending limit needs to be increased" (run `44451572217`). This is a billing blocker, not a code or workflow failure. Before that, three ubuntu iterations were spent diagnosing the Linux Electron sandbox: the SUID helper is not shipped in the electron 44 dist at all, and GitHub's ubuntu 24.04 image restricts unprivileged user namespaces via AppArmor - the final workflow allows user namespaces so the real sandbox works (`kernel.apparmor_restrict_unprivileged_userns=0`); this is unverified on a runner until billing is resolved.
