@@ -32,13 +32,22 @@ jobs:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
       - run: uv sync --locked --all-packages
-      - name: Configure the Chromium SUID sandbox helper (Linux Electron tests)
+      - name: Enable unprivileged user namespaces (Linux Electron tests)
         if: runner.os == 'Linux'
         run: |
+          # The desktop integration contract test runs Electron with its real
+          # sandbox. GitHub's ubuntu 24.04 image restricts unprivileged user
+          # namespaces via AppArmor, so Chromium cannot use the namespace
+          # sandbox and falls back to the SUID helper, which modern Electron
+          # dists no longer ship - it then aborts with the misleading
+          # "SUID sandbox helper binary ... not configured correctly" FATAL.
+          # Allow user namespaces so the real sandbox works.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           DIST_DIR="$(node -p "require('path').dirname(require.resolve('electron', { paths: [process.cwd() + '/apps/desktop'] })) + '/dist'")"
-          sudo chown root:root "$DIST_DIR/chrome-sandbox"
-          sudo chmod 4755 "$DIST_DIR/chrome-sandbox"
-          ls -l "$DIST_DIR/chrome-sandbox"
+          if [ -f "$DIST_DIR/chrome-sandbox" ]; then
+            sudo chown root:root "$DIST_DIR/chrome-sandbox"
+            sudo chmod 4755 "$DIST_DIR/chrome-sandbox"
+          fi
       - name: Run Cloud API identity unit tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/identity -q
       - name: Run Cloud API route and authorization tests
