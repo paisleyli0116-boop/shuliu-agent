@@ -74,8 +74,17 @@ jobs:
       - name: Run Electron ↔ Python IPC tests with real subprocesses
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
-            # Real Electron needs a display server; headless Linux sporadically
-            # SIGSEGVs without one (see tests/contract/ipc-roundtrip.test.ts).
+            # Under xvfb Electron reaches Chromium sandbox init, which aborts
+            # with "SUID sandbox helper binary ... not configured correctly"
+            # unless chrome-sandbox is root-owned and setuid. Configure it
+            # correctly instead of disabling the sandbox.
+            for helper in node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox; do
+              if [ -f "$helper" ]; then
+                sudo chown root:root "$helper"
+                sudo chmod 4755 "$helper"
+                ls -l "$helper"
+              fi
+            done
             xvfb-run -a pnpm test:ipc
           else
             pnpm test:ipc
@@ -90,6 +99,13 @@ jobs:
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
       - run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
+            for helper in node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox; do
+              if [ -f "$helper" ]; then
+                sudo chown root:root "$helper"
+                sudo chmod 4755 "$helper"
+                ls -l "$helper"
+              fi
+            done
             xvfb-run -a pnpm test:contract
           else
             pnpm test:contract
