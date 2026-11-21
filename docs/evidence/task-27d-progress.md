@@ -118,3 +118,25 @@ Task 27-D does not waive or implement those capabilities. The Task 27-D report
 changes are verified at the implementation SHA above. The overall Foundation
 release must remain BLOCKED until every remaining gate has valid,
 full-SHA-bound evidence and required owner approvals.
+
+### Windows process-crash gate wiring (2026-11-21)
+
+- Found that Windows Validation did not execute a dedicated full-process
+  recovery step, so `process_crash_recovery` stayed NOT_RUN even though the
+  repository contains real Sidecar restart and dispatch/ACK-loss tests.
+- Added `Run Windows full-process recovery and ACK-loss tests` to the Windows
+  workflow. It runs the real Sidecar process-kill/restart suite, workflow
+  dispatch/ACK-loss subprocess suite, and Electron Main recovery coordinator
+  subprocess suite. The JUnit outputs are retained in the Windows evidence
+  artifact even if a later validation step fails.
+- Added a fail-closed mapping from that exact Windows step to
+  `process_crash_recovery`; missing/skipped steps remain NOT_RUN and failed
+  steps remain FAIL.
+- RED: the new release-report test failed with a missing
+  `process_crash_recovery` result before the mapping existed.
+- GREEN (local): `tests/release/test_ci_gate_report.py` **20 passed**;
+  real Sidecar/workflow crash recovery **6 passed**; Electron Main recovery
+  tests **9 passed**; Windows workflow YAML parse succeeded.
+- Remote exact-SHA Windows Validation is pending for the commit containing
+  this wiring. Until it passes, `process_crash_recovery` remains unverified.
+  Other release blockers are unchanged; Task 27 remains BLOCKED.

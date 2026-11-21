@@ -67,6 +67,21 @@ jobs:
         run: pnpm test:security
       - name: Run Electron ↔ Python IPC tests with real subprocesses
         run: pnpm test:ipc
+      - name: Run Windows full-process recovery and ACK-loss tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pythonReport = Join-Path $env:RUNNER_TEMP "process-recovery-python-tests.xml"
+          uv run --locked --package shuliu-python-runtime pytest `
+            runtimes/python-worker/tests/ipc/test_real_process_recovery.py `
+            runtimes/python-worker/tests/workflow/test_dispatch_ack_process_crash.py `
+            -q --junitxml=$pythonReport
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $desktopReport = Join-Path $env:RUNNER_TEMP "process-recovery-desktop-tests.xml"
+          corepack pnpm --filter @shuliu/desktop exec vitest run --root . `
+            tests/ipc/runtime-crash-recovery.test.ts `
+            --reporter=default --reporter=junit --outputFile $desktopReport
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run Task 26 update, signature, health-probe, and packaging tests
         shell: pwsh
         run: |
@@ -169,6 +184,8 @@ jobs:
             ${{ runner.temp }}/task26-package-v1.log
             ${{ runner.temp }}/task26-package-v2.log
             ${{ runner.temp }}/task26-sign-update.log
+            ${{ runner.temp }}/process-recovery-python-tests.xml
+            ${{ runner.temp }}/process-recovery-desktop-tests.xml
             ${{ runner.temp }}/shuliu-task26-evidence/**
           if-no-files-found: warn
       - name: Confirm Windows runner

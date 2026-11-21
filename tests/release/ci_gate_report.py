@@ -124,6 +124,12 @@ GATE_STEP_MAP: list[dict[str, Any]] = [
     {"job": "Windows-only build, install, upgrade, rollback, and runtime validation", "platform": "windows", "gate": "secure_storage_windows", "steps": [
         "Run Electron native safeStorage platform smoke (Windows DPAPI)",
     ]},
+    # Task 34: real Sidecar child processes are force-terminated and restarted,
+    # and dispatch/ACK-loss tests assert that an uncertain external effect is
+    # never replayed. A green dedicated step is required for this gate.
+    {"job": "Windows-only build, install, upgrade, rollback, and runtime validation", "platform": "windows", "gate": "process_crash_recovery", "steps": [
+        "Run Windows full-process recovery and ACK-loss tests",
+    ]},
     # skill_sandbox_provider is intentionally NOT derived from step
     # conclusions: its PASS requires structured enforced_controls and
     # adversarial_attacks evidence (ADR-025/ADR-027) that only the dedicated

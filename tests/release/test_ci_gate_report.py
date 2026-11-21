@@ -56,6 +56,18 @@ def test_passing_linux_and_macos_jobs_produce_pass_results():
     assert derived[("secure_storage_macos", "macos")] == "PASS"
 
 
+def test_windows_full_process_recovery_step_produces_recovery_gate_evidence():
+    jobs = [
+        _job(
+            "Windows-only build, install, upgrade, rollback, and runtime validation",
+            "success",
+            [_step("Run Windows full-process recovery and ACK-loss tests", "success")],
+        )
+    ]
+
+    assert _derive(jobs)[("process_crash_recovery", "windows")] == "PASS"
+
+
 def test_failed_step_yields_fail_even_when_job_succeeded():
     jobs = _jobs_all_pass()
     for job in jobs:
