@@ -237,6 +237,17 @@ class Driver:
         client = self.browser.cdp_client
         target = event["targetInfo"]["targetId"]
         if target != self.page._target_id:
+            if event["targetInfo"].get("type") == "iframe":
+                # Cross-origin iframes get an out-of-process target. Closing it
+                # used to be safe, but current Chromium leaves the frame's
+                # renderer stuck in its debugger pause, which deadlocks every
+                # later CDP evaluate on the main frame. Resume the frame and
+                # guard its network through its own session instead; requests
+                # still hit the registered requestPaused interceptor.
+                if event.get("waitingForDebugger"):
+                    await client.send.Runtime.runIfWaitingForDebugger(session_id=event["sessionId"])
+                await client.send.Fetch.enable({"patterns": [{"urlPattern": "*", "requestStage": "Request"}]}, session_id=event["sessionId"])
+                return
             # New tabs/workers are outside the approved single-page session.
             # They stay paused and are closed before script execution resumes.
             await client.send.Fetch.enable({"patterns": [{"urlPattern": "*", "requestStage": "Request"}]}, session_id=event["sessionId"])

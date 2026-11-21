@@ -191,6 +191,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
+          # The windows runner's system Python does not ship PyYAML.
+          python -m pip install pyyaml --quiet --disable-pip-version-check
           python tests/release/ci_gate_report.py `
             --repo "$env:GITHUB_REPOSITORY" `
             --run-id "$env:GITHUB_RUN_ID" `
