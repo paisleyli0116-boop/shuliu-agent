@@ -15,32 +15,31 @@ fail-closed：步骤缺失或跳过一律 NOT_RUN，绝不算 PASS。
 
 | # | Gate | 平台 | 验收入口 | 当前状态 | 证据 |
 | - | ---- | ---- | -------- | -------- | ---- |
-| 1 | unit | linux | `pnpm test:unit` + Python 各 pytest 单测（Generic CI ubuntu） | PASS（run 44889759926） | CI |
-| 2 | contract | linux | `pnpm test:contract`（Generic CI ubuntu） | PASS（run 44889759926，75/75） | CI |
-| 3 | integration | linux | `pnpm test:integration`（不含 real_browser/postgres 部分） | PASS（run 44889759926） | CI |
-| 4 | migration | linux | PG17 + PG18 服务迁移测试（postgres-migration job） | PASS（run 44889759926） | CI |
-| 5 | security | linux | `pnpm test:security` | PASS（run 44889759926） | CI |
-| 6 | ipc_handshake | linux | `pnpm test:ipc`（真实 Electron ↔ 真实 Python sidecar） | PASS（run 44889759926） | CI |
-| 7 | windows_build | windows | PyInstaller sidecar + Electron build + NSIS 打包（Windows Validation） | PASS（run 44889759940） | CI |
-| 8 | installer_smoke | windows | 安装冒烟 / Safe Mode / 升级 / 回滚 / 卸载（Windows Validation） | PASS（run 44889759940） | CI |
-| 9 | runtime_health | windows | 安装后 runtime health gate（Windows Validation） | PASS（run 44889759940） | CI |
-| 10 | secure_storage_macos | macos | `test:secure-storage-platform`（真实 Keychain） | PASS（run 44889759926，本机+runner） | CI + task-27c 文档 |
-| 11 | secure_storage_windows | windows | `test:secure-storage-platform`（真实 DPAPI） | PASS（run 44889759940，本机+runner） | CI + task-27c 文档 |
-| 12 | real_model_provider_connection | - | Task 28（未实施） | NOT_RUN | — |
-| 13 | model_provider_license_security | - | Task 28（未实施） | NOT_RUN | — |
-| 14 | model_usage_budget_persistence | - | Task 29（未实施） | NOT_RUN | — |
-| 15 | real_embedding_knowledge_retrieval | - | Task 30（未实施） | NOT_RUN | — |
-| 16 | knowledge_document_ingestion_pdf_docx_xlsx | - | Task 31（未实施） | NOT_RUN | — |
-| 17 | knowledge_server_rbac_trace_audit | - | Task 32（未实施） | NOT_RUN | — |
-| 18 | durable_idempotency | - | Task 33（未实施） | NOT_RUN | — |
-| 19 | process_crash_recovery | windows | Task 34（代码已并入；独立 runner 证据 gate 待接线） | NOT_RUN | task-34 进度文档 |
-| 20 | skill_sandbox_provider | linux/macos/windows | Task 36（未实施；Windows fail-closed 测试已就位） | NOT_RUN | — |
-| 21 | skill_security_scan | - | Task 35（未实施） | NOT_RUN | — |
+| 1 | unit | linux | Generic CI ubuntu 单元测试 job/step | PASS（run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 2 | contract | linux | Generic CI ubuntu 协议与契约 step | PASS（run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 3 | integration | linux | Generic CI ubuntu 集成测试 step | PASS（run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 4 | migration | linux | Generic CI + PG17/PG18 migration jobs | PASS（run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 5 | security | linux | Generic CI ubuntu security step | PASS（run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 6 | ipc_handshake | linux | Generic CI real Electron ↔ Python Sidecar IPC step | PASS（run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 7 | windows_build | windows | PyInstaller Sidecar + Electron build + NSIS | PASS（run 44892355151 @ `ace1b9a`） | [Windows Validation](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355151) |
+| 8 | installer_smoke | windows | Installed-app smoke / Safe Mode / upgrade / rollback / uninstall | PASS（run 44892355151 @ `ace1b9a`） | [Windows Validation](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355151) |
+| 9 | runtime_health | windows | Installed runtime health gate | PASS（run 44892355151 @ `ace1b9a`） | [Windows Validation](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355151) |
+| 10 | secure_storage_macos | macos | Real Electron safeStorage round trip via Keychain | PASS（run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 11 | secure_storage_windows | windows | Real Electron safeStorage round trip via DPAPI | PASS（run 44892355151 @ `ace1b9a`） | [Windows Validation](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355151) |
+| 12 | real_model_provider_connection | - | Task 28 structured release evidence | NOT_RUN（本 SHA 报告无合格证据） | [Generic CI report](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 13 | model_provider_license_security | - | Task 28 owner-approved license/security review | NOT_RUN（批准材料未作为合格 gate evidence 提交） | [Generic CI report](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 14 | model_usage_budget_persistence | linux | PG17 + PG18 durable model usage/budget integration step | PASS（两版本均运行；run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 15 | real_embedding_knowledge_retrieval | - | Task 30 real provider + persisted retrieval evidence | NOT_RUN（不得用 Fake 证据替代） | [Generic CI report](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 16 | knowledge_document_ingestion_pdf_docx_xlsx | linux | PG17 + PG18 Knowledge parser/ingestion and revocation step | PASS（两版本均运行；run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 17 | knowledge_server_rbac_trace_audit | linux | PG17 + PG18 Knowledge ACL integration step | PASS（两版本均运行；run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 18 | durable_idempotency | linux | PG17 + PG18 durable Tool idempotency restart/concurrency step | PASS（两版本均运行；run 44892355099 @ `ace1b9a`） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099) |
+| 19 | process_crash_recovery | windows | Task 34 full-process recovery with structured release evidence | NOT_RUN（当前报告没有合格的完整进程故障证据） | [Windows Validation report](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355151) |
+| 20 | skill_sandbox_provider | linux / macos / windows | Per-OS enforced controls + adversarial evidence | NOT_RUN（3 个平台均缺合格结构化证据） | [Generic CI](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355099)；[Windows Validation](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355151) |
+| 21 | skill_security_scan | - | Task 35 real scanner evidence for Skill installation | NOT_RUN（当前报告没有合格扫描器证据） | [Windows Validation report](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44892355151) |
 
 ## 聚合结论
 
-**BLOCKED（按设计）**：11 个 gate 已有 PASS 证据（@ 5d9f672，双 CI run 44889759926/44889759940 全绿，gate report artifact 已核验）；12 个能力 gate 等 Tasks 28–36
-落地后补齐。所有 gate PASS 之前 Foundation v0.1 不发布，且不引入任何岗位业务逻辑。
+**BLOCKED（按设计）**：最新已核验 SHA `ace1b9a28a5ffc4033139e6d09bd995443d4ce59` 的报告为 15 个 gate ID 有 PASS 证据、6 个 gate ID 仍 NOT_RUN（Skill sandbox 在 Linux/macOS/Windows 共 3 行）。CI 绿色只代表实际执行的 job 成功，不能把缺失的 Provider、Embedding、进程恢复、OS 沙箱或扫描器证据视为通过。所有 required gate 全部 PASS 前，Foundation v0.1 不发布。
 
 ## Release 前必做
 
@@ -59,3 +58,4 @@ fail-closed：步骤缺失或跳过一律 NOT_RUN，绝不算 PASS。
 - 2026-11-21：建立清单。Generic CI run 44886336954（repo 转 public 后首个全绿 run）
   提供 gate 1–6、10 的 PASS；Windows Validation 于浏览器超时修复后重跑确认 gate
   7–9、11；gate 12–21 等 Tasks 28–36。
+- 2026-11-21：Task 27-D 核对 `ace1b9a28a5ffc4033139e6d09bd995443d4ce59` 的双工作流和 gate-report job。Generic CI run 44892355099、Windows Validation run 44892355151 均为 success，但 gate report 仍为 BLOCKED；已证明通过的扩展 gate 为 PG17/PG18 的 ModelCall 预算、文档摄取/权限撤销、Knowledge RBAC/ACL 及持久幂等。报告器 fail-closed 修复当前在本地验证中，尚待其新 SHA 的远端 CI。

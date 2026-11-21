@@ -158,11 +158,12 @@ jobs:
       - name: Derive gate results from run conclusions and aggregate
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_EVIDENCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           python3 tests/release/ci_gate_report.py \
             --repo "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID" \
-            --commit "$GITHUB_SHA" \
+            --commit "$RELEASE_EVIDENCE_SHA" \
             --out gate-report.json \
             --summary gate-summary.md
           cat gate-summary.md >> "$GITHUB_STEP_SUMMARY"

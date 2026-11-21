@@ -148,9 +148,9 @@ def _step_conclusion(job: dict[str, Any], step_name: str) -> str:
     for step in job.get("steps") or []:
         if step.get("name") == step_name:
             conclusion = step.get("conclusion")
-            if conclusion in (None, "success"):
+            if conclusion == "success":
                 matched.append("PASS")
-            elif conclusion == "skipped":
+            elif conclusion in (None, "skipped"):
                 matched.append("NOT_RUN")
             else:
                 matched.append("FAIL")
@@ -183,7 +183,7 @@ def derive_gate_status(
             conclusion = job.get("conclusion")
             if conclusion in JOB_HARD_FAILURE:
                 statuses = ["FAIL"]
-            elif conclusion == "skipped":
+            elif conclusion != "success":
                 statuses = ["NOT_RUN"]
             elif entry["steps"] is None:
                 statuses = ["PASS"]  # job-level mapping: success conclusion suffices
@@ -225,16 +225,34 @@ def _fetch_jobs(repo: str, run_id: int) -> list[dict[str, Any]]:
     return json.loads(payload)
 
 
+def _fetch_run_sha(repo: str, run_id: int) -> str:
+    """Read the immutable head SHA recorded by GitHub for this workflow run."""
+    return subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/actions/runs/{run_id}",
+            "--jq",
+            ".head_sha",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def build_report(
     jobs: list[dict[str, Any]],
     *,
     commit_sha: str,
     run_id: str,
+    source_run_sha: str | None = None,
 ) -> dict[str, Any]:
+    evidence_sha = source_run_sha or commit_sha
     manifest = load_yaml(MANIFEST_PATH)
     results = derive_gate_status(jobs, manifest)
     for result in results:
-        result["commit_sha"] = commit_sha
+        result["commit_sha"] = evidence_sha
     report = aggregate(
         MANIFEST_PATH,
         MANIFEST_PATH.parent / "evidence-policy.yaml",
@@ -242,6 +260,7 @@ def build_report(
         release_sha=commit_sha,
     )
     report["source_run_id"] = run_id
+    report["source_run_sha"] = evidence_sha
     return report
 
 
@@ -273,13 +292,20 @@ def main() -> int:
 
     if args.jobs_json:
         jobs = json.loads(Path(args.jobs_json).read_text(encoding="utf-8"))
+        source_run_sha = args.commit
     else:
         if not args.repo or not args.run_id:
             parser.error("--repo and --run-id are required unless --jobs-json is given")
+        source_run_sha = _fetch_run_sha(args.repo, int(args.run_id))
         jobs = _fetch_jobs(args.repo, int(args.run_id))
 
     try:
-        report = build_report(jobs, commit_sha=args.commit, run_id=str(args.run_id or "local"))
+        report = build_report(
+            jobs,
+            commit_sha=args.commit,
+            run_id=str(args.run_id or "local"),
+            source_run_sha=source_run_sha,
+        )
     except GateEvidenceError as error:
         print(f"GATE_EVIDENCE_ERROR: {error}", file=sys.stderr)
         return 2
