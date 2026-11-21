@@ -87,6 +87,26 @@ without weakening the exact-SHA check.
   synchronization is a documentation-only follow-up and will be recorded
   separately; it does not change the implementation or gate results.
 
+### Documentation synchronization and latest-SHA CI
+
+- Documentation-only commit: `cb82b49e37e11e58e29f8ddce8e4e4dab8ba59af`.
+  The GitHub branch `feat/task27-release-gate` was read back at this exact SHA.
+- [Windows Validation run 44899661651](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44899661651)
+  — **success**, exact target SHA `cb82b49e37e11e58e29f8ddce8e4e4dab8ba59af`.
+  The Windows validation and release-report jobs completed successfully,
+  including packaging, install/health, IPC, security isolation, upgrade,
+  rollback, and data-preservation steps.
+- [Generic CI run 44899661573](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/44899661573)
+  — final attempt 2 **success**, exact target SHA unchanged. Ubuntu, macOS,
+  PostgreSQL 17, PostgreSQL 18, and the release-gate report job all completed
+  successfully. Attempt 1 had a macOS WSS handshake timeout during the test's
+  second connection; Ubuntu and both PostgreSQL jobs passed. Only that failed
+  macOS job was rerun. It passed on attempt 2 without source changes, so the
+  first failure was not reproduced; its underlying cause remains unconfirmed.
+- The successful CI evidence above does not clear missing product capability
+  gates or owner approvals. Overall Foundation release status remains
+  **BLOCKED** as listed below.
+
 ## Remaining release blockers
 
 The release aggregator must remain BLOCKED until every required gate has
