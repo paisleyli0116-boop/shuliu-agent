@@ -176,3 +176,32 @@ jobs:
         run: |
           if ($env:RUNNER_OS -ne "Windows") { throw "Windows-only validation ran on the wrong runner" }
           Write-Output "Task 26 package, install, health, upgrade, Safe Mode, rollback, and uninstall gates ran on Windows."
+
+  windows-gate-report:
+    name: Windows release gate report
+    needs: [windows-validation]
+    if: always()
+    runs-on: windows-latest
+    permissions:
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Derive gate results from run conclusions and aggregate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          python tests/release/ci_gate_report.py `
+            --repo "$env:GITHUB_REPOSITORY" `
+            --run-id "$env:GITHUB_RUN_ID" `
+            --commit "$env:GITHUB_SHA" `
+            --out gate-report-windows.json `
+            --summary gate-summary-windows.md
+          Get-Content gate-summary-windows.md | Add-Content $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-report-windows
+          path: |
+            gate-report-windows.json
+            gate-summary-windows.md

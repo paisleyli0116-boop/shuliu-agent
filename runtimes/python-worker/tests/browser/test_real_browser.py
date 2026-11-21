@@ -339,7 +339,10 @@ def test_real_unapproved_origin_is_not_contacted(tmp_path, fixture_site, real_fa
     server = ThreadingHTTPServer(("127.0.0.1", 0), Forbidden)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    runtime, *_ = make_runtime(tmp_path, factory=real_factory, origin=origin, timeout=10)
+    # 30s budget matches sibling real-browser tests: Windows CI runners can
+    # spend >10s on cold Chrome startup plus the blocked-iframe settle; the
+    # security assertion (no traffic to the unapproved origin) is unaffected.
+    runtime, *_ = make_runtime(tmp_path, factory=real_factory, origin=origin, timeout=30)
     try:
         launched = call(runtime, "launch")
         assert launched.output["status"] == "VERIFIED", _diagnostic(launched.output, runtime)

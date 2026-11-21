@@ -78,13 +78,15 @@ jobs:
         run: pnpm --filter @shuliu/desktop build
       - name: Run Cloud API Knowledge unit tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/knowledge -q
-      - run: |
+      - name: Run protocol and contract suites
+        run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             xvfb-run -a pnpm test:contract
           else
             pnpm test:contract
           fi
-      - run: pnpm test:migration
+      - name: Run database migration checks
+        run: pnpm test:migration
       - name: Run generic integration tests without the dedicated real-browser suite
         run: |
           pnpm exec vitest run tests/integration --passWithNoTests
@@ -143,3 +145,31 @@ jobs:
         run: uv run --locked --package shuliu-cloud-api pytest tests/integration/test_knowledge_permissions.py tests/integration/test_knowledge_server_rbac.py -q
       - name: Run PostgreSQL Worker lease concurrency tests
         run: uv run --locked --package shuliu-cloud-api pytest services/cloud-api/tests/workers -q -m integration
+
+  release-gate-report:
+    name: Release gate report (Linux/macOS gates)
+    needs: [generic, postgres-migration]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Derive gate results from run conclusions and aggregate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tests/release/ci_gate_report.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --commit "$GITHUB_SHA" \
+            --out gate-report.json \
+            --summary gate-summary.md
+          cat gate-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-report-linux-macos
+          path: |
+            gate-report.json
+            gate-summary.md
