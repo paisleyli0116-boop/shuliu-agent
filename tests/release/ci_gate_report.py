@@ -97,9 +97,13 @@ GATE_STEP_MAP: list[dict[str, Any]] = [
     {"job": "Windows-only build, install, upgrade, rollback, and runtime validation", "platform": "windows", "gate": "secure_storage_windows", "steps": [
         "Run Electron native safeStorage platform smoke (Windows DPAPI)",
     ]},
-    {"job": "Windows-only build, install, upgrade, rollback, and runtime validation", "platform": "windows", "gate": "skill_sandbox_provider", "steps": [
-        "Run Windows sandbox fail-closed validation",
-    ]},
+    # skill_sandbox_provider is intentionally NOT derived from step
+    # conclusions: its PASS requires structured enforced_controls and
+    # adversarial_attacks evidence (ADR-025/ADR-027) that only the dedicated
+    # sandbox evidence suite (Task 35) can produce. Deriving it from a green
+    # step would be over-claiming and is correctly rejected by the
+    # aggregator as INSUFFICIENT_CONTROLS. The gate stays BLOCKED until
+    # that evidence lands.
 ]
 
 JOB_HARD_FAILURE = {"failure", "cancelled", "timed_out", "startup_failure"}
