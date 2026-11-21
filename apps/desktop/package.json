@@ -8,6 +8,7 @@
     "test": "vitest run --root .",
     "test:ui": "vitest run --root . tests/ui",
     "test:ipc": "vitest run --root . tests/ipc",
+    "test:secure-storage-platform": "node scripts/build-ipc-test.mjs && vitest run --root . tests/security/secure-storage-platform.test.ts",
     "build:ipc-test": "node scripts/build-ipc-test.mjs",
     "typecheck": "tsc --project tsconfig.desktop.json --noEmit && tsc --project tsconfig.renderer.json --noEmit",
     "build": "tsc --project tsconfig.desktop.json && node scripts/mark-runtime-cjs.mjs && vite build --config vite.preload.config.ts && vite build --config vite.config.ts",

@@ -74,6 +74,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run Desktop UI, IPC, and security unit tests
         run: pnpm --filter @shuliu/desktop test
+      - name: Run Electron native safeStorage platform smoke (Windows DPAPI)
+        run: pnpm --filter @shuliu/desktop test:secure-storage-platform
       - name: Typecheck Electron Main, Preload, and Renderer
         run: pnpm --filter @shuliu/desktop typecheck
       - name: Build Electron Main, Preload, and Renderer

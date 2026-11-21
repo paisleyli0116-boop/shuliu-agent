@@ -69,6 +69,9 @@ jobs:
           fi
       - name: Run Desktop UI, IPC, and security unit tests
         run: pnpm --filter @shuliu/desktop test
+      - name: Run Electron native safeStorage platform smoke (macOS Keychain)
+        if: runner.os == 'macOS'
+        run: pnpm --filter @shuliu/desktop test:secure-storage-platform
       - name: Typecheck Electron Main, Preload, and Renderer
         run: pnpm --filter @shuliu/desktop typecheck
       - name: Build unpackaged Desktop Main, Preload, and Renderer
