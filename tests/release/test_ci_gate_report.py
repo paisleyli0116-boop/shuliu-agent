@@ -128,11 +128,49 @@ def test_unmapped_capability_gates_stay_blocked():
     )
     assert report["result"] == "BLOCKED"
     blocked_ids = {entry["gate_id"] for entry in report["blocked"]}
-    for gate in ("real_model_provider_connection", "durable_idempotency", "skill_security_scan"):
+    for gate in (
+        "real_model_provider_connection",
+        "real_embedding_knowledge_retrieval",
+        "process_crash_recovery",
+        "skill_security_scan",
+        "skill_sandbox_provider",
+    ):
         assert gate in blocked_ids, gate
     covered = {entry["gate_id"] for entry in report["blocked"]}
-    for gate in ("unit", "security", "ipc_handshake", "contract", "integration", "migration"):
+    for gate in (
+        "unit",
+        "security",
+        "ipc_handshake",
+        "contract",
+        "integration",
+        "migration",
+        "model_usage_budget_persistence",
+        "durable_idempotency",
+        "knowledge_document_ingestion_pdf_docx_xlsx",
+        "knowledge_server_rbac_trace_audit",
+    ):
         assert gate not in covered, gate
+
+
+def test_knowledge_persistence_gates_derive_pass_from_postgres_jobs():
+    """Knowledge parser/ingestion and ACL/RBAC suites run on real pgvector PG."""
+    manifest = ci_gate_report.load_yaml(ci_gate_report.MANIFEST_PATH)
+    results = ci_gate_report.derive_gate_status(_jobs_all_pass(), manifest)
+    by_gate = {}
+    for result in results:
+        by_gate.setdefault(result["gate_id"], []).append(result["status"])
+    for gate in (
+        "model_usage_budget_persistence",
+        "durable_idempotency",
+        "knowledge_document_ingestion_pdf_docx_xlsx",
+        "knowledge_server_rbac_trace_audit",
+    ):
+        assert by_gate.get(gate) == ["PASS"], (gate, by_gate.get(gate))
+        artifacts = [r for r in results if r["gate_id"] == gate][0]["artifacts"]
+        assert {a["job"] for a in artifacts} == {
+            "PostgreSQL migration (PG 17)",
+            "PostgreSQL migration (PG 18)",
+        }, gate
 
 
 def test_sha_mismatch_fails_the_release():

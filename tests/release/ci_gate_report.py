@@ -77,6 +77,33 @@ GATE_STEP_MAP: list[dict[str, Any]] = [
     ]},
     {"job": "PostgreSQL migration (PG 17)", "platform": "linux", "gate": "migration", "steps": None},
     {"job": "PostgreSQL migration (PG 18)", "platform": "linux", "gate": "migration", "steps": None},
+    # Durable persistence gates (Tasks 29 / 33): real PostgreSQL evidence.
+    {"job": "PostgreSQL migration (PG 17)", "platform": "linux", "gate": "model_usage_budget_persistence", "steps": [
+        "Run durable model usage and budget integration tests",
+    ]},
+    {"job": "PostgreSQL migration (PG 18)", "platform": "linux", "gate": "model_usage_budget_persistence", "steps": [
+        "Run durable model usage and budget integration tests",
+    ]},
+    {"job": "PostgreSQL migration (PG 17)", "platform": "linux", "gate": "durable_idempotency", "steps": [
+        "Run durable Tool idempotency restart and concurrency integration tests",
+    ]},
+    {"job": "PostgreSQL migration (PG 18)", "platform": "linux", "gate": "durable_idempotency", "steps": [
+        "Run durable Tool idempotency restart and concurrency integration tests",
+    ]},
+    # Knowledge gates (Tasks 31 / 32): parser + ingestion and ACL/RBAC suites
+    # run against real pgvector PostgreSQL in both migration jobs.
+    {"job": "PostgreSQL migration (PG 17)", "platform": "linux", "gate": "knowledge_document_ingestion_pdf_docx_xlsx", "steps": [
+        "Run PostgreSQL Knowledge unit and revocation tests",
+    ]},
+    {"job": "PostgreSQL migration (PG 18)", "platform": "linux", "gate": "knowledge_document_ingestion_pdf_docx_xlsx", "steps": [
+        "Run PostgreSQL Knowledge unit and revocation tests",
+    ]},
+    {"job": "PostgreSQL migration (PG 17)", "platform": "linux", "gate": "knowledge_server_rbac_trace_audit", "steps": [
+        "Run PostgreSQL Knowledge ACL integration tests",
+    ]},
+    {"job": "PostgreSQL migration (PG 18)", "platform": "linux", "gate": "knowledge_server_rbac_trace_audit", "steps": [
+        "Run PostgreSQL Knowledge ACL integration tests",
+    ]},
     # --- Generic CI: macOS matrix job (platform macos) ---
     {"job": "Generic tests (macos-latest)", "platform": "macos", "gate": "secure_storage_macos", "steps": [
         "Run Electron native safeStorage platform smoke (macOS Keychain)",
