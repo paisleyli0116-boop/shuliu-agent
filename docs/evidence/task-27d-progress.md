@@ -137,6 +137,24 @@ full-SHA-bound evidence and required owner approvals.
 - GREEN (local): `tests/release/test_ci_gate_report.py` **20 passed**;
   real Sidecar/workflow crash recovery **6 passed**; Electron Main recovery
   tests **9 passed**; Windows workflow YAML parse succeeded.
-- Remote exact-SHA Windows Validation is pending for the commit containing
-  this wiring. Until it passes, `process_crash_recovery` remains unverified.
-  Other release blockers are unchanged; Task 27 remains BLOCKED.
+- The wiring was pushed in commit
+  `4e9e4562e66b36996936bbf4a0cb3aa169026b3e`, parent
+  `a7f402f1e36b4926fb5e45c35e8bbefa6fb87e76`. The push response updated
+  `feat/task27-release-gate` from `a7f402f` to `4e9e456`; GitHub Actions
+  associated both runs below with the exact full SHA and branch.
+- [Windows Validation run 45097144924](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/45097144924)
+  — **success**, exact target SHA
+  `4e9e4562e66b36996936bbf4a0cb3aa169026b3e`. The Windows runtime job and
+  Windows release-gate-report job both completed successfully. The runtime
+  job included the new full-process recovery/ACK-loss step, which completed
+  successfully, along with the existing real-browser, Skill isolation,
+  IPC, packaging, install, upgrade, rollback, and data-preservation checks.
+- [Generic CI run 45097144679](https://github.com/paisleyli0116-boop/shuliu-agent/actions/runs/45097144679)
+  — **success**, exact target SHA
+  `4e9e4562e66b36996936bbf4a0cb3aa169026b3e`.
+- The public Actions summary confirms both workflow conclusions and job
+  conclusions. The release-gate artifact contents were not independently
+  inspected in this session, so this evidence does not claim that the
+  `process_crash_recovery` row or the overall Foundation release is PASS.
+  The Foundation release remains **BLOCKED** on the capability evidence and
+  owner approvals listed above.
